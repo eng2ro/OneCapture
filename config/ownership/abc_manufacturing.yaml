@@ -1,0 +1,14 @@
+# Category ownership matrix for ABC Manufacturing (FR-S8).
+# Each carbon category is owned by exactly one capture channel. ERP Sync must
+# not capture a category owned by e-Claim (and vice versa); doing so is a
+# double-counting boundary violation that the cross-channel screen flags.
+client_id: abc_manufacturing
+ownership:
+  "Fleet diesel": erp_sync
+  "Bulk fuel": erp_sync
+  "Electricity": erp_sync
+  "Refrigerant": erp_sync
+  "Upstream transport": erp_sync
+  # Owned by the other channel — staff expense fuel receipts go through e-Claim,
+  # because the receipt photo is the only place the litres/km are captured.
+  "Staff fuel claim": e_claim

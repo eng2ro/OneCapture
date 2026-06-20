@@ -1,0 +1,18 @@
+# Column preset for ABC Manufacturing's SAP B1 AP listing export.
+# Only overrides that differ from the built-in "SAP B1 AP listing v1" default
+# need to be listed; here the export matches the default header names, so the
+# block is shown in full for clarity.
+client_id: abc_manufacturing
+columns:
+  doc_entry: DocEntry
+  line_num: LineNum
+  doc_number: DocNum
+  posting_date: DocDate
+  item_code: ItemCode
+  item_name: ItemName
+  vendor_name: CardName
+  gl_account: AcctCode
+  quantity: Quantity
+  uom: UoM
+  amount: LineTotal
+  currency: Currency

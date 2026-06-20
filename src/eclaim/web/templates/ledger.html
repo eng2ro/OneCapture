@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Ledger — OneCapture e-Claim{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Emission ledger</h1>
+  <div class="totals">
+    <div class="total"><span>Scope 1</span><strong>{{ scope_1 }}</strong></div>
+    <div class="total"><span>Scope 2</span><strong>{{ scope_2 }}</strong></div>
+    <div class="total"><span>Scope 3</span><strong>{{ scope_3 }}</strong></div>
+    <div class="total grand"><span>Total tCO₂e</span><strong>{{ total }}</strong></div>
+  </div>
+
+  <table class="ledger">
+    <thead>
+      <tr><th>Carbon ref</th><th>Scope</th><th>Factor</th><th>Basis</th>
+          <th>Qty</th><th>tCO₂e</th><th>Batch hash</th></tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td class="mono">{{ e.carbon_ref }}</td>
+        <td>{{ e.scope }}</td>
+        <td>{{ e.factor_key }} v{{ e.factor_version }}</td>
+        <td>{{ e.basis }}</td>
+        <td>{{ e.quantity if e.quantity is not none else '—' }} {{ e.unit or '' }}</td>
+        <td>{{ e.tco2e }}</td>
+        <td class="mono">{{ e.release_batch_id }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">No released records yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

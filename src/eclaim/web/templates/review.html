@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Review — OneCapture e-Claim{% endblock %}
+{% block content %}
+{% if not claim %}
+  <section class="card"><h1>Claim not found</h1></section>
+{% else %}
+<section class="grid">
+  <div class="card">
+    <h2>Source document</h2>
+    <p class="muted mono">sha256: {{ claim.image_sha256[:24] }}…</p>
+    <div class="image-placeholder">Receipt image on file<br><small>{{ claim.image_path }}</small></div>
+  </div>
+
+  <div class="card">
+    <h2>Extracted &amp; classified</h2>
+    <span class="pill pill-{{ claim.status }}">{{ claim.status }}</span>
+    <form id="edit-form" class="fields">
+      <label>Vendor <input name="vendor" value="{{ claim.vendor or '' }}"></label>
+      <label>Doc no <input name="doc_no" value="{{ claim.doc_no or '' }}"></label>
+      <label>Date <input name="doc_date" value="{{ claim.doc_date or '' }}"></label>
+      <label>Total <input name="total_amount" value="{{ claim.total_amount or '' }}"></label>
+      <label>Expense type <input name="expense_type" value="{{ claim.expense_type or '' }}"></label>
+      <label>Quantity <input name="quantity" value="{{ claim.quantity or '' }}"></label>
+      <label>Unit <input name="unit" value="{{ claim.unit or '' }}"></label>
+      {% if claim.status != 'released' %}<button type="submit">Save &amp; re-classify</button>{% endif %}
+    </form>
+
+    <div class="carbon">
+      <h3>Carbon</h3>
+      <p>Scope <strong>{{ claim.scope }}</strong> · basis <strong>{{ claim.basis }}</strong>
+         · factor <strong>{{ claim.factor_key }}</strong> v{{ claim.factor_version }}</p>
+      <p class="tco2e">{{ claim.tco2e }} tCO₂e</p>
+      <p class="dq">{{ claim.data_quality }}</p>
+    </div>
+
+    {% if claim.status == 'in_review' %}
+      <button class="primary" onclick="act('approve')">Approve</button>
+    {% elif claim.status == 'approved' %}
+      <button class="primary" onclick="act('release')">Release</button>
+    {% elif claim.status == 'released' %}
+      <p class="released-note">Released &amp; anchored — immutable.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>Audit trail</h2>
+  <ol class="audit">
+    {% for e in events %}
+      <li><span class="evt">{{ e.event_type }}</span> by {{ e.actor }}
+          <span class="mono">{{ e.hash[:16] }}…</span></li>
+    {% endfor %}
+  </ol>
+</section>
+
+<script>
+  const claimId = "{{ claim.id }}";
+  async function act(action) {
+    const res = await fetch(`/api/claims/${claimId}/${action}`, { method: 'POST' });
+    if (!res.ok) { alert('Failed: ' + res.status); return; }
+    window.location.reload();
+  }
+  const editForm = document.getElementById('edit-form');
+  if (editForm) editForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(editForm);
+    const body = {};
+    for (const [k, v] of fd.entries()) if (v !== '') body[k] = v;
+    const res = await fetch(`/api/claims/${claimId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { alert('Save failed: ' + res.status); return; }
+    window.location.reload();
+  });
+</script>
+{% endif %}
+{% endblock %}

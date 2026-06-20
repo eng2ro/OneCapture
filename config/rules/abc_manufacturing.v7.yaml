@@ -1,0 +1,50 @@
+# Versioned carbon mapping ruleset for ABC Manufacturing.
+# Precedence at match time is item -> vendor -> GL (most to least specific).
+# The version below is stamped on every emission entry this ruleset produces.
+client_id: abc_manufacturing
+version: "v7"
+
+rules:
+  # --- item rules (most specific) ------------------------------------------
+  - rule_id: ITEM-DIESEL-B7
+    item_code: DIESEL-B7
+    category: "Fleet diesel"
+    scope: scope_1
+    basis: activity
+    factor_ref: DIESEL_B7
+    spend_fallback_ref: EEIO_FUEL
+
+  - rule_id: ITEM-R134A
+    item_code: R134A
+    category: "Refrigerant"
+    scope: scope_1
+    basis: activity
+    factor_ref: REFRIGERANT_R134A
+    spend_fallback_ref: EEIO_FUEL
+
+  # --- vendor rules --------------------------------------------------------
+  # Coarser than the item rule: any other Petronas line is bulk fuel. The
+  # DIESEL-B7 item rule above still wins for diesel lines (precedence test).
+  - rule_id: VENDOR-PETRONAS
+    vendor_match: "Petronas"
+    category: "Bulk fuel"
+    scope: scope_1
+    basis: activity
+    factor_ref: DIESEL_B7
+    spend_fallback_ref: EEIO_FUEL
+
+  - rule_id: VENDOR-TENAGA
+    vendor_match: "Tenaga Nasional"
+    category: "Electricity"
+    scope: scope_2
+    basis: activity
+    factor_ref: GRID_MY
+    spend_fallback_ref: EEIO_ELECTRICITY
+
+  # --- GL rules (least specific) -------------------------------------------
+  - rule_id: GL-FREIGHT-5400
+    gl_account: "5400"
+    category: "Upstream transport"
+    scope: scope_3_4
+    basis: spend
+    factor_ref: EEIO_FREIGHT

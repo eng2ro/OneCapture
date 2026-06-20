@@ -1,0 +1,18 @@
+# Top-level client config consumed by the CLI. Paths are resolved relative to
+# this file's directory.
+client_id: abc_manufacturing
+
+preset:    ../presets/abc_manufacturing.yaml
+ruleset:   ../rules/abc_manufacturing.v7.yaml
+factors:   ../factors/my_2026.yaml
+ownership: ../ownership/abc_manufacturing.yaml
+
+# Idempotency / emission store (JSON file). Committed line keys here survive
+# across runs, so re-importing the same listing commits zero new records.
+store: ../../data/abc_manufacturing_store.json
+
+# View of document numbers already captured in e-Claim (FR-S8 doc-number
+# match). In Phase 2 this is read live from the e-Claim store; for now it is a
+# static list so the planted-duplicate check has something to match against.
+eclaim_doc_numbers:
+  - "AP-2026-042"

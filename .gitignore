@@ -1,0 +1,22 @@
+# --- Secrets: NEVER commit. .env carries live DSNs + the Anthropic API key. ---
+.env
+*.env.local
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Runtime / generated data (image store, JSON persistence stores) ---
+data/
+
+# --- Local editor / harness state ---
+.claude/settings.local.json
+
+# --- OS noise ---
+Thumbs.db
+.DS_Store

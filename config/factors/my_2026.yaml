@@ -1,0 +1,40 @@
+# Emission factor set — Malaysia, 2026.
+# Activity factors are kgCO2e per physical unit; spend (EEIO) factors are
+# kgCO2e per unit of currency (MYR). The whole set is versioned together.
+version: "MY-2026.1"
+
+factors:
+  # --- activity factors -----------------------------------------------------
+  - ref: DIESEL_B7
+    value: "2.68"          # kgCO2e per litre, fleet diesel B7
+    basis: activity
+    uom: L
+    source: "DEFRA 2026 — diesel (B7)"
+
+  - ref: GRID_MY
+    value: "0.585"         # kgCO2e per kWh, Malaysian grid (location-based)
+    basis: activity
+    uom: kWh
+    source: "MY grid 2026 — Tenaga"
+
+  - ref: REFRIGERANT_R134A
+    value: "1430"          # kgCO2e per kg (GWP100)
+    basis: activity
+    uom: KG
+    source: "IPCC AR5 — R-134a GWP100"
+
+  # --- spend (EEIO) fallback factors ---------------------------------------
+  - ref: EEIO_FUEL
+    value: "0.40"          # kgCO2e per MYR of fuel spend
+    basis: spend
+    source: "EEIO — refined petroleum (MY)"
+
+  - ref: EEIO_ELECTRICITY
+    value: "0.30"          # kgCO2e per MYR of electricity spend
+    basis: spend
+    source: "EEIO — electricity supply (MY)"
+
+  - ref: EEIO_FREIGHT
+    value: "0.18"          # kgCO2e per MYR of freight spend
+    basis: spend
+    source: "EEIO — land freight transport (MY)"
