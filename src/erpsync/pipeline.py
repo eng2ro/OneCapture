@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
 from .dedup.crosschannel import OwnershipMatrix, screen
 from .domain.enums import BatchStatus, DataQuality, QuantityBasis, RowStatus, Scope
@@ -40,6 +41,18 @@ from .persistence.store import Store
 from .quantity.resolver import resolve
 from .release.gate import ReleaseGate
 from .rules.engine import match_rule
+
+
+class StagingSink(Protocol):
+    """The reviewable per-line sink (e.g. ``PgStagingStore`` → ``erpsync_entry``).
+
+    Optional and storage-agnostic: the pipeline hands it EVERY accepted line tagged
+    with a review status (``clean`` / ``held`` / ``flagged``) and the sink decides
+    where that lands. Kept a Protocol so the pure-Python pipeline never imports the
+    Postgres / e-Claim DB stack.
+    """
+
+    def stage(self, rows: list[tuple[EmissionEntry, str]]) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,8 @@ def run_import(
     config: PipelineConfig,
     store: Store,
     gate: ReleaseGate | None = None,
+    *,
+    staging: StagingSink | None = None,
 ) -> PipelineResult:
     gate = gate or ReleaseGate()
     path = Path(file_path)
@@ -215,6 +230,17 @@ def run_import(
     added = store.commit(committed)
     digest = gate.compute_hash(committed) if committed else None
 
+    # Stage EVERY accepted line into the reviewable sink (erpsync_entry), tagged
+    # with its review status — held cross-channel hits included, so they survive
+    # for review instead of being merely reported. Idempotency is the sink's job.
+    if staging is not None:
+        staging.stage(
+            [
+                (entry, _stage_status(entry, hit_keys, status_by_key))
+                for entry in staged
+            ]
+        )
+
     return PipelineResult(
         report=report,
         batch_status=BatchStatus.STAGED,
@@ -223,6 +249,18 @@ def run_import(
         batch_hash=digest,
         committed_count=added,
     )
+
+
+def _stage_status(entry, hit_keys, status_by_key) -> str:
+    """The ``erpsync_entry.status`` for one accepted line.
+
+    A cross-channel hit is ``held`` regardless of its own data quality; otherwise
+    a measured/mapped row is ``clean`` and a WARNING row (unmapped / spend-based /
+    DQ-flagged) is ``flagged``. (``released`` is set later, at projection time.)
+    """
+    if entry.line_key in hit_keys:
+        return "held"
+    return "clean" if status_by_key[entry.line_key] is RowStatus.CLEAN else "flagged"
 
 
 def _sorted(outcomes: list[RowOutcome]) -> list[RowOutcome]:

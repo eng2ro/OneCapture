@@ -304,6 +304,80 @@ class EmissionEntry(Base):
     )
 
 
+class ErpsyncEntry(Base):
+    """ERP Sync per-line staging row — the rich record for EVERY imported AP
+    line, carrying a review ``status``.
+
+    This is to ERP Sync what ``claim`` is to e-Claim: the reviewable staging
+    table that a later release projects into the shared ``emission_entry``
+    ledger. ALL accepted lines land here — clean (mapped + measured), ``held``
+    (cross-channel dedup), and ``flagged`` (unmapped / spend-based / DQ) —
+    distinguished by ``status``, not by a separate table. Malformed (REJECTED)
+    rows never reach this table; they stay in the import validation report only.
+
+    Columns mirror :class:`erpsync.domain.models.EmissionEntry` (the pipeline's
+    output) plus tenancy. ``scope`` is the ERP Sync string scope
+    (``scope_1``/``scope_2``/``scope_3_*``), not the e-Claim smallint. Tenant
+    isolation matches the other data tables: firm + allowed-client RLS with the
+    0003-hardened firm cast.
+    """
+
+    __tablename__ = "erpsync_entry"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('clean','held','flagged','released')",
+            name="ck_erpsync_entry_status",
+        ),
+        CheckConstraint(
+            "scope IN ('scope_1','scope_2','scope_3_4','scope_3_11','scope_3_other')",
+            name="ck_erpsync_entry_scope",
+        ),
+        CheckConstraint("basis IN ('activity','spend')", name="ck_erpsync_entry_basis"),
+        CheckConstraint(
+            "data_quality IN ('measured','estimated','flagged')",
+            name="ck_erpsync_entry_dq",
+        ),
+        # Idempotency grain: one staged row per (client, DocEntry, LineNum).
+        UniqueConstraint(
+            "client_id", "doc_entry", "line_num", name="uq_erpsync_entry_line"
+        ),
+        Index("ix_erpsync_entry_firm", "firm_id"),
+        Index("ix_erpsync_entry_client_status", "client_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+
+    # Source line identity — the (client_id, doc_entry, line_num) idempotency grain.
+    doc_entry: Mapped[str] = mapped_column(String, nullable=False)
+    line_num: Mapped[int] = mapped_column(Integer, nullable=False)
+    doc_number: Mapped[str | None] = mapped_column(String)
+
+    # Carbon classification result (the EmissionEntry projection).
+    category: Mapped[str] = mapped_column(String, nullable=False)
+    scope: Mapped[str] = mapped_column(String, nullable=False)
+    basis: Mapped[str] = mapped_column(String, nullable=False)
+    data_quality: Mapped[str] = mapped_column(String, nullable=False)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    uom: Mapped[str | None] = mapped_column(String)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    factor_ref: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
+    factor_value: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    factor_version: Mapped[str] = mapped_column(String, nullable=False)
+    rule_id: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
+    rule_version: Mapped[str] = mapped_column(String, nullable=False)
+    tco2e: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    source_hash: Mapped[str] = mapped_column(String, nullable=False)
+    notes: Mapped[list | None] = mapped_column(JSONB)
+
+    # Review state.
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_event"
     __table_args__ = (
