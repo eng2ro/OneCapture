@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Review line — OneCapture ERP Sync{% endblock %}
+{% block content %}
+{% if not entry %}
+  <section class="card"><h1>Entry not found</h1></section>
+{% else %}
+<section class="grid">
+  <div class="card">
+    <h2>Source line</h2>
+    <span class="pill pill-{{ entry.status }}">{{ entry.status }}</span>
+    <p class="muted mono">{{ entry.doc_number or entry.doc_entry }} · line {{ entry.line_num }}</p>
+    <dl class="fields">
+      <dt>Category</dt><dd>{{ entry.category }}</dd>
+      <dt>Scope</dt><dd>{{ entry.scope }}</dd>
+      <dt>Basis</dt><dd>{{ entry.basis }}</dd>
+      <dt>Data quality</dt><dd>{{ entry.data_quality }}</dd>
+      <dt>Quantity</dt><dd>{{ entry.quantity if entry.quantity is not none else '—' }} {{ entry.uom or '' }}</dd>
+      <dt>Amount</dt><dd>{{ entry.amount if entry.amount is not none else '—' }}</dd>
+      <dt>Factor</dt><dd>{{ entry.factor_ref or '—' }}</dd>
+      <dt>tCO₂e</dt><dd class="tco2e">{{ entry.tco2e }}</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Decision</h2>
+    {% if entry.status in ['held', 'flagged'] %}
+      {% if entry.status == 'held' %}
+        <p class="muted">Cross-channel hold — already captured elsewhere?</p>
+        <button class="primary" onclick="act('approve')">Approve as distinct</button>
+        <button onclick="dismissDup()">Reject — true duplicate</button>
+      {% else %}
+        <p class="muted">Flagged (unmapped / spend-based). Remap, accept, or dismiss.</p>
+        <button class="primary" onclick="act('approve')">Approve as-is</button>
+        <form id="remap-form" class="fields">
+          <label>Category <input name="category" value="{{ entry.category }}"></label>
+          <label>Scope <input name="scope" value="{{ entry.scope }}"></label>
+          <label>Basis <input name="basis" value="{{ entry.basis }}"></label>
+          <label>Factor ref <input name="factor_ref" value="{{ entry.factor_ref }}"></label>
+          <label>Factor value <input name="factor_value" value=""></label>
+          <label>Quantity <input name="quantity" value="{{ entry.quantity or '' }}"></label>
+          <label>UoM <input name="uom" value="{{ entry.uom or '' }}"></label>
+          <button type="submit">Remap &amp; recompute</button>
+        </form>
+      {% endif %}
+      <button onclick="dismiss()">Dismiss</button>
+    {% elif entry.status == 'approved' %}
+      <p class="released-note">Approved — will release with the next batch.</p>
+    {% elif entry.status == 'released' %}
+      <p class="released-note">Released &amp; anchored — immutable.</p>
+    {% elif entry.status == 'dismissed' %}
+      <p class="muted">Dismissed{% if entry.review_note %} — {{ entry.review_note }}{% endif %}.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="card">
+  <h2>Audit trail</h2>
+  <ol class="audit">
+    {% for e in events %}
+      <li><span class="evt">{{ e.event_type }}</span> by {{ e.actor }}
+          <span class="mono">{{ e.hash[:16] }}…</span></li>
+    {% endfor %}
+  </ol>
+</section>
+
+<script>
+  const entryId = "{{ entry.id }}";
+  async function post(action, body) {
+    const res = await fetch(`/api/erpsync/entries/${entryId}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    if (!res.ok) { alert('Failed: ' + res.status); return false; }
+    window.location.reload();
+    return true;
+  }
+  function act(action) { post(action, {}); }
+  function dismiss() { post('dismiss', { reason: 'other' }); }
+  function dismissDup() { post('dismiss', { reason: 'duplicate' }); }
+  const remapForm = document.getElementById('remap-form');
+  if (remapForm) remapForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(remapForm);
+    const body = {};
+    for (const [k, v] of fd.entries()) if (v !== '') body[k] = v;
+    post('remap', body);
+  });
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}ERP Sync review — OneCapture{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>ERP Sync review queue</h1>
+  <p class="muted">{{ total }} row(s) held or flagged, awaiting review.</p>
+
+  {% for client_name, entries in groups %}
+  <div class="client-group">
+    <div class="client-head">
+      <h2>{{ client_name }}</h2>
+      <button class="primary" onclick="release('{{ entries[0].client_id }}')">
+        Release clean &amp; approved
+      </button>
+    </div>
+    <table class="ledger">
+      <thead>
+        <tr><th>Doc</th><th>Line</th><th>Category</th><th>Scope</th>
+            <th>Basis</th><th>tCO₂e</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td class="mono">{{ e.doc_number or e.doc_entry }}</td>
+          <td>{{ e.line_num }}</td>
+          <td>{{ e.category }}</td>
+          <td>{{ e.scope }}</td>
+          <td>{{ e.basis }}</td>
+          <td>{{ e.tco2e }}</td>
+          <td><span class="pill pill-{{ e.status }}">{{ e.status }}</span></td>
+          <td><a href="/erpsync/entries/{{ e.id }}/review">Review →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Nothing to review — every imported line is clean or already resolved.</p>
+  {% endfor %}
+</section>
+
+<script>
+  async function release(clientId) {
+    const res = await fetch(`/api/erpsync/clients/${clientId}/release`, { method: 'POST' });
+    if (!res.ok) { alert('Release failed: ' + res.status); return; }
+    window.location.reload();
+  }
+</script>
+{% endblock %}

@@ -45,6 +45,12 @@ SOURCE_TYPE = "erpsync"
 _LEDGER_FACTOR_VERSION = 0
 
 
+# Statuses a release projects into the ledger: auto-classified ``clean`` rows and
+# human-reviewed ``approved`` rows (FR-S5). Both are "ready"; the distinction is
+# provenance, preserved on the row + in the audit chain, not in releasability.
+RELEASABLE_STATUSES = ("clean", "approved")
+
+
 def release_clean(
     session: Session,
     *,
@@ -52,10 +58,11 @@ def release_clean(
     client_id: uuid.UUID,
     actor: str,
 ) -> ReleaseBatch | None:
-    """Release every ``clean`` staged row for one client into the ledger.
+    """Release every releasable (``clean`` or ``approved``) staged row for one
+    client into the ledger.
 
     Returns the created :class:`ReleaseBatch`, or ``None`` when there is nothing
-    clean to release (the idempotent no-op — no empty batch is written).
+    to release (the idempotent no-op — no empty batch is written).
     """
     releases = ReleaseRepository(session)
     audit = AuditRepository(session)
@@ -65,13 +72,13 @@ def release_clean(
             select(ErpsyncEntry)
             .where(
                 ErpsyncEntry.client_id == client_id,
-                ErpsyncEntry.status == "clean",
+                ErpsyncEntry.status.in_(RELEASABLE_STATUSES),
             )
             .order_by(ErpsyncEntry.created_at, ErpsyncEntry.id)
         ).scalars()
     )
     if not rows:
-        return None  # nothing clean to release — idempotent no-op
+        return None  # nothing to release — idempotent no-op
 
     # One deterministic anchor over the whole batch's rich projections (binds the
     # string factor-set version + rule provenance the int ledger column can't hold).

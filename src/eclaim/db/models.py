@@ -325,8 +325,14 @@ class ErpsyncEntry(Base):
     __tablename__ = "erpsync_entry"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('clean','held','flagged','released')",
+            "status IN ('clean','held','flagged','approved','dismissed','released')",
             name="ck_erpsync_entry_status",
+        ),
+        # SoD second layer: the maker (editor) cannot also be the checker
+        # (reviewer) — mirrors ck_claim_sod. Dynamic guard runs at the service.
+        CheckConstraint(
+            "reviewed_by_user_id IS NULL OR reviewed_by_user_id <> edited_by_user_id",
+            name="ck_erpsync_entry_sod",
         ),
         CheckConstraint(
             "scope IN ('scope_1','scope_2','scope_3_4','scope_3_11','scope_3_other')",
@@ -371,8 +377,14 @@ class ErpsyncEntry(Base):
     source_hash: Mapped[str] = mapped_column(String, nullable=False)
     notes: Mapped[list | None] = mapped_column(JSONB)
 
-    # Review state.
+    # Review state. ``status`` carries the lifecycle (clean/held/flagged →
+    # approved/dismissed → released); the SoD actors are null until a reviewer
+    # touches the row (auto-clean rows release without ever being reviewed).
     status: Mapped[str] = mapped_column(String, nullable=False)
+    edited_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    reviewed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
