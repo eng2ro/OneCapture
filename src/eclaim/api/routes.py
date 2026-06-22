@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 
 from ..auth.principal import Principal, list_visible_clients
 from ..ocr.base import OcrError, OcrProvider
@@ -90,6 +93,58 @@ def list_claims(
 ) -> list[ClaimOut]:
     client_id = deps.default_client_id(repos.session)
     return [ClaimOut.of(c) for c in repos.claims.list(client_id, status)]
+
+
+EXPORT_COLUMNS = [
+    "claim_id", "doc_date", "status", "claimant_name", "employee_ref", "cost_centre",
+    "vendor", "doc_no", "category_name", "gl_export_code", "currency", "total_amount",
+    "scope", "basis", "tco2e", "factor_key", "release_batch_id",
+]
+
+
+def _parse_export_date(value: str | None, field: str) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid {field}: {value!r} (expected ISO date/datetime)",
+        )
+
+
+# Registered BEFORE /claims/{claim_id} so "export" is not parsed as a claim UUID.
+@router.get("/claims/export")
+def export_claims(
+    client_id: uuid.UUID | None = None,
+    status: str = "released",
+    date_from: str | None = None,
+    date_to: str | None = None,
+    batch_id: uuid.UUID | None = None,
+    repos: Repos = Depends(deps.get_repos),
+) -> Response:
+    """CSV export of claims for the accounting system. RLS-scoped to the
+    principal's clients; one row per matching claim. ``date_from``/``date_to``
+    filter on the claim's capture timestamp (created_at)."""
+    rows = repos.claims.export_rows(
+        client_id=client_id,
+        status=status,
+        date_from=_parse_export_date(date_from, "date_from"),
+        date_to=_parse_export_date(date_to, "date_to"),
+        batch_id=batch_id,
+    )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(EXPORT_COLUMNS)
+    for row in rows:
+        # Select column order matches EXPORT_COLUMNS; None → blank cell.
+        writer.writerow(["" if v is None else str(v) for v in row])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="claims_export.csv"'},
+    )
 
 
 @router.get("/claims/{claim_id}", response_model=ClaimOut)
