@@ -18,8 +18,15 @@ body {
 }
 .brand { color: #fff; text-decoration: none; font-weight: 700; letter-spacing: .3px; }
 .brand span { color: #9fd3bb; font-weight: 500; }
+.topbar nav { display: flex; align-items: center; }
 .topbar nav a { color: #cfe6db; text-decoration: none; margin-left: 20px; }
 .topbar nav a:hover { color: #fff; }
+.topbar nav form.signout { margin: 0 0 0 20px; }
+.topbar nav form.signout button {
+  background: none; border: 0; margin: 0; padding: 0;
+  color: #cfe6db; font: inherit; cursor: pointer;
+}
+.topbar nav form.signout button:hover { color: #fff; background: none; }
 main { max-width: 960px; margin: 28px auto; padding: 0 20px; }
 .card {
   background: #fff; border: 1px solid var(--line); border-radius: 12px;

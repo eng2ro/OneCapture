@@ -13,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterator
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -66,6 +66,45 @@ def get_repos(
 ) -> Repos:
     """Apply the principal's tenant context to the session, then build repos so
     every query in the request runs under RLS."""
+    set_tenant_context(db, principal.firm_id, principal.allowed_client_ids)
+    return Repos.for_session(db)
+
+
+# --------------------------------------------------------------------------- #
+# Browser session (cookie) auth — for the server-rendered web pages.
+# --------------------------------------------------------------------------- #
+SESSION_COOKIE = "oc_session"
+
+
+class NeedsLogin(Exception):
+    """A web request without a valid session cookie. The app handles it with a
+    redirect to /login (vs the API's bearer 401), so a browser is sent to sign in
+    rather than getting an error."""
+
+
+def get_session_principal(
+    request: Request, db: Session = Depends(get_db)
+) -> Principal:
+    """Resolve the principal from the ``oc_session`` cookie — the SAME signed
+    token the bearer path uses, just carried in a cookie. Raises
+    :class:`NeedsLogin` (→ redirect) when missing/invalid; the API's bearer
+    ``get_principal`` is untouched."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise NeedsLogin()
+    try:
+        claims = verify(token, secret=get_settings().jwt_secret)
+        set_firm_context(db, uuid.UUID(str(claims["firm_id"])))
+        return build_principal(db, claims)
+    except (TokenError, KeyError, ValueError) as exc:
+        raise NeedsLogin() from exc
+
+
+def get_web_repos(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(get_session_principal),
+) -> Repos:
+    """Cookie-sourced counterpart to :func:`get_repos` for the web pages."""
     set_tenant_context(db, principal.firm_id, principal.allowed_client_ids)
     return Repos.for_session(db)
 

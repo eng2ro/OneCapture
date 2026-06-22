@@ -18,9 +18,12 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import Session
 
 from ..api import deps
 from ..auth.principal import Principal, list_visible_clients
+from ..auth.provider import AuthError, DevAuthProvider
+from ..config import get_settings
 from ..db.models import Claimant
 from ..repositories import LedgerRepository
 from ..services.claims import ClaimError, ClaimService, Repos
@@ -45,14 +48,60 @@ def capture_page(request: Request) -> HTMLResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Browser session login (cookie carrying the same signed token as the bearer API)
+# --------------------------------------------------------------------------- #
+@router.get("/login", response_class=HTMLResponse)
+def login_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "login.html", {})
+
+
+@router.post("/login")
+def web_login(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(""),
+    db: Session = Depends(deps.get_db),
+):
+    """Authenticate via the same DevAuthProvider as POST /auth/login, then set the
+    session cookie and redirect to the inbox. On failure, re-render with an error
+    and set no cookie."""
+    settings = get_settings()
+    provider = DevAuthProvider(
+        db, secret=settings.jwt_secret, ttl_seconds=settings.jwt_ttl_seconds
+    )
+    try:
+        token = provider.login(email, password or None)
+    except AuthError as exc:
+        return templates.TemplateResponse(request, "login.html", {"error": str(exc)})
+    resp = RedirectResponse("/claims", status_code=303)
+    resp.set_cookie(
+        deps.SESSION_COOKIE,
+        token,
+        max_age=settings.jwt_ttl_seconds,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    return resp
+
+
+@router.post("/logout")
+def web_logout() -> RedirectResponse:
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(deps.SESSION_COOKIE, path="/")
+    return resp
+
+
+# --------------------------------------------------------------------------- #
 # Claims inbox
 # --------------------------------------------------------------------------- #
 @router.get("/claims", response_class=HTMLResponse)
 def claims_inbox(
     request: Request,
     status: str | None = None,
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
     """One list serves inbox / approvals / flagged / posted — filtered by status,
     scoped to the principal's visible clients."""
@@ -116,14 +165,14 @@ def _render_review(
 def review_page(
     request: Request,
     claim_id: uuid.UUID,
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
     return _render_review(request, repos, principal, claim_id)
 
 
 @router.get("/claims/{claim_id}/image")
-def claim_image(claim_id: uuid.UUID, repos: Repos = Depends(deps.get_repos)):
+def claim_image(claim_id: uuid.UUID, repos: Repos = Depends(deps.get_web_repos)):
     """Serve the stored receipt image (RLS-scoped: invisible claim → 404)."""
     claim = repos.claims.get(claim_id)
     if claim is None or not claim.image_path or not os.path.exists(claim.image_path):
@@ -155,8 +204,8 @@ def web_edit(
     expense_type: str = Form(""),
     quantity: str = Form(""),
     unit: str = Form(""),
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
     spend_factor: Decimal = Depends(deps.get_spend_factor),
 ):
     fields: dict = {}
@@ -184,8 +233,8 @@ def web_assign_category(
     request: Request,
     claim_id: uuid.UUID,
     category_id: str = Form(...),
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
     spend_factor: Decimal = Depends(deps.get_spend_factor),
 ):
     return _action(
@@ -202,8 +251,8 @@ def web_assign_category(
 def web_approve(
     request: Request,
     claim_id: uuid.UUID,
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ):
     return _action(
         request, repos, principal, claim_id,
@@ -218,8 +267,8 @@ def web_send_back(
     request: Request,
     claim_id: uuid.UUID,
     reason: str = Form(""),
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ):
     return _action(
         request, repos, principal, claim_id,
@@ -234,8 +283,8 @@ def web_reject(
     request: Request,
     claim_id: uuid.UUID,
     reason: str = Form(""),
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ):
     return _action(
         request, repos, principal, claim_id,
@@ -249,8 +298,8 @@ def web_reject(
 def web_resubmit(
     request: Request,
     claim_id: uuid.UUID,
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ):
     return _action(
         request, repos, principal, claim_id,
@@ -262,8 +311,8 @@ def web_resubmit(
 def web_release(
     request: Request,
     claim_id: uuid.UUID,
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
     actor: str = Depends(deps.get_actor),
 ):
     return _action(
@@ -276,7 +325,7 @@ def web_release(
 # Ledger
 # --------------------------------------------------------------------------- #
 @router.get("/ledger", response_class=HTMLResponse)
-def ledger_page(request: Request, repos: Repos = Depends(deps.get_repos)) -> HTMLResponse:
+def ledger_page(request: Request, repos: Repos = Depends(deps.get_web_repos)) -> HTMLResponse:
     client_id = deps.default_client_id(repos.session)
     ledger_repo = LedgerRepository(repos.session)
     entries = ledger_repo.entries(client_id)

@@ -29,9 +29,13 @@ class Settings(BaseSettings):
     app_database_url: str = ""
     app_test_database_url: str = ""
 
-    # DevAuthProvider token signing secret (HMAC). Real Entra ID is a seam.
+    # DevAuthProvider token signing secret (HMAC). Real Entra ID is a seam. The
+    # browser session cookie carries this same signed token — no separate secret.
     jwt_secret: str = "dev-only-change-me"
     jwt_ttl_seconds: int = 3600
+    # Session cookie Secure flag: True (HTTPS-only) for deployments; set
+    # SESSION_COOKIE_SECURE=false for local http dev so the cookie rides over http.
+    session_cookie_secure: bool = True
 
     # CarbonNext service identity (IR-6 "company_dataentry"). One token for all
     # companies; the per-batch destination is client.carbonnext_company_id.

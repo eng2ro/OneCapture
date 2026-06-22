@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from erpsync.review.routes import api_router as erpsync_api_router
@@ -10,6 +11,7 @@ from erpsync.review.routes import web_router as erpsync_web_router
 
 from ..auth.routes import router as auth_router
 from ..web.routes import WEB_DIR, router as web_router
+from .deps import NeedsLogin
 from .routes import router as api_router
 
 
@@ -22,6 +24,13 @@ def create_app() -> FastAPI:
     app.include_router(erpsync_api_router)
     app.include_router(erpsync_web_router)
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
+    # A web page reached without a session cookie redirects to login (the API's
+    # bearer paths raise 401 instead — they never raise NeedsLogin).
+    @app.exception_handler(NeedsLogin)
+    async def _redirect_to_login(request: Request, exc: NeedsLogin) -> RedirectResponse:
+        return RedirectResponse("/login", status_code=303)
+
     return app
 
 

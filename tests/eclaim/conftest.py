@@ -268,7 +268,35 @@ def client(db_session, fake_ocr, tmp_path):
 
     app = create_app()
     app.dependency_overrides[deps.get_db] = _override_db
-    app.dependency_overrides[deps.get_principal] = _principal
+    app.dependency_overrides[deps.get_principal] = _principal           # API bearer path
+    app.dependency_overrides[deps.get_session_principal] = _principal   # web cookie path
+    app.dependency_overrides[deps.get_ocr] = lambda: fake_ocr
+    app.dependency_overrides[deps.get_image_dir] = lambda: tmp_path
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def browser(db_session, fake_ocr, tmp_path):
+    """A TestClient with the SAME db/ocr overrides as ``client`` but NO principal
+    override — so the real cookie-session auth runs end to end (login mints the
+    cookie; pages resolve the principal from it; no cookie redirects to /login)."""
+    from fastapi.testclient import TestClient
+
+    from eclaim.api import deps
+    from eclaim.api.app import create_app
+
+    def _override_db():
+        try:
+            yield db_session
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            raise
+
+    app = create_app()
+    app.dependency_overrides[deps.get_db] = _override_db
     app.dependency_overrides[deps.get_ocr] = lambda: fake_ocr
     app.dependency_overrides[deps.get_image_dir] = lambda: tmp_path
     with TestClient(app) as c:
