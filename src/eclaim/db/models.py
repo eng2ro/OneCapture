@@ -164,6 +164,10 @@ class Claim(Base):
     basis: Mapped[str | None] = mapped_column(String)
     tco2e: Mapped[Decimal | None] = mapped_column(Numeric(16, 6))
     data_quality: Mapped[str | None] = mapped_column(String)
+    # The category this claim was classified under (FR-E6). Nullable: a claim
+    # whose expense_type matches no category is 'unmapped' until a reviewer assigns
+    # one. Scope is still factor-derived — the category only supplies factor_key.
+    category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("category.id"))
 
     # Lifecycle
     status: Mapped[str] = mapped_column(
@@ -269,6 +273,39 @@ class Claimant(Base):
     employee_ref: Mapped[str | None] = mapped_column(String)
     cost_centre: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'active'"))
+
+
+class Category(Base):
+    """Per-client expense_type → factor mapping master (FR-E6).
+
+    Maps an OCR ``expense_type`` to an emission ``factor_key`` (NULL = spend-based
+    by intent) plus a GL export code and a default limit. It deliberately has NO
+    ``scope`` column — scope stays derived from the resolved factor in
+    ``services/classify.py``, so the two can never drift. Tenant-scoped + RLS like
+    the other e-Claim data tables (see migration 0006)."""
+
+    __tablename__ = "category"
+    __table_args__ = (
+        UniqueConstraint("client_id", "expense_type", name="uq_category_client_expense"),
+        UniqueConstraint("client_id", "name", name="uq_category_client_name"),
+        Index("ix_category_firm_client", "firm_id", "client_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    expense_type: Mapped[str] = mapped_column(String, nullable=False)  # the OCR map key
+    factor_key: Mapped[str | None] = mapped_column(String)  # EF ref; NULL = spend-based
+    gl_export_code: Mapped[str | None] = mapped_column(String)
+    default_limit: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'active'"))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class EmissionEntry(Base):

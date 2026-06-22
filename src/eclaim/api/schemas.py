@@ -45,6 +45,7 @@ class ClaimOut(BaseModel):
     basis: str | None
     tco2e: Decimal | None
     data_quality: str | None
+    category_id: uuid.UUID | None
     image_sha256: str
 
     @classmethod
@@ -61,6 +62,8 @@ class ClaimEdit(BaseModel):
     expense_type: str | None = None
     quantity: Decimal | None = None
     unit: str | None = None
+    # Reviewer assigns a category to (re)classify the claim through its factor_key.
+    category_id: uuid.UUID | None = None
 
 
 class ClaimDecision(BaseModel):

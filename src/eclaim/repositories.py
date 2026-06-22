@@ -14,7 +14,14 @@ from decimal import Decimal
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
-from .db.models import AuditEvent, Claim, EmissionEntry, EmissionFactor, ReleaseBatch
+from .db.models import (
+    AuditEvent,
+    Category,
+    Claim,
+    EmissionEntry,
+    EmissionFactor,
+    ReleaseBatch,
+)
 from .services.classify import FactorView
 
 
@@ -39,6 +46,26 @@ class FactorRepository:
             unit=row.unit,
             factor_kg_per_unit=row.factor_kg_per_unit,
         )
+
+
+class CategoryRepository:
+    """The per-client expense_type → factor mapping master. RLS scopes reads to
+    the caller's firm/clients exactly like the other data tables."""
+
+    def __init__(self, session: Session) -> None:
+        self._s = session
+
+    def get(self, client_id: uuid.UUID, expense_type: str) -> Category | None:
+        """The category for one client + OCR expense_type, or None (unmapped)."""
+        return self._s.execute(
+            select(Category).where(
+                Category.client_id == client_id,
+                Category.expense_type == expense_type,
+            )
+        ).scalar_one_or_none()
+
+    def get_by_id(self, category_id: uuid.UUID) -> Category | None:
+        return self._s.get(Category, category_id)
 
 
 class ClaimRepository:

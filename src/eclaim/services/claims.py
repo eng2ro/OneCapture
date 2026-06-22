@@ -25,6 +25,7 @@ from ..db.models import Claim, EmissionEntry, ReleaseBatch
 from ..ocr.base import Extraction, OcrProvider
 from ..repositories import (
     AuditRepository,
+    CategoryRepository,
     ClaimRepository,
     FactorRepository,
     ReleaseRepository,
@@ -110,7 +111,14 @@ class ClaimService:
         """
         extraction: Extraction = ocr.extract(image_bytes, media_type)
         image_path, image_sha = self._store_image(image_dir, image_bytes, media_type)
-        result = classify(extraction, repos.factors, spend_factor)
+        category = repos.categories.get(client_id, extraction.expense_type)
+        result = classify(
+            extraction,
+            repos.factors,
+            spend_factor,
+            factor_key=(category.factor_key if category else None),
+            unmapped=(category is None),
+        )
 
         claim = Claim(
             firm_id=firm_id,
@@ -124,6 +132,7 @@ class ClaimService:
             currency=extraction.currency,
             total_amount=extraction.total_amount,
             expense_type=extraction.expense_type,
+            category_id=(category.id if category else None),
             ocr_confidence=extraction.confidence,
             image_path=image_path,
             image_sha256=image_sha,
@@ -157,8 +166,15 @@ class ClaimService:
         fields: dict,
         spend_factor: Decimal,
         actor: str,
+        category_id: uuid.UUID | None = None,
     ) -> Claim:
-        """Edit extracted fields and re-classify. Forbidden once released."""
+        """Edit extracted fields and re-classify. Forbidden once released.
+
+        Category resolution: an explicit ``category_id`` assigns that category (a
+        reviewer clearing an unmapped claim); else editing ``expense_type``
+        re-resolves the category from it; else the claim's current category is
+        kept. Scope/version stay factor-derived through :func:`classify` either way.
+        """
         claim = self.get(repos, claim_id)
         if claim.status == "released":
             raise IllegalTransition("a released claim is immutable")
@@ -171,6 +187,18 @@ class ClaimService:
             if key in editable:
                 setattr(claim, key, value)
 
+        if category_id is not None:
+            category = repos.categories.get_by_id(category_id)
+            if category is None or category.client_id != claim.client_id:
+                raise ClaimError("category not found for this client")
+        elif "expense_type" in fields:
+            category = repos.categories.get(claim.client_id, claim.expense_type or "other")
+        else:
+            category = (
+                repos.categories.get_by_id(claim.category_id) if claim.category_id else None
+            )
+        claim.category_id = category.id if category else None
+
         extraction = Extraction(
             vendor=claim.vendor,
             doc_no=claim.doc_no,
@@ -182,7 +210,16 @@ class ClaimService:
             unit=claim.unit,
             confidence=claim.ocr_confidence,
         )
-        self._apply_classification(claim, classify(extraction, repos.factors, spend_factor))
+        self._apply_classification(
+            claim,
+            classify(
+                extraction,
+                repos.factors,
+                spend_factor,
+                factor_key=(category.factor_key if category else None),
+                unmapped=(category is None),
+            ),
+        )
         record_event(
             repos.audit,
             firm_id=claim.firm_id,
@@ -191,7 +228,10 @@ class ClaimService:
             entity_id=claim.id,
             event_type="edited",
             actor=actor,
-            detail={"fields": sorted(fields)},
+            detail={
+                "fields": sorted(fields),
+                "category_id": str(category_id) if category_id else None,
+            },
         )
         return claim
 
@@ -449,6 +489,7 @@ class Repos:
     session: object
     claims: ClaimRepository
     factors: FactorRepository
+    categories: CategoryRepository
     releases: ReleaseRepository
     audit: AuditRepository
 
@@ -458,6 +499,7 @@ class Repos:
             session=session,
             claims=ClaimRepository(session),
             factors=FactorRepository(session),
+            categories=CategoryRepository(session),
             releases=ReleaseRepository(session),
             audit=AuditRepository(session),
         )

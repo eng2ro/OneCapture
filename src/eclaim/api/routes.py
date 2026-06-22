@@ -108,13 +108,16 @@ def edit_claim(
     spend_factor: Decimal = Depends(deps.get_spend_factor),
     actor: str = Depends(deps.get_actor),
 ) -> ClaimOut:
+    data = edit.model_dump(exclude_unset=True)
+    category_id = data.pop("category_id", None)
     try:
         claim = _service.edit(
             repos=repos,
             claim_id=claim_id,
-            fields=edit.model_dump(exclude_unset=True),
+            fields=data,
             spend_factor=spend_factor,
             actor=actor,
+            category_id=category_id,
         )
     except ClaimError as exc:
         raise _handle(exc)

@@ -11,12 +11,14 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 
 from core.release import canonical_hash
 from eclaim.auth.principal import Principal
-from eclaim.db.models import Claim, EmissionEntry
+from eclaim.db.models import Category, Claim, EmissionEntry
 from eclaim.ocr.base import Extraction
 from eclaim.services.claims import ClaimService, Repos
+from eclaim.services.classify import DQ_SPEND, DQ_UNMAPPED
 from eclaim.services.sod import SoDViolation
 
 
@@ -205,3 +207,69 @@ def test_unauthorized_reviewer_cannot_send_back_or_reject(client, fake_ocr, db_s
     assert db_session.get(Claim, uuid.UUID(cid)).status == "in_review"
     # No sent_back / rejected event was written by the denied attempts.
     assert client.get(f"/api/audit/{cid}").json()[-1]["event_type"] == "submitted"
+
+
+# 10 ------------------------------------------------------------------------
+def test_category_drives_activity_and_spend_matched(client, fake_ocr):
+    """A mapped expense_type resolves a category whose factor_key drives the EF
+    lookup: activity with a usable quantity, spend-matched without — and the
+    resolved category is stamped on the claim."""
+    act = _upload(client, fake_ocr, Extraction(
+        expense_type="electricity", quantity=Decimal("12000"), unit="kWh")).json()
+    assert act["basis"] == "activity" and act["scope"] == 2
+    assert act["data_quality"] == "Activity-based"
+    assert act["category_id"] is not None
+
+    sm = _upload(client, fake_ocr, Extraction(
+        expense_type="fuel_diesel", quantity=None, total_amount=Decimal("500"))).json()
+    assert sm["basis"] == "spend" and sm["factor_key"] == "fuel_diesel" and sm["scope"] == 1
+    assert "lower data quality" in sm["data_quality"]
+    assert sm["category_id"] is not None
+
+
+# 11 ------------------------------------------------------------------------
+def test_null_factor_category_is_governed_spend(client, fake_ocr):
+    """A category that is spend-based by intent (factor_key NULL — fuel_petrol in
+    the seed) → governed spend at scope 3, marked spend-based (NOT unmapped)."""
+    gov = _upload(client, fake_ocr, Extraction(
+        expense_type="fuel_petrol", total_amount=Decimal("1000"))).json()
+    assert gov["basis"] == "spend" and gov["scope"] == 3
+    assert gov["factor_key"] == "spend_eeio"
+    assert gov["data_quality"] == DQ_SPEND
+    assert gov["category_id"] is not None      # a category exists; it just has no factor
+
+
+# 12 ------------------------------------------------------------------------
+def test_unmapped_expense_is_flagged_not_silently_absorbed(client, fake_ocr):
+    """An expense_type with no category is a valid spend_eeio row but flagged with
+    a distinct, reviewable data_quality — never silently absorbed."""
+    un = _upload(client, fake_ocr, Extraction(
+        expense_type="other", quantity=Decimal("3"), unit="L",
+        total_amount=Decimal("1000"))).json()
+    assert un["scope"] == 3 and un["factor_key"] == "spend_eeio"
+    assert un["data_quality"] == DQ_UNMAPPED
+    assert un["data_quality"].startswith("Unmapped")
+    assert un["category_id"] is None
+
+
+# 13 ------------------------------------------------------------------------
+def test_reviewer_assigns_category_to_clear_unmapped(client, fake_ocr, db_session):
+    """A reviewer clears an unmapped claim by assigning a category; the claim
+    reclassifies through that category's factor_key (qty retained → activity)."""
+    cid = _upload(client, fake_ocr, Extraction(
+        expense_type="other", quantity=Decimal("450"), unit="L",
+        total_amount=Decimal("2000"))).json()["id"]
+    before = client.get(f"/api/claims/{cid}").json()
+    assert before["data_quality"] == DQ_UNMAPPED and before["category_id"] is None
+
+    diesel = db_session.execute(
+        select(Category).filter_by(
+            client_id=db_session.info["principal"]["client"], expense_type="fuel_diesel",
+        )
+    ).scalar_one()
+    after = client.patch(f"/api/claims/{cid}", json={"category_id": str(diesel.id)}).json()
+
+    assert after["category_id"] == str(diesel.id)
+    assert after["basis"] == "activity" and after["scope"] == 1
+    assert after["tco2e"] == "1.206000"        # 450 * 2.68 / 1000 — retained qty used
+    assert after["data_quality"] == "Activity-based"

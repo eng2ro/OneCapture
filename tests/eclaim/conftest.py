@@ -23,7 +23,7 @@ from sqlalchemy.pool import NullPool
 
 from eclaim.auth.principal import Principal
 from eclaim.config import get_settings
-from eclaim.db.models import AppUser, Client, EmissionFactor
+from eclaim.db.models import AppUser, Category, Client, EmissionFactor
 from eclaim.ocr.base import Extraction
 
 # Must match the firm id the 0002 migration seeds (deterministic by design): the
@@ -201,6 +201,21 @@ def _seed(session: Session) -> None:
             EmissionFactor(
                 factor_key=key, label=label, scope=scope, unit=unit,
                 factor_kg_per_unit=value, source="test", version=1,
+            )
+        )
+    session.flush()
+
+    # Category master maps the OCR expense-type vocabulary to factors (so the
+    # category-gated classifier resolves them and the factor-based flow tests stay
+    # green). fuel_petrol is mapped factor-less — a client that treats petrol as
+    # spend-based by intent (the governed-spend path). "other" gets no category at
+    # all (the unmapped path).
+    governed_spend = {"fuel_petrol"}
+    for key, label, *_ in DEMO_FACTORS:
+        session.add(
+            Category(
+                firm_id=firm_id, client_id=client.id, name=label, expense_type=key,
+                factor_key=(None if key in governed_spend else key),
             )
         )
     session.flush()
