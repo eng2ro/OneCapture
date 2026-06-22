@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,6 +14,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 from ..auth.principal import Principal, list_visible_clients
 from ..ocr.base import OcrError, OcrProvider
 from ..services.claims import ClaimError, ClaimNotFound, ClaimService, IllegalTransition, Repos
+from ..services.evidence import EvidenceService
+from ..services.evidence_pdf import render as render_evidence_pdf
 from ..services.sod import SoDViolation
 from . import deps
 from .schemas import (
@@ -305,3 +307,21 @@ def audit_trail(
     claim_id: uuid.UUID, repos: Repos = Depends(deps.get_repos)
 ) -> list[AuditEventOut]:
     return [AuditEventOut.of(e) for e in repos.audit.chain("claim", claim_id)]
+
+
+@router.get("/claims/{claim_id}/evidence")
+def claim_evidence(
+    claim_id: uuid.UUID, repos: Repos = Depends(deps.get_repos)
+) -> Response:
+    """Regenerable per-claim evidence pack as a PDF (RLS-scoped). Assembles from
+    stored data, then renders — so it can be regenerated identically any time."""
+    try:
+        evidence = EvidenceService.build(repos, claim_id)
+    except ClaimError as exc:
+        raise _handle(exc)
+    pdf = render_evidence_pdf(evidence, datetime.now(timezone.utc))
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="evidence_{claim_id}.pdf"'},
+    )

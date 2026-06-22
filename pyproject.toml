@@ -21,6 +21,7 @@ eclaim = [
     "python-multipart>=0.0.9",
     "jinja2>=3.1",
     "anthropic>=0.40",
+    "fpdf2>=2.7",  # evidence-pack PDF rendering (pure Python, no system libs)
 ]
 dev = ["pytest>=8.0", "httpx>=0.27"]
 
