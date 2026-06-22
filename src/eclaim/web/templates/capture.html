@@ -1,34 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Capture — OneCapture e-Claim{% endblock %}
 {% block content %}
-<section class="card">
+<section class="card" style="max-width: 560px;">
   <h1>Capture a receipt</h1>
-  <p class="muted">Upload a receipt image. It will be read, carbon-classified, and routed to review.</p>
-  <form id="upload-form">
+  <p class="muted">Upload the receipt image and key the line details. It is
+     carbon-classified through the category mapping and routed to review.</p>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <form class="fields" method="post" action="/capture" enctype="multipart/form-data">
     <label class="drop" for="file">
-      <input type="file" id="file" name="file" accept="image/png,image/jpeg,image/webp" required>
-      <span>Drag &amp; drop or choose a receipt image</span>
+      <input type="file" id="file" name="file"
+             accept="image/png,image/jpeg,image/webp" required>
+      <span>Choose a receipt image (PNG / JPEG / WebP)</span>
     </label>
-    <button type="submit">Upload &amp; classify</button>
-    <p id="status" class="status"></p>
+
+    <label>Expense type
+      <select name="expense_type">
+        {% for et in expense_types %}<option value="{{ et }}">{{ et }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Quantity <input name="quantity" placeholder="e.g. 450"></label>
+    <label>Unit
+      <select name="unit">
+        <option value="">—</option>
+        {% for u in units %}<option value="{{ u }}">{{ u }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Total amount <input name="total_amount" placeholder="e.g. 2000"></label>
+    <label>Vendor <input name="vendor"></label>
+    <label>Doc no <input name="doc_no"></label>
+    <label>Doc date <input name="doc_date" placeholder="YYYY-MM-DD"></label>
+
+    <button type="submit" class="primary">Upload &amp; classify</button>
   </form>
 </section>
-<script>
-  const form = document.getElementById('upload-form');
-  const statusEl = document.getElementById('status');
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    statusEl.textContent = 'Reading receipt…';
-    const data = new FormData();
-    data.append('file', document.getElementById('file').files[0]);
-    const res = await fetch('/api/claims/upload', { method: 'POST', body: data });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({detail: res.statusText}));
-      statusEl.textContent = 'Error: ' + (err.detail || res.status);
-      return;
-    }
-    const claim = await res.json();
-    window.location.href = '/claims/' + claim.id + '/review';
-  });
-</script>
 {% endblock %}

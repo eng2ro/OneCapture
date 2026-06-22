@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import os
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import get_args
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from ..api import deps
@@ -25,6 +27,7 @@ from ..auth.principal import Principal, list_visible_clients
 from ..auth.provider import AuthError, DevAuthProvider
 from ..config import get_settings
 from ..db.models import Claimant
+from ..ocr.base import Extraction, ExpenseType, OcrError, Unit
 from ..repositories import LedgerRepository
 from ..services.claims import ClaimError, ClaimService, Repos
 from ..services.sod import can_approve
@@ -36,15 +39,99 @@ router = APIRouter(tags=["web"])
 _service = ClaimService()
 
 CLAIM_STATUSES = ["submitted", "in_review", "approved", "released", "rejected"]
+EXPENSE_TYPES = get_args(ExpenseType)          # the fixed OCR expense vocabulary
+UNITS = get_args(Unit)
+SUPPORTED_MEDIA = {"image/jpeg", "image/png", "image/webp"}
 
 
 def _actor(principal: Principal) -> str:
     return principal.email or str(principal.user_id)
 
 
-@router.get("/", response_class=HTMLResponse)
-def capture_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "capture.html", {})
+class _FormOcr:
+    """A manual-entry OcrProvider: returns the Extraction built from the capture
+    form. Lets the cookie web path reuse ClaimService.upload unchanged (same
+    classify/category/audit/image-store path) instead of forking it — the vision
+    model is simply not invoked for a hand-keyed claim."""
+
+    def __init__(self, extraction: Extraction) -> None:
+        self._extraction = extraction
+
+    def extract(self, image_bytes: bytes, media_type: str) -> Extraction:
+        return self._extraction
+
+
+@router.get("/")
+def root() -> RedirectResponse:
+    return RedirectResponse("/capture", status_code=307)
+
+
+# --------------------------------------------------------------------------- #
+# Capture (cookie-authed web entry point to ClaimService.upload)
+# --------------------------------------------------------------------------- #
+def _render_capture(request: Request, error: str | None = None) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "capture.html",
+        {"expense_types": EXPENSE_TYPES, "units": UNITS, "error": error},
+    )
+
+
+@router.get("/capture", response_class=HTMLResponse)
+def capture_page(
+    request: Request,
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse:
+    return _render_capture(request)
+
+
+@router.post("/capture")
+async def web_capture(
+    request: Request,
+    file: UploadFile = File(...),
+    expense_type: str = Form("other"),
+    quantity: str = Form(""),
+    unit: str = Form(""),
+    total_amount: str = Form(""),
+    vendor: str = Form(""),
+    doc_no: str = Form(""),
+    doc_date: str = Form(""),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+    image_dir: Path = Depends(deps.get_image_dir),
+    spend_factor: Decimal = Depends(deps.get_spend_factor),
+):
+    """Hand-keyed capture: build the Extraction from the form, then run the SAME
+    ClaimService.upload the API uses. 303 to the new claim's review page."""
+    media_type = file.content_type or "application/octet-stream"
+    if media_type not in SUPPORTED_MEDIA:
+        return _render_capture(request, f"unsupported image type {media_type!r}")
+    image_bytes = await file.read()
+    try:
+        extraction = Extraction(
+            vendor=vendor or None,
+            doc_no=doc_no or None,
+            date=doc_date or None,
+            total_amount=Decimal(total_amount) if total_amount else None,
+            expense_type=expense_type or "other",
+            quantity=Decimal(quantity) if quantity else None,
+            unit=unit or None,
+        )
+        claim = _service.upload(
+            repos=repos,
+            firm_id=principal.firm_id,
+            client_id=deps.default_client_id(repos.session),
+            image_bytes=image_bytes,
+            media_type=media_type,
+            ocr=_FormOcr(extraction),
+            image_dir=image_dir,
+            spend_factor=spend_factor,
+            actor=_actor(principal),
+        )
+    except (ValidationError, InvalidOperation, OcrError, ClaimError) as exc:
+        repos.session.rollback()
+        return _render_capture(request, str(exc))
+    return RedirectResponse(f"/claims/{claim.id}/review", status_code=303)
 
 
 # --------------------------------------------------------------------------- #
