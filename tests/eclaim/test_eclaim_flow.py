@@ -7,12 +7,17 @@ and deterministic batch hash recomputed from stored rows.
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
+import pytest
+
 from core.release import canonical_hash
+from eclaim.auth.principal import Principal
 from eclaim.db.models import Claim, EmissionEntry
 from eclaim.ocr.base import Extraction
-from eclaim.services.claims import ClaimService
+from eclaim.services.claims import ClaimService, Repos
+from eclaim.services.sod import SoDViolation
 
 
 def _upload(client, fake_ocr, extraction: Extraction):
@@ -127,3 +132,76 @@ def test_batch_hash_recomputes_from_stored_rows(client, fake_ocr, db_session):
 
     entry = db_session.query(EmissionEntry).filter_by(source_id=claim.id).one()
     assert entry.carbon_ref == f"CARB-{batch['batch_hash'][:12].upper()}"
+
+
+# 7 -------------------------------------------------------------------------
+def test_send_back_edit_resubmit_then_approve(client, fake_ocr):
+    """The send-back loop: in_review -> submitted -> (edit) -> in_review ->
+    approved, with the reason and every transition captured in the audit chain."""
+    cid = _upload(client, fake_ocr, Extraction(
+        expense_type="fuel_diesel", quantity=Decimal("450"), unit="L")).json()["id"]
+
+    sb = client.post(f"/api/claims/{cid}/send-back", json={"reason": "missing GST no."})
+    assert sb.status_code == 200 and sb.json()["status"] == "submitted"
+
+    # A sent-back claim is editable (it is not released); fix it, then resubmit.
+    assert client.patch(f"/api/claims/{cid}", json={"vendor": "Shell"}).status_code == 200
+    rs = client.post(f"/api/claims/{cid}/resubmit")
+    assert rs.status_code == 200 and rs.json()["status"] == "in_review"
+
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+
+    events = client.get(f"/api/audit/{cid}").json()
+    assert [e["event_type"] for e in events] == [
+        "submitted", "sent_back", "edited", "resubmitted", "approved",
+    ]
+    sent_back = next(e for e in events if e["event_type"] == "sent_back")
+    assert sent_back["detail"]["reason"] == "missing GST no."
+    # The chain still links end to end across the new events.
+    for prev, cur in zip(events, events[1:]):
+        assert cur["prev_hash"] == prev["hash"]
+
+
+# 8 -------------------------------------------------------------------------
+def test_reject_is_terminal(client, fake_ocr):
+    cid = _upload(client, fake_ocr, Extraction(
+        expense_type="fuel_diesel", quantity=Decimal("450"), unit="L")).json()["id"]
+
+    rj = client.post(f"/api/claims/{cid}/reject", json={"reason": "duplicate submission"})
+    assert rj.status_code == 200 and rj.json()["status"] == "rejected"
+
+    # Terminal: no forward or backward transition out of rejected.
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 409
+    assert client.post(f"/api/claims/{cid}/send-back", json={"reason": "x"}).status_code == 409
+    assert client.post(f"/api/claims/{cid}/resubmit").status_code == 409
+
+    events = client.get(f"/api/audit/{cid}").json()
+    types = [e["event_type"] for e in events]
+    assert types == ["submitted", "rejected"]
+    rejected = next(e for e in events if e["event_type"] == "rejected")
+    assert rejected["detail"]["reason"] == "duplicate submission"
+
+
+# 9 -------------------------------------------------------------------------
+def test_unauthorized_reviewer_cannot_send_back_or_reject(client, fake_ocr, db_session):
+    """A viewer (no review authority) is denied at the shared SoD guard, and the
+    claim stays in_review — no state change, no audit event."""
+    cid = _upload(client, fake_ocr, Extraction(
+        expense_type="fuel_diesel", quantity=Decimal("450"), unit="L")).json()["id"]
+
+    ids = db_session.info["principal"]
+    viewer = Principal(
+        user_id=ids["user"], firm_id=ids["firm"], base_role="viewer",
+        allowed_client_ids=frozenset({ids["client"]}), email="viewer@seed.test",
+    )
+    repos = Repos.for_session(db_session)
+    svc = ClaimService()
+
+    with pytest.raises(SoDViolation):
+        svc.send_back(repos=repos, claim_id=uuid.UUID(cid), reviewer=viewer, reason="x")
+    with pytest.raises(SoDViolation):
+        svc.reject(repos=repos, claim_id=uuid.UUID(cid), reviewer=viewer, reason="x")
+
+    assert db_session.get(Claim, uuid.UUID(cid)).status == "in_review"
+    # No sent_back / rejected event was written by the denied attempts.
+    assert client.get(f"/api/audit/{cid}").json()[-1]["event_type"] == "submitted"

@@ -225,6 +225,86 @@ class ClaimService:
         )
         return claim
 
+    def send_back(
+        self,
+        *,
+        repos: "Repos",
+        claim_id: uuid.UUID,
+        reviewer: "Principal",
+        reason: str | None = None,
+    ) -> Claim:
+        """Return an in-review claim to the submitter for rework
+        (in_review -> submitted). Guarded by the same reviewer check as
+        approval (authority + SoD); the ``reason`` lives in the audit trail, not
+        a column, so a sent-back claim re-enters the queue via :meth:`resubmit`."""
+        claim = self.get(repos, claim_id)
+        if claim.status != "in_review":
+            raise IllegalTransition(f"cannot send back a claim in status {claim.status!r}")
+        from .sod import check_can_approve
+
+        check_can_approve(claim, reviewer)
+        claim.status = "submitted"
+        record_event(
+            repos.audit,
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            entity_type="claim",
+            entity_id=claim.id,
+            event_type="sent_back",
+            actor=reviewer.email or str(reviewer.user_id),
+            detail={"reason": reason},
+        )
+        return claim
+
+    def reject(
+        self,
+        *,
+        repos: "Repos",
+        claim_id: uuid.UUID,
+        reviewer: "Principal",
+        reason: str | None = None,
+    ) -> Claim:
+        """Reject an in-review claim outright (in_review -> rejected, terminal).
+        Same reviewer guard as approval; the ``reason`` is recorded in the audit
+        trail. A rejected claim cannot be approved, sent back, or resubmitted."""
+        claim = self.get(repos, claim_id)
+        if claim.status != "in_review":
+            raise IllegalTransition(f"cannot reject a claim in status {claim.status!r}")
+        from .sod import check_can_approve
+
+        check_can_approve(claim, reviewer)
+        claim.status = "rejected"
+        record_event(
+            repos.audit,
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            entity_type="claim",
+            entity_id=claim.id,
+            event_type="rejected",
+            actor=reviewer.email or str(reviewer.user_id),
+            detail={"reason": reason},
+        )
+        return claim
+
+    def resubmit(self, *, repos: "Repos", claim_id: uuid.UUID, actor: str) -> Claim:
+        """Re-enter a sent-back claim into the review queue
+        (submitted -> in_review), e.g. after its keyed fields were corrected.
+        Not a sign-off, so no SoD guard — it only re-opens review."""
+        claim = self.get(repos, claim_id)
+        if claim.status != "submitted":
+            raise IllegalTransition(f"cannot resubmit a claim in status {claim.status!r}")
+        claim.status = "in_review"
+        record_event(
+            repos.audit,
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            entity_type="claim",
+            entity_id=claim.id,
+            event_type="resubmitted",
+            actor=actor,
+        )
+        return claim
+
     def release(self, *, repos: "Repos", claim_id: uuid.UUID, actor: str) -> ReleaseBatch:
         """Release an approved claim into the immutable ledger (idempotent)."""
         claim = self.get(repos, claim_id)

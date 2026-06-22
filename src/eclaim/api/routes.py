@@ -16,6 +16,7 @@ from . import deps
 from .schemas import (
     AuditEventOut,
     BatchOut,
+    ClaimDecision,
     ClaimEdit,
     ClaimOut,
     ClientOut,
@@ -131,6 +132,67 @@ def approve_claim(
         return ClaimOut.of(
             _service.approve(
                 repos=repos, claim_id=claim_id, actor=actor, approver=principal
+            )
+        )
+    except ClaimError as exc:
+        raise _handle(exc)
+
+
+@router.post("/claims/{claim_id}/send-back", response_model=ClaimOut)
+def send_back_claim(
+    claim_id: uuid.UUID,
+    decision: ClaimDecision | None = None,
+    repos: Repos = Depends(deps.get_repos),
+    principal: Principal = Depends(deps.get_principal),
+) -> ClaimOut:
+    """Return an in-review claim to the submitter for rework (→ submitted)."""
+    try:
+        return ClaimOut.of(
+            _service.send_back(
+                repos=repos,
+                claim_id=claim_id,
+                reviewer=principal,
+                reason=(decision.reason if decision else None),
+            )
+        )
+    except ClaimError as exc:
+        raise _handle(exc)
+
+
+@router.post("/claims/{claim_id}/reject", response_model=ClaimOut)
+def reject_claim(
+    claim_id: uuid.UUID,
+    decision: ClaimDecision | None = None,
+    repos: Repos = Depends(deps.get_repos),
+    principal: Principal = Depends(deps.get_principal),
+) -> ClaimOut:
+    """Reject an in-review claim outright (→ rejected, terminal)."""
+    try:
+        return ClaimOut.of(
+            _service.reject(
+                repos=repos,
+                claim_id=claim_id,
+                reviewer=principal,
+                reason=(decision.reason if decision else None),
+            )
+        )
+    except ClaimError as exc:
+        raise _handle(exc)
+
+
+@router.post("/claims/{claim_id}/resubmit", response_model=ClaimOut)
+def resubmit_claim(
+    claim_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_repos),
+    principal: Principal = Depends(deps.get_principal),
+) -> ClaimOut:
+    """Re-enter a sent-back claim into the review queue (→ in_review)."""
+    try:
+        return ClaimOut.of(
+            _service.resubmit(
+                repos=repos,
+                claim_id=claim_id,
+                actor=principal.email or str(principal.user_id),
             )
         )
     except ClaimError as exc:

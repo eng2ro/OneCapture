@@ -63,6 +63,13 @@ class ClaimEdit(BaseModel):
     unit: str | None = None
 
 
+class ClaimDecision(BaseModel):
+    """Body for send-back / reject — the reviewer's reason (kept in the audit
+    trail, not a claim column)."""
+
+    reason: str | None = None
+
+
 class BatchOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
