@@ -95,9 +95,13 @@ def get_session_principal(
     try:
         claims = verify(token, secret=get_settings().jwt_secret)
         set_firm_context(db, uuid.UUID(str(claims["firm_id"])))
-        return build_principal(db, claims)
+        principal = build_principal(db, claims)
     except (TokenError, KeyError, ValueError) as exc:
         raise NeedsLogin() from exc
+    # Stash on request.state so the nav context processor can show/hide the
+    # Admin section by role without threading the principal through every page.
+    request.state.principal = principal
+    return principal
 
 
 def get_web_repos(
@@ -107,6 +111,16 @@ def get_web_repos(
     """Cookie-sourced counterpart to :func:`get_repos` for the web pages."""
     set_tenant_context(db, principal.firm_id, principal.allowed_client_ids)
     return Repos.for_session(db)
+
+
+def require_firm_scope(
+    principal: Principal = Depends(get_session_principal),
+) -> Principal:
+    """Admin web routes are firm-scope only (partner/manager). Approver/viewer get
+    403; a cookie-less request still redirects to /login via get_session_principal."""
+    if not principal.is_firm_scoped:
+        raise HTTPException(status_code=403, detail="firm-scope role required")
+    return principal
 
 
 def get_ocr() -> OcrProvider:

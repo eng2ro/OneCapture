@@ -79,6 +79,41 @@ class CategoryRepository:
             ).scalars()
         )
 
+    def list_for_clients(self, client_ids) -> list[Category]:
+        """All categories across a set of clients (the admin screen), RLS-scoped."""
+        client_ids = list(client_ids)
+        if not client_ids:
+            return []
+        return list(
+            self._s.execute(
+                select(Category)
+                .where(Category.client_id.in_(client_ids))
+                .order_by(Category.client_id, Category.name)
+            ).scalars()
+        )
+
+
+class ClaimantRepository:
+    """Claimant master (submitters, channel-bound — no login). RLS-scoped."""
+
+    def __init__(self, session: Session) -> None:
+        self._s = session
+
+    def get_by_id(self, claimant_id: uuid.UUID) -> Claimant | None:
+        return self._s.get(Claimant, claimant_id)
+
+    def list_for_clients(self, client_ids) -> list[Claimant]:
+        client_ids = list(client_ids)
+        if not client_ids:
+            return []
+        return list(
+            self._s.execute(
+                select(Claimant)
+                .where(Claimant.client_id.in_(client_ids))
+                .order_by(Claimant.client_id, Claimant.name)
+            ).scalars()
+        )
+
 
 class ClaimRepository:
     def __init__(self, session: Session) -> None:

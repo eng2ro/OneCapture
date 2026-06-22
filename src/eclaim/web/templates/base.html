@@ -13,6 +13,7 @@
       <a href="/capture">Capture</a>
       <a href="/claims">Claims</a>
       <a href="/ledger">Ledger</a>
+      {% if is_firm_scoped %}<a href="/admin/categories">Admin</a>{% endif %}
       <form method="post" action="/logout" class="signout"><button type="submit">Sign out</button></form>
     </nav>
   </header>

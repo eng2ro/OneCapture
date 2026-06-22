@@ -20,20 +20,33 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..api import deps
 from ..auth.principal import Principal, list_visible_clients
 from ..auth.provider import AuthError, DevAuthProvider
 from ..config import get_settings
-from ..db.models import Claimant
+from ..db.models import Category, Claimant
 from ..ocr.base import Extraction, ExpenseType, OcrError, Unit
 from ..repositories import LedgerRepository
 from ..services.claims import ClaimError, ClaimService, Repos
 from ..services.sod import can_approve
 
 WEB_DIR = Path(__file__).parent
-templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+
+
+def _nav_context(request: Request) -> dict:
+    """Inject ``is_firm_scoped`` into every page so the nav can show the Admin
+    section only to partner/manager. Reads the principal stashed on request.state
+    by get_session_principal (unset on unauthenticated pages → hidden)."""
+    principal = getattr(request.state, "principal", None)
+    return {"is_firm_scoped": bool(principal and principal.is_firm_scoped)}
+
+
+templates = Jinja2Templates(
+    directory=str(WEB_DIR / "templates"), context_processors=[_nav_context]
+)
 
 router = APIRouter(tags=["web"])
 _service = ClaimService()
@@ -429,3 +442,158 @@ def ledger_page(request: Request, repos: Repos = Depends(deps.get_web_repos)) ->
             "total": s1 + s2 + s3,
         },
     )
+
+
+# --------------------------------------------------------------------------- #
+# Admin: category + claimant master (firm-scope roles only; RLS-scoped)
+# --------------------------------------------------------------------------- #
+def _render_categories(request, repos, principal, *, editing=None, error=None) -> HTMLResponse:
+    clients = list_visible_clients(repos.session, principal)
+    return templates.TemplateResponse(
+        request,
+        "admin_categories.html",
+        {
+            "categories": repos.categories.list_for_clients([c.id for c in clients]),
+            "clients": clients,
+            "client_names": {c.id: c.name for c in clients},
+            "expense_types": EXPENSE_TYPES,
+            "editing": editing,
+            "error": error,
+        },
+    )
+
+
+@router.get("/admin/categories", response_class=HTMLResponse)
+def admin_categories(
+    request: Request,
+    edit: uuid.UUID | None = None,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+) -> HTMLResponse:
+    editing = repos.categories.get_by_id(edit) if edit else None
+    return _render_categories(request, repos, principal, editing=editing)
+
+
+@router.post("/admin/categories")
+def admin_save_category(
+    request: Request,
+    category_id: str = Form(""),
+    client_id: str = Form(...),
+    name: str = Form(...),
+    expense_type: str = Form(...),
+    factor_key: str = Form(""),
+    gl_export_code: str = Form(""),
+    default_limit: str = Form(""),
+    status: str = Form("active"),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    try:
+        cid = uuid.UUID(client_id)
+        limit = Decimal(default_limit) if default_limit.strip() else None
+    except (ValueError, InvalidOperation):
+        return _render_categories(request, repos, principal, error="Invalid client or default limit.")
+    if cid not in principal.allowed_client_ids:
+        return _render_categories(request, repos, principal, error="You cannot manage that client.")
+    try:
+        with repos.session.begin_nested():
+            if category_id.strip():
+                cat = repos.categories.get_by_id(uuid.UUID(category_id))
+                if cat is None or cat.client_id != cid:
+                    raise LookupError
+                cat.name, cat.expense_type = name, expense_type
+                cat.factor_key, cat.gl_export_code = factor_key or None, gl_export_code or None
+                cat.default_limit, cat.status = limit, status or "active"
+            else:
+                repos.session.add(
+                    Category(
+                        firm_id=principal.firm_id, client_id=cid, name=name,
+                        expense_type=expense_type, factor_key=factor_key or None,
+                        gl_export_code=gl_export_code or None, default_limit=limit,
+                        status=status or "active",
+                    )
+                )
+            repos.session.flush()
+    except LookupError:
+        return _render_categories(request, repos, principal, error="Category not found.")
+    except IntegrityError:
+        return _render_categories(
+            request, repos, principal,
+            error="A category with that name or expense type already exists for this client.",
+        )
+    return RedirectResponse("/admin/categories", status_code=303)
+
+
+def _render_claimants(request, repos, principal, *, editing=None, error=None) -> HTMLResponse:
+    clients = list_visible_clients(repos.session, principal)
+    return templates.TemplateResponse(
+        request,
+        "admin_claimants.html",
+        {
+            "claimants": repos.claimants.list_for_clients([c.id for c in clients]),
+            "clients": clients,
+            "client_names": {c.id: c.name for c in clients},
+            "editing": editing,
+            "error": error,
+        },
+    )
+
+
+@router.get("/admin/claimants", response_class=HTMLResponse)
+def admin_claimants(
+    request: Request,
+    edit: uuid.UUID | None = None,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+) -> HTMLResponse:
+    editing = repos.claimants.get_by_id(edit) if edit else None
+    return _render_claimants(request, repos, principal, editing=editing)
+
+
+@router.post("/admin/claimants")
+def admin_save_claimant(
+    request: Request,
+    claimant_id: str = Form(""),
+    client_id: str = Form(...),
+    name: str = Form(...),
+    phone: str = Form(""),
+    email: str = Form(""),
+    employee_ref: str = Form(""),
+    cost_centre: str = Form(""),
+    status: str = Form("active"),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    try:
+        cid = uuid.UUID(client_id)
+    except ValueError:
+        return _render_claimants(request, repos, principal, error="Invalid client.")
+    if cid not in principal.allowed_client_ids:
+        return _render_claimants(request, repos, principal, error="You cannot manage that client.")
+    try:
+        with repos.session.begin_nested():
+            if claimant_id.strip():
+                cm = repos.claimants.get_by_id(uuid.UUID(claimant_id))
+                if cm is None or cm.client_id != cid:
+                    raise LookupError
+                cm.name, cm.phone, cm.email = name, phone or None, email or None
+                cm.employee_ref, cm.cost_centre = employee_ref or None, cost_centre or None
+                cm.status = status or "active"
+            else:
+                repos.session.add(
+                    Claimant(
+                        firm_id=principal.firm_id, client_id=cid, name=name,
+                        phone=phone or None, email=email or None,
+                        employee_ref=employee_ref or None, cost_centre=cost_centre or None,
+                        status=status or "active",
+                    )
+                )
+            repos.session.flush()
+    except LookupError:
+        return _render_claimants(request, repos, principal, error="Claimant not found.")
+    except IntegrityError:
+        return _render_claimants(
+            request, repos, principal,
+            error="A claimant with that phone already exists for this client.",
+        )
+    return RedirectResponse("/admin/claimants", status_code=303)

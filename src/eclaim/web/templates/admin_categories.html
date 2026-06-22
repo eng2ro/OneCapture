@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Admin · Categories — OneCapture e-Claim{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="filters">
+    <a href="/admin/categories" class="chip active">Categories</a>
+    <a href="/admin/claimants" class="chip">Claimants</a>
+  </div>
+  <h1>{{ 'Edit category' if editing else 'Categories' }}</h1>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <form class="fields" method="post" action="/admin/categories">
+    {% if editing %}<input type="hidden" name="category_id" value="{{ editing.id }}">{% endif %}
+    <label>Client
+      <select name="client_id">
+        {% for c in clients %}
+          <option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Name <input name="name" value="{{ editing.name if editing else '' }}" required></label>
+    <label>Expense type
+      <select name="expense_type">
+        {% for et in expense_types %}
+          <option value="{{ et }}" {{ 'selected' if editing and editing.expense_type == et else '' }}>{{ et }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Factor key (blank = spend-based) <input name="factor_key" value="{{ editing.factor_key or '' if editing else '' }}"></label>
+    <label>GL export code <input name="gl_export_code" value="{{ editing.gl_export_code or '' if editing else '' }}"></label>
+    <label>Default limit <input name="default_limit" value="{{ editing.default_limit if editing and editing.default_limit is not none else '' }}"></label>
+    <label>Status <input name="status" value="{{ editing.status if editing else 'active' }}"></label>
+    <button type="submit" class="primary">{{ 'Save' if editing else 'Create' }} category</button>
+    {% if editing %}<a href="/admin/categories" class="chip">Cancel</a>{% endif %}
+  </form>
+
+  <table class="ledger">
+    <thead>
+      <tr><th>Client</th><th>Name</th><th>Expense type</th><th>Factor</th>
+          <th>GL</th><th>Limit</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for cat in categories %}
+      <tr>
+        <td>{{ client_names.get(cat.client_id, '') }}</td>
+        <td>{{ cat.name }}</td>
+        <td>{{ cat.expense_type }}</td>
+        <td>{{ cat.factor_key or '(spend)' }}</td>
+        <td>{{ cat.gl_export_code or '—' }}</td>
+        <td>{{ cat.default_limit if cat.default_limit is not none else '—' }}</td>
+        <td>{{ cat.status }}</td>
+        <td><a href="/admin/categories?edit={{ cat.id }}">Edit</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="muted">No categories.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

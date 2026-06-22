@@ -26,6 +26,7 @@ from ..ocr.base import Extraction, OcrProvider
 from ..repositories import (
     AuditRepository,
     CategoryRepository,
+    ClaimantRepository,
     ClaimRepository,
     FactorRepository,
     ReleaseRepository,
@@ -490,6 +491,7 @@ class Repos:
     claims: ClaimRepository
     factors: FactorRepository
     categories: CategoryRepository
+    claimants: ClaimantRepository
     releases: ReleaseRepository
     audit: AuditRepository
 
@@ -500,6 +502,7 @@ class Repos:
             claims=ClaimRepository(session),
             factors=FactorRepository(session),
             categories=CategoryRepository(session),
+            claimants=ClaimantRepository(session),
             releases=ReleaseRepository(session),
             audit=AuditRepository(session),
         )
