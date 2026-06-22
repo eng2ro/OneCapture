@@ -4,76 +4,97 @@
 {% if not claim %}
   <section class="card"><h1>Claim not found</h1></section>
 {% else %}
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
 <section class="grid">
   <div class="card">
     <h2>Source document</h2>
     <p class="muted mono">sha256: {{ claim.image_sha256[:24] }}…</p>
-    <div class="image-placeholder">Receipt image on file<br><small>{{ claim.image_path }}</small></div>
+    <img class="receipt" src="/claims/{{ claim.id }}/image" alt="receipt"
+         onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+    <div class="image-placeholder" style="display:none">Receipt image unavailable<br><small>{{ claim.image_path }}</small></div>
   </div>
 
   <div class="card">
     <h2>Extracted &amp; classified</h2>
     <span class="pill pill-{{ claim.status }}">{{ claim.status }}</span>
-    <form id="edit-form" class="fields">
+    {% if claim.data_quality and claim.data_quality.startswith('Unmapped') %}
+      <span class="pill flag">{{ claim.data_quality }}</span>
+    {% endif %}
+
+    {% if can_edit %}
+    <form class="fields" method="post" action="/claims/{{ claim.id }}/edit">
       <label>Vendor <input name="vendor" value="{{ claim.vendor or '' }}"></label>
       <label>Doc no <input name="doc_no" value="{{ claim.doc_no or '' }}"></label>
       <label>Date <input name="doc_date" value="{{ claim.doc_date or '' }}"></label>
+      <label>Currency <input name="currency" value="{{ claim.currency or '' }}"></label>
       <label>Total <input name="total_amount" value="{{ claim.total_amount or '' }}"></label>
       <label>Expense type <input name="expense_type" value="{{ claim.expense_type or '' }}"></label>
       <label>Quantity <input name="quantity" value="{{ claim.quantity or '' }}"></label>
       <label>Unit <input name="unit" value="{{ claim.unit or '' }}"></label>
-      {% if claim.status != 'released' %}<button type="submit">Save &amp; re-classify</button>{% endif %}
+      <button type="submit">Save &amp; re-classify</button>
     </form>
+
+    <form class="fields" method="post" action="/claims/{{ claim.id }}/category">
+      <label>Category
+        <select name="category_id">
+          {% for cat in categories %}
+            <option value="{{ cat.id }}" {{ 'selected' if category and cat.id == category.id else '' }}>
+              {{ cat.name }}{% if cat.factor_key %} → {{ cat.factor_key }}{% else %} (spend){% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Assign category &amp; reclassify</button>
+    </form>
+    {% endif %}
 
     <div class="carbon">
       <h3>Carbon</h3>
+      <p>Category <strong>{{ category.name if category else '—' }}</strong></p>
       <p>Scope <strong>{{ claim.scope }}</strong> · basis <strong>{{ claim.basis }}</strong>
          · factor <strong>{{ claim.factor_key }}</strong> v{{ claim.factor_version }}</p>
-      <p class="tco2e">{{ claim.tco2e }} tCO₂e</p>
-      <p class="dq">{{ claim.data_quality }}</p>
+      <p class="tco2e">{{ claim.tco2e }} tCO2e</p>
+      <p class="dq {{ 'flag' if claim.data_quality and claim.data_quality.startswith('Unmapped') else '' }}">{{ claim.data_quality }}</p>
     </div>
 
-    {% if claim.status == 'in_review' %}
-      <button class="primary" onclick="act('approve')">Approve</button>
-    {% elif claim.status == 'approved' %}
-      <button class="primary" onclick="act('release')">Release</button>
-    {% elif claim.status == 'released' %}
-      <p class="released-note">Released &amp; anchored — immutable.</p>
-    {% endif %}
+    <div class="actions">
+      {% if can_review %}
+        <form method="post" action="/claims/{{ claim.id }}/approve"><button class="primary">Approve</button></form>
+        <form method="post" action="/claims/{{ claim.id }}/send-back">
+          <input name="reason" placeholder="Reason"><button type="submit">Send back</button>
+        </form>
+        <form method="post" action="/claims/{{ claim.id }}/reject">
+          <input name="reason" placeholder="Reason"><button type="submit" class="danger">Reject</button>
+        </form>
+      {% endif %}
+      {% if can_resubmit %}
+        <form method="post" action="/claims/{{ claim.id }}/resubmit"><button class="primary">Resubmit to review</button></form>
+      {% endif %}
+      {% if can_release %}
+        <form method="post" action="/claims/{{ claim.id }}/release"><button class="primary">Release</button></form>
+      {% endif %}
+      {% if claim.status == 'released' %}<p class="released-note">Released &amp; anchored — immutable.</p>{% endif %}
+      {% if claim.status == 'rejected' %}<p class="muted">Rejected — terminal.</p>{% endif %}
+    </div>
   </div>
 </section>
+
+{% if claimant %}
+<section class="card">
+  <h2>Claimant</h2>
+  <p>{{ claimant.name }} · employee {{ claimant.employee_ref or '—' }} · cost centre {{ claimant.cost_centre or '—' }}</p>
+</section>
+{% endif %}
 
 <section class="card">
   <h2>Audit trail</h2>
   <ol class="audit">
     {% for e in events %}
       <li><span class="evt">{{ e.event_type }}</span> by {{ e.actor }}
+          {% if e.detail and e.detail.reason %}— {{ e.detail.reason }}{% endif %}
           <span class="mono">{{ e.hash[:16] }}…</span></li>
     {% endfor %}
   </ol>
 </section>
-
-<script>
-  const claimId = "{{ claim.id }}";
-  async function act(action) {
-    const res = await fetch(`/api/claims/${claimId}/${action}`, { method: 'POST' });
-    if (!res.ok) { alert('Failed: ' + res.status); return; }
-    window.location.reload();
-  }
-  const editForm = document.getElementById('edit-form');
-  if (editForm) editForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(editForm);
-    const body = {};
-    for (const [k, v] of fd.entries()) if (v !== '') body[k] = v;
-    const res = await fetch(`/api/claims/${claimId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) { alert('Save failed: ' + res.status); return; }
-    window.location.reload();
-  });
-</script>
 {% endif %}
 {% endblock %}

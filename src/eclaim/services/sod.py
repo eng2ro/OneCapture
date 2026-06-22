@@ -41,3 +41,13 @@ def check_can_approve(claim: Claim, approver: Principal) -> None:
         raise SoDViolation(
             f"amount {amount} exceeds approver authority limit {approver.authority_limit}"
         )
+
+
+def can_approve(claim: Claim, approver: Principal) -> bool:
+    """Non-raising predicate over :func:`check_can_approve` — for the UI to decide
+    whether to draw the review actions. The service stays the real gate."""
+    try:
+        check_can_approve(claim, approver)
+        return True
+    except SoDViolation:
+        return False

@@ -54,10 +54,31 @@ button.primary { font-weight: 600; }
   align-items: center; justify-content: center; color: var(--muted); text-align: center;
 }
 .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--cream); }
+.pill-submitted { background: #e9ecef; }
 .pill-in_review { background: #fff3cd; }
 .pill-approved { background: #d4edda; }
 .pill-released { background: var(--green); color: #fff; }
+.pill-rejected { background: #f8d7da; }
+.pill.flag, span.flag { background: #f8d7da; color: #842029; }
+.dq.flag { color: #842029; font-weight: 600; }
 .released-note { color: var(--green); font-weight: 600; }
+/* Inbox status filter chips */
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.filters .chip {
+  text-decoration: none; color: var(--dark); background: var(--cream);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 13px;
+}
+.filters .chip.active { background: var(--green); color: #fff; border-color: var(--green); }
+/* Review page: error banner, receipt image, action row */
+.error { background: #f8d7da; color: #842029; border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; }
+img.receipt { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); margin-top: 12px; }
+.fields select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+.actions form { margin: 0; display: flex; gap: 6px; align-items: center; }
+.actions input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+.actions button { margin-top: 0; }
+button.danger { background: #b02a37; }
+button.danger:hover { background: #8b212b; }
 .audit { margin: 0; padding-left: 18px; }
 .audit .evt { font-weight: 600; color: var(--green); }
 .totals { display: flex; gap: 14px; flex-wrap: wrap; margin: 16px 0 22px; }

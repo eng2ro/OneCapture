@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Claims — OneCapture e-Claim{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Claims</h1>
+  <div class="filters">
+    <a href="/claims" class="chip {{ 'active' if not current_status else '' }}">All</a>
+    {% for s in statuses %}
+      <a href="/claims?status={{ s }}" class="chip {{ 'active' if current_status == s else '' }}">{{ s }}</a>
+    {% endfor %}
+  </div>
+
+  <table class="ledger">
+    <thead>
+      <tr><th>Received</th><th>Client</th><th>Vendor</th><th>Expense</th>
+          <th>tCO2e</th><th>Data quality</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for c in claims %}
+      <tr>
+        <td>{{ c.created_at.strftime('%Y-%m-%d') }}</td>
+        <td>{{ client_names.get(c.client_id, '') }}</td>
+        <td>{{ c.vendor or '—' }}</td>
+        <td>{{ c.expense_type or '—' }}</td>
+        <td>{{ c.tco2e if c.tco2e is not none else '—' }}</td>
+        <td>
+          {% if c.data_quality and c.data_quality.startswith('Unmapped') %}
+            <span class="pill flag">{{ c.data_quality }}</span>
+          {% else %}{{ c.data_quality or '—' }}{% endif %}
+        </td>
+        <td><span class="pill pill-{{ c.status }}">{{ c.status }}</span></td>
+        <td><a href="/claims/{{ c.id }}/review">Review →</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="muted">No claims for this view.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

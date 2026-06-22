@@ -69,6 +69,16 @@ class CategoryRepository:
     def get_by_id(self, category_id: uuid.UUID) -> Category | None:
         return self._s.get(Category, category_id)
 
+    def list_for_client(self, client_id: uuid.UUID) -> list[Category]:
+        """Active categories for one client, for the review-page assign dropdown."""
+        return list(
+            self._s.execute(
+                select(Category)
+                .where(Category.client_id == client_id, Category.status == "active")
+                .order_by(Category.name)
+            ).scalars()
+        )
+
 
 class ClaimRepository:
     def __init__(self, session: Session) -> None:
@@ -88,6 +98,20 @@ class ClaimRepository:
             stmt = stmt.where(Claim.status == status)
         stmt = stmt.order_by(Claim.created_at.desc())
         return list(self._s.execute(stmt).scalars())
+
+    def list_for_clients(
+        self, client_ids, status: str | None = None
+    ) -> list[Claim]:
+        """Claims across a set of clients (the principal's visible clients), newest
+        first, optionally filtered by status. Belt-and-suspenders to RLS: the
+        explicit client filter keeps the cut correct even on an owner connection."""
+        client_ids = list(client_ids)
+        if not client_ids:
+            return []
+        stmt = select(Claim).where(Claim.client_id.in_(client_ids))
+        if status is not None:
+            stmt = stmt.where(Claim.status == status)
+        return list(self._s.execute(stmt.order_by(Claim.created_at.desc())).scalars())
 
     def export_rows(
         self,
