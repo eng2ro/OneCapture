@@ -23,7 +23,7 @@
 .cap-stamp.st-pine{color:var(--pine-2);border-color:var(--pine-line);background:var(--pine-tint)}
 .cap-h1{font-family:var(--serif);font-size:24px;font-weight:600;letter-spacing:-.018em;margin:0;color:var(--ink)}
 .cap-sub{font-size:13px;color:var(--graphite);margin:6px 0 0;max-width:620px}
-.cap-chead{display:flex;align-items:flex-start;gap:20px}
+.cap-chead{display:flex;align-items:flex-start;gap:20px;max-width:1000px;margin:0 auto 18px}
 .cap-cmeta{flex:1;min-width:0}
 .cap-stepper{display:flex;align-items:center;flex:none;padding-top:4px}
 .cap-step{display:flex;align-items:center;gap:8px;color:var(--faint)}
@@ -33,7 +33,7 @@
 .cap-step.on .sd{background:var(--pine);border-color:var(--pine);color:#fff}
 .cap-step-conn{width:26px;height:1.5px;background:var(--rule);margin:0 11px}
 /* sheet */
-.cap-sheet{background:var(--paper);border:1px solid var(--rule);border-radius:var(--r-lg);box-shadow:0 1px 1px rgba(20,22,18,.03),0 14px 40px rgba(20,22,18,.05)}
+.cap-sheet{max-width:1000px;margin:0 auto;background:var(--paper);border:1px solid var(--rule);border-radius:var(--r-lg);box-shadow:0 1px 1px rgba(20,22,18,.03),0 14px 40px rgba(20,22,18,.05)}
 .cap-block{padding:22px 26px}
 .cap-block+.cap-block{border-top:1px solid var(--rule)}
 .cap-block-h{display:flex;align-items:center;gap:12px;margin-bottom:16px}
@@ -101,10 +101,21 @@
 .capx .route-alts .alt-flag{color:var(--rust);font-weight:600}
 .capx .route-alts .alt-best{color:var(--pine-2);font-weight:600}
 .capx .bar-note{font-size:12.5px;color:var(--graphite)}
-/* action bar */
-.capx .capture-bar{position:sticky;bottom:0;margin-top:18px;background:rgba(255,255,255,.94);backdrop-filter:saturate(1.3) blur(8px);border:1px solid var(--rule);border-radius:var(--r-lg);padding:13px 20px;display:flex;align-items:center;gap:16px;box-shadow:0 8px 28px rgba(20,22,18,.07)}
-.capx .capture-bar .bar-note{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--ink-2)}
-.capx .capture-bar .btn{height:44px;padding:0 20px;margin-left:auto}
+/* dropzone extras */
+.capx .dz-browse{margin-top:15px;height:36px;padding:0 15px;border-radius:var(--r);border:1px solid var(--rule);background:var(--paper);font-size:12.5px;font-weight:600;color:var(--ink-2);display:inline-flex;align-items:center;gap:8px}
+.capx .dropzone:hover .dz-browse{border-color:var(--pine-line);color:var(--pine-2)}
+.capx .dz-ocr{margin-top:13px;font-size:11.5px;color:var(--pine-2);font-weight:600;display:inline-flex;align-items:center;gap:7px}
+.capx .dz-ocr i{color:var(--pine)}
+/* action bar — sticky tally */
+.capx .capture-bar{position:sticky;bottom:0;max-width:1000px;margin:18px auto 0;background:rgba(255,255,255,.95);backdrop-filter:saturate(1.3) blur(8px);border:1px solid var(--rule);border-radius:var(--r-lg);padding:12px 18px;display:flex;align-items:center;gap:16px;box-shadow:0 10px 30px rgba(20,22,18,.09)}
+.capx .cap-tally{display:flex;align-items:center;gap:13px}
+.capx .cap-dot{width:9px;height:9px;border-radius:50%;background:var(--rule-strong);flex:none}
+.capx .cap-tally.has .cap-dot{background:var(--pine);box-shadow:0 0 0 4px var(--pine-tint)}
+.capx .cap-n{font-family:var(--serif);font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.capx .cap-meta{font-size:12px;color:var(--graphite);line-height:1.3}
+.capx .cap-meta b{font-family:var(--serif);font-weight:600;color:var(--ink-2)}
+.capx .cap-bar-actions{margin-left:auto;display:flex;gap:10px}
+.capx .capture-bar .btn{height:44px;padding:0 18px}
 @media(max-width:1080px){.cap-stepper{display:none}.capx .field-row{grid-template-columns:1fr}}
 </style>
 
@@ -207,6 +218,8 @@
             <i class="ti ti-cloud-upload"></i>
             <div class="dz-title">Drag receipts here, or browse</div>
             <div class="dz-hint">JPG · PNG · WebP — add as many as you like (optional)</div>
+            <span class="dz-browse"><i class="ti ti-folder"></i> Browse files</span>
+            <div class="dz-ocr"><i class="ti ti-scan"></i> OneCapture reads the vendor, date &amp; amount automatically</div>
           </div>
           <div class="dropzone-compact" id="dz-compact" hidden>
             <i class="ti ti-plus"></i> <span>Drop or browse to add more receipts</span>
@@ -258,11 +271,18 @@
       </section>
     </div>
 
-    <div class="capture-bar" id="capture-bar" hidden>
-      <span class="bar-note" id="bar-note"></span>
-      <button class="btn btn-accent" type="submit" id="f-submit" disabled>
-        <i class="ti ti-send"></i><span id="submit-label">Submit for review</span>
-      </button>
+    <div class="capture-bar" id="capture-bar">
+      <div class="cap-tally" id="tally">
+        <span class="cap-dot"></span>
+        <span class="cap-n" id="lineN">0 lines</span>
+        <span class="cap-meta" id="tallyMeta">Add a receipt or a mileage trip to begin · you'll verify next</span>
+      </div>
+      <div class="cap-bar-actions">
+        <button type="button" class="btn" id="save-draft" disabled title="Drafts aren't enabled yet">Save draft</button>
+        <button class="btn btn-accent" type="submit" id="f-submit" disabled>
+          <span id="submit-label">Submit claim</span><i class="ti ti-chevron-right"></i>
+        </button>
+      </div>
     </div>
   </form>
 </div>
@@ -357,9 +377,15 @@
   }
   // Expose receipt state so the combined submit bar can fold in mileage lines.
   window._receiptState = function () {
+    var amount = 0;
+    entries.forEach(function (e) {
+      if (e.status === "read" && e.ext && e.ext.total_amount != null)
+        amount += parseFloat(e.ext.total_amount) || 0;
+    });
     return {
       count: entries.length,
       reading: entries.some(function (e) { return e.status === "reading"; }),
+      amount: amount,
     };
   };
 
@@ -460,19 +486,25 @@ window.gm_authFailure = function () {
 // ---- Combined claim: mileage trips added alongside the receipts ---------------
 var mileageLines = [];   // [{origin, destination, waypoints, route_index, trip_date, km, over}]
 
-// The single submit bar reflects receipts AND mileage together.
+// The single submit bar reflects receipts AND mileage together — a running tally
+// (line count + RM total) like the sample's action bar.
 window.updateSubmitBar = function () {
-  var rs = window._receiptState ? window._receiptState() : { count: 0, reading: false };
-  var total = rs.count + mileageLines.length;
-  var bar = document.getElementById("capture-bar");
+  var rs = window._receiptState ? window._receiptState() : { count: 0, reading: false, amount: 0 };
+  var n = rs.count + mileageLines.length;
+  var milKm = mileageLines.reduce(function (a, m) { return a + (m.km || 0); }, 0);
+  var total = (rs.amount || 0) + milKm * MRATE;   // RM: read receipts + mileage @ rate
+  var tally = document.getElementById("tally");
+  var lineN = document.getElementById("lineN");
+  var meta = document.getElementById("tallyMeta");
   var submit = document.getElementById("f-submit");
   var label = document.getElementById("submit-label");
-  var note = document.getElementById("bar-note");
-  if (bar) bar.hidden = total === 0;
-  if (submit) submit.disabled = total === 0 || rs.reading;
-  if (label) label.textContent = "Submit claim (" + total + " line" + (total === 1 ? "" : "s") + ")";
-  if (note) note.textContent = rs.reading ? "Reading receipts…"
-    : (total + " line" + (total === 1 ? "" : "s") + " · you'll verify next");
+  if (tally) tally.classList.toggle("has", n > 0);
+  if (lineN) lineN.textContent = n + " line" + (n === 1 ? "" : "s");
+  if (meta) meta.innerHTML = rs.reading ? "Reading receipts…"
+    : (n > 0 ? "<b>RM " + total.toFixed(2) + "</b> · you'll verify next"
+             : "Add a receipt or a mileage trip to begin · you'll verify next");
+  if (submit) submit.disabled = n === 0 || rs.reading;
+  if (label) label.textContent = n > 0 ? "Submit claim (" + n + ")" : "Submit claim";
   // Persist the mileage specs for the POST (the server recomputes each authoritative km).
   var mf = document.getElementById("f-mileage");
   if (mf) mf.value = JSON.stringify(mileageLines.map(function (m) {
