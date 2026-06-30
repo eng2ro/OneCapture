@@ -15,8 +15,9 @@ __pycache__/
 data/
 logs/
 
-# --- Local operator notes (lists login accounts; keep out of VCS) ---
+# --- Local operator notes (list login accounts / share password; keep out of VCS) ---
 LOGIN_ACCESS.txt
+SHARE_ACCESS.txt
 
 # --- Local editor / harness state ---
 .claude/settings.local.json

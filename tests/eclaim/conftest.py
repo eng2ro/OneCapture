@@ -12,6 +12,13 @@
 from __future__ import annotations
 
 import os
+
+# The optional "share gate" (HTTP Basic front door) is driven by .env, which the
+# real app reads. Force it OFF for tests — an env var overrides the .env value —
+# before any get_settings() call, so the test client never has to send Basic auth.
+os.environ["SHARE_GATE_USER"] = ""
+os.environ["SHARE_GATE_PASS"] = ""
+
 from decimal import Decimal
 
 import pytest

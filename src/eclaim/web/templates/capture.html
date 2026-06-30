@@ -4,52 +4,16 @@
 {% block content %}
 <div class="screen active" id="screen-submit">
   <h1 class="page-title">Submit an expense claim</h1>
-  <p class="page-sub">Give the claim a title (e.g. a trip or training), drop its receipts — each becomes a line — then verify the lines on the next screen.</p>
+  <p class="page-sub">Drop receipts and/or add mileage trips — each becomes a line on the same claim — then verify the lines on the next screen.</p>
 
   {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
   {% if not categories %}
   <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> No categories set up yet — add some under Manage → Categories.</div>
   {% endif %}
 
-  {# Mode toggle: drop receipts, or claim mileage by route. #}
-  <div style="display:flex;gap:8px;margin-bottom:14px;">
-    <button type="button" class="btn btn-accent" id="tab-receipt" onclick="setMode('receipt')"><i class="ti ti-receipt"></i> Receipts</button>
-    <button type="button" class="btn" id="tab-mileage" onclick="setMode('mileage')"><i class="ti ti-map-2"></i> Mileage</button>
-  </div>
-
-  <div id="mode-mileage" hidden>
-    {% if not maps_key %}
-    <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Google Maps isn't configured yet — add <code>GOOGLE_MAPS_API_KEY</code> (and optionally <code>GOOGLE_MAPS_BROWSER_KEY</code>) to <code>.env</code> to enable the map and distance.</div>
-    {% endif %}
-    <form method="post" action="/capture/mileage" id="mileage-form">
-      <input type="hidden" name="waypoints" id="m-waypoints" value="[]">
-      <input type="hidden" name="route_index" id="m-route-index" value="0">
-      <div class="field-row">
-        <div><label class="label-tiny">From</label><input class="field" name="origin" id="m-from" placeholder="Start location" autocomplete="off" required></div>
-        <div><label class="label-tiny">To</label><input class="field" name="destination" id="m-to" placeholder="Destination" autocomplete="off" required></div>
-      </div>
-      <div id="m-stops"></div>
-      <div style="margin-top:8px;">
-        <button type="button" class="btn" style="font-size:11px;" onclick="addStop()"><i class="ti ti-plus"></i> Add stop</button>
-      </div>
-      <div class="field-row" style="margin-top:12px;">
-        <div><label class="label-tiny">Trip date</label><input class="field" type="date" name="trip_date" id="m-date"></div>
-        <div></div>
-      </div>
-      <div id="m-alts" class="route-alts" hidden></div>
-      <div id="m-map" style="position:relative;height:300px;border-radius:10px;border:1px solid var(--border);margin-top:12px;background:#eef1f4;overflow:hidden;">
-        <img id="m-map-img" alt="route preview" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
-      </div>
-      <div class="capture-bar" style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
-        <span class="bar-note" id="m-summary">Enter a route to compute distance.</span>
-        <button class="btn btn-accent" type="submit" id="m-submit" style="padding:10px 18px;" disabled><i class="ti ti-send"></i> Submit mileage claim</button>
-      </div>
-      <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Distance is recomputed on the server (the authoritative figure); reimbursed at RM {{ mileage_rate }}/km.</div>
-    </form>
-  </div>
-
   <form method="post" action="/capture" enctype="multipart/form-data" id="capture-form">
     <input type="hidden" name="items" id="f-items" value="[]">
+    <input type="hidden" name="mileage" id="f-mileage" value="[]">
 
     <div class="field-row" style="margin-bottom:12px;">
       <div><label class="label-tiny">Claim title (optional)</label>
@@ -121,10 +85,49 @@
       <div class="dropzone-compact" id="dz-compact" hidden>
         <i class="ti ti-plus"></i> <span>Drop or browse to add more receipts</span>
       </div>
-      <input type="file" id="file" name="files" accept="image/png,image/jpeg,image/webp" multiple required hidden>
+      <input type="file" id="file" name="files" accept="image/png,image/jpeg,image/webp" multiple hidden>
     </label>
 
     <div id="receipt-list" class="receipt-list"></div>
+
+    {# Mileage trips on THIS claim — each added trip becomes a mileage line, sent
+       alongside the receipts in one submit. The route entry is a panel (not a
+       nested form); JS stores each added trip in the hidden f-mileage field. #}
+    <div class="mileage-section" style="margin-top:14px;">
+      <div id="mileage-list" class="receipt-list"></div>
+      <div id="mileage-entry" hidden style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;">
+        {% if not maps_key %}
+        <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Google Maps isn't configured — type addresses manually; the server still computes the distance once <code>GOOGLE_MAPS_API_KEY</code> has the Routes API enabled.</div>
+        {% endif %}
+        <input type="hidden" id="m-waypoints" value="[]">
+        <input type="hidden" id="m-route-index" value="0">
+        <div class="field-row">
+          <div><label class="label-tiny">From</label><input class="field" id="m-from" placeholder="Start location" autocomplete="off"></div>
+          <div><label class="label-tiny">To</label><input class="field" id="m-to" placeholder="Destination" autocomplete="off"></div>
+        </div>
+        <div id="m-stops"></div>
+        <div style="margin-top:8px;">
+          <button type="button" class="btn" style="font-size:11px;" onclick="addStop()"><i class="ti ti-plus"></i> Add stop</button>
+        </div>
+        <div class="field-row" style="margin-top:12px;">
+          <div><label class="label-tiny">Trip date</label><input class="field" type="date" id="m-date"></div>
+          <div></div>
+        </div>
+        <div id="m-alts" class="route-alts" hidden></div>
+        <div id="m-map" style="position:relative;height:240px;border-radius:10px;border:1px solid var(--border);margin-top:12px;background:#eef1f4;overflow:hidden;">
+          <img id="m-map-img" alt="route preview" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+        </div>
+        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <span class="bar-note" id="m-summary">Enter From, To and a trip date.</span>
+          <div style="display:flex;gap:8px;">
+            <button type="button" class="btn" onclick="cancelTrip()">Cancel</button>
+            <button type="button" class="btn btn-accent" id="m-add" onclick="addTrip()" disabled><i class="ti ti-plus"></i> Add this trip</button>
+          </div>
+        </div>
+        <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Distance is recomputed on the server (the authoritative figure); reimbursed at RM {{ mileage_rate }}/km.</div>
+      </div>
+      <button type="button" class="btn" id="m-toggle" onclick="toggleMileage()"><i class="ti ti-map-2"></i> Add a mileage trip</button>
+    </div>
 
     <div class="capture-bar" id="capture-bar" hidden>
       <span class="bar-note" id="bar-note"></span>
@@ -194,21 +197,12 @@
   }
 
   function syncForm() {
-    var n = entries.length;
-    var has = n > 0;
-    bar.hidden = !has;
+    var has = entries.length > 0;
     // Once receipts are added, collapse the big dropzone into a slim "add more"
     // bar so it doesn't sit on the page as a large empty box.
     empty.style.display = has ? "none" : "";
     if (compact) compact.hidden = !has;
     dropzone.classList.toggle("compact", has);
-    var reading = entries.some(function (e) { return e.status === "reading"; });
-    // Don't allow submit while any receipt is still being read — otherwise it
-    // would be saved blank (the server would re-OCR it, but the preview is the
-    // point of the verify step).
-    submit.disabled = n === 0 || reading;
-    submitLabel.textContent = "Submit claim (" + n + " line" + (n === 1 ? "" : "s") + ")";
-    barNote.textContent = reading ? "Reading receipts…" : (n + " line" + (n === 1 ? "" : "s") + " · you'll verify next");
     // Rebuild the input's FileList (order == entries) and the items payload.
     // Only entries that read successfully carry data; anything else is sent as
     // null so the server reads the image itself instead of saving it blank.
@@ -229,7 +223,16 @@
     });
     fileInput.files = dt.files;
     itemsInput.value = JSON.stringify(items);
+    // Submit/bar state spans receipts AND mileage — delegate to the shared updater.
+    if (window.updateSubmitBar) window.updateSubmitBar();
   }
+  // Expose receipt state so the combined submit bar can fold in mileage lines.
+  window._receiptState = function () {
+    return {
+      count: entries.length,
+      reading: entries.some(function (e) { return e.status === "reading"; }),
+    };
+  };
 
   function removeEntry(id) {
     entries = entries.filter(function (e) { return e.id !== id; });
@@ -318,21 +321,112 @@ window.gm_authFailure = function () {
   // Strip Google's broken autocomplete UI off the route inputs (it half-attaches
   // before auth fails, leaving the From/To boxes broken AND untypeable). Clone-
   // replace removes its listeners + injected nodes; a plain typeable input remains.
-  document.querySelectorAll("#mode-mileage input.field").forEach(function (inp) {
+  document.querySelectorAll("#mileage-entry input.field").forEach(function (inp) {
     inp.parentNode.replaceChild(inp.cloneNode(true), inp);
   });
   document.querySelectorAll(".pac-container").forEach(function (e) { e.remove(); });
   wireMileageInputs();   // re-wire the fresh clones so typing still recomputes
 };
 
-function setMode(m) {
-  document.getElementById("mode-mileage").hidden = (m !== "mileage");
-  document.getElementById("capture-form").hidden = (m !== "receipt");
-  document.getElementById("tab-receipt").className = "btn" + (m === "receipt" ? " btn-accent" : "");
-  document.getElementById("tab-mileage").className = "btn" + (m === "mileage" ? " btn-accent" : "");
-  if (m === "mileage" && window._map && window.google) {
-    google.maps.event.trigger(window._map, "resize");  // map was hidden when sized
+// ---- Combined claim: mileage trips added alongside the receipts ---------------
+var mileageLines = [];   // [{origin, destination, waypoints, route_index, trip_date, km, over}]
+
+// The single submit bar reflects receipts AND mileage together.
+window.updateSubmitBar = function () {
+  var rs = window._receiptState ? window._receiptState() : { count: 0, reading: false };
+  var total = rs.count + mileageLines.length;
+  var bar = document.getElementById("capture-bar");
+  var submit = document.getElementById("f-submit");
+  var label = document.getElementById("submit-label");
+  var note = document.getElementById("bar-note");
+  if (bar) bar.hidden = total === 0;
+  if (submit) submit.disabled = total === 0 || rs.reading;
+  if (label) label.textContent = "Submit claim (" + total + " line" + (total === 1 ? "" : "s") + ")";
+  if (note) note.textContent = rs.reading ? "Reading receipts…"
+    : (total + " line" + (total === 1 ? "" : "s") + " · you'll verify next");
+  // Persist the mileage specs for the POST (the server recomputes each authoritative km).
+  var mf = document.getElementById("f-mileage");
+  if (mf) mf.value = JSON.stringify(mileageLines.map(function (m) {
+    return { origin: m.origin, destination: m.destination, waypoints: m.waypoints,
+             route_index: m.route_index, trip_date: m.trip_date };
+  }));
+};
+
+function renderMileageList() {
+  var list = document.getElementById("mileage-list");
+  if (!list) return;
+  list.innerHTML = "";
+  mileageLines.forEach(function (m, i) {
+    var row = document.createElement("div");
+    row.className = "receipt-card";
+    row.innerHTML =
+      '<div class="rc-thumb" style="display:flex;align-items:center;justify-content:center;background:#eef1f4;"><i class="ti ti-map-2" style="font-size:20px;color:#64748b;"></i></div>' +
+      '<div class="rc-body"><div class="rc-name">' + mEsc(m.origin) + ' → ' + mEsc(m.destination) + '</div>' +
+      '<div class="rc-tags"><span class="rc-cat"><i class="ti ti-tag"></i>Mileage</span>' +
+      (m.over ? ' <span class="rc-chip warn"><i class="ti ti-alert-triangle"></i> longer route</span>' : '') +
+      '</div></div>' +
+      '<div class="rc-amount">' + m.km.toFixed(1) + ' km</div>' +
+      '<button type="button" class="rc-remove" title="Remove" data-i="' + i + '">&times;</button>';
+    list.appendChild(row);
+  });
+  list.querySelectorAll(".rc-remove").forEach(function (b) {
+    b.addEventListener("click", function () {
+      mileageLines.splice(+b.getAttribute("data-i"), 1);
+      renderMileageList();
+    });
+  });
+  window.updateSubmitBar();
+}
+
+function toggleMileage() {
+  var panel = document.getElementById("mileage-entry");
+  var btn = document.getElementById("m-toggle");
+  if (!panel) return;
+  panel.hidden = !panel.hidden;
+  if (btn) btn.style.display = panel.hidden ? "" : "none";
+  if (!panel.hidden && window._map && window.google) {
+    setTimeout(function () { google.maps.event.trigger(window._map, "resize"); }, 60);
   }
+}
+
+function cancelTrip() { resetMileageEntry(); }
+
+function resetMileageEntry() {
+  ["m-from", "m-to", "m-date"].forEach(function (id) {
+    var el = document.getElementById(id); if (el) el.value = "";
+  });
+  var stops = document.getElementById("m-stops"); if (stops) stops.innerHTML = "";
+  document.getElementById("m-waypoints").value = "[]";
+  document.getElementById("m-route-index").value = "0";
+  _routeOpts = []; _recommendedKm = 0;
+  renderAlts();
+  var img = document.getElementById("m-map-img"); if (img) img.style.display = "none";
+  var note = document.getElementById("m-summary"); if (note) note.textContent = "Enter From, To and a trip date.";
+  var add = document.getElementById("m-add"); if (add) add.disabled = true;
+  var panel = document.getElementById("mileage-entry"); if (panel) panel.hidden = true;
+  var btn = document.getElementById("m-toggle"); if (btn) btn.style.display = "";
+}
+
+// Add the currently-previewed trip as a mileage line on this claim.
+function addTrip() {
+  var from = document.getElementById("m-from").value.trim();
+  var to = document.getElementById("m-to").value.trim();
+  var date = document.getElementById("m-date").value;
+  var note = document.getElementById("m-summary");
+  if (!from || !to) { if (note) note.textContent = "Enter both From and To."; return; }
+  if (!date) { if (note) note.textContent = "Pick a trip date (required)."; return; }
+  if (!_routeOpts.length) { if (note) note.textContent = "Wait for the route distance to compute."; return; }
+  var idx = parseInt(document.getElementById("m-route-index").value, 10) || 0;
+  if (idx < 0 || idx >= _routeOpts.length) idx = 0;
+  var r = _routeOpts[idx], km = parseFloat(r.distance_km);
+  var stops = [];
+  try { stops = JSON.parse(document.getElementById("m-waypoints").value || "[]"); } catch (e) { stops = []; }
+  mileageLines.push({
+    origin: from, destination: to, waypoints: stops,
+    route_index: idx, trip_date: date, km: km, over: overPct(km) > 0,
+  });
+  renderMileageList();
+  resetMileageEntry();
 }
 
 function addStop() {
@@ -354,7 +448,7 @@ var _routeLine = null, _previewTimer = null;
 // API) — independent of Google Maps JS. This must run even if the map/autocomplete
 // never load, so the claim works with just Routes API enabled.
 function wireMileageInputs() {
-  document.querySelectorAll("#mode-mileage input.field").forEach(function (el) {
+  document.querySelectorAll("#mileage-entry input.field").forEach(function (el) {
     if (el._wired) return;
     el._wired = true;
     el.addEventListener("input", recompute);
@@ -406,7 +500,7 @@ function recompute() {
   var stops = Array.prototype.map.call(document.querySelectorAll(".stop-input"),
     function (i) { return i.value; }).filter(Boolean);
   document.getElementById("m-waypoints").value = JSON.stringify(stops);
-  var submit = document.getElementById("m-submit"), note = document.getElementById("m-summary");
+  var submit = document.getElementById("m-add"), note = document.getElementById("m-summary");
   if (!from || !to) {
     submit.disabled = true; note.textContent = "Enter a route to compute distance.";
     _routeOpts = []; renderAlts(); return;
@@ -442,7 +536,7 @@ function selectRoute(i) {
   if (i < 0 || i >= _routeOpts.length) i = 0;
   var r = _routeOpts[i];
   document.getElementById("m-route-index").value = i;
-  var note = document.getElementById("m-summary"), submit = document.getElementById("m-submit");
+  var note = document.getElementById("m-summary"), submit = document.getElementById("m-add");
   var km = parseFloat(r.distance_km), pct = overPct(km);
   var txt = km.toFixed(1) + " km · " + r.stops + " stops · RM " + (km * MRATE).toFixed(2);
   if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over recommended";
@@ -507,6 +601,18 @@ function drawRoute(encoded) {
 // Wire the route inputs immediately (independent of Google Maps) so the distance
 // computes and Submit enables even when only the Routes API is enabled.
 wireMileageInputs();
+
+// Enter inside the mileage entry recomputes the route, never submits the claim
+// form (which would post a half-entered trip / navigate away before "Add this trip").
+(function () {
+  var panel = document.getElementById("mileage-entry");
+  if (panel) panel.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); recompute(); }
+  });
+})();
+
+// Initial submit-bar state (no lines yet).
+window.updateSubmitBar();
 </script>
 {% if maps_key %}
 <script async defer

@@ -292,8 +292,9 @@ NEW_EVENT = "__new__"
 @router.post("/capture")
 async def web_capture(
     request: Request,
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] = File(default=[]),
     items: str = Form("[]"),
+    mileage: str = Form("[]"),
     title: str = Form(""),
     purpose: str = Form(""),
     remarks: str = Form(""),
@@ -321,10 +322,18 @@ async def web_capture(
     standalone claim, a date range — validated in :meth:`ClaimService.start_claim`.
     A staffer can also create a trip inline (``event_id == '__new__'``): we mint the
     Event (title + dates only; the manager fills budget later) and attach to it."""
+    from ..maps import MapError
+
     try:
         item_list = json.loads(items) if items.strip() else []
     except json.JSONDecodeError:
         item_list = []
+    try:
+        mileage_specs = json.loads(mileage) if mileage.strip() else []
+    except json.JSONDecodeError:
+        mileage_specs = []
+    if not isinstance(mileage_specs, list):
+        mileage_specs = []
     client_id = deps.default_client_id(repos.session)
     # Echo the header fields back if validation fails (receipts get re-dropped).
     form = {
@@ -371,6 +380,10 @@ async def web_capture(
     added = 0
     errors: list[str] = []
     for i, f in enumerate(files):
+        # The file input always posts; an empty selection arrives as a part with no
+        # filename — skip it so a mileage-only claim isn't flagged as a bad receipt.
+        if not (f.filename or "").strip():
+            continue
         name = f.filename or f"receipt {i + 1}"
         media_type = f.content_type or "application/octet-stream"
         if media_type not in SUPPORTED_MEDIA:
@@ -402,9 +415,41 @@ async def web_capture(
         except (ValidationError, InvalidOperation, OcrError, ClaimError, ValueError) as exc:
             errors.append(f"{name}: {exc}")
 
+    # Mileage trips added on the capture page → mileage lines on the SAME claim. The
+    # server recomputes each authoritative distance (never trusts a client km) and
+    # records the chosen route + recommended km (longer-than-recommended is flagged).
+    for spec in mileage_specs:
+        if not isinstance(spec, dict):
+            continue
+        origin = str(spec.get("origin") or "").strip()
+        destination = str(spec.get("destination") or "").strip()
+        sdate = str(spec.get("trip_date") or "").strip()
+        if not origin or not destination:
+            errors.append("mileage: a trip is missing From/To")
+            continue
+        if not sdate:
+            errors.append(f"mileage {origin} → {destination}: a trip date is required")
+            continue
+        wps = [w for w in (spec.get("waypoints") or []) if isinstance(w, str) and w.strip()]
+        try:
+            ridx = int(spec.get("route_index") or 0)
+        except (TypeError, ValueError):
+            ridx = 0
+        try:
+            with repos.session.begin_nested():
+                route, recommended_km = _resolve_route(origin, destination, wps, ridx)
+                _service.add_mileage_line(
+                    repos=repos, claim=claim, origin=origin, destination=destination,
+                    waypoints=wps, route=route, date=sdate or None,
+                    rate=deps.get_mileage_rate(), recommended_km=recommended_km,
+                )
+            added += 1
+        except (MapError, ClaimError, ValueError) as exc:
+            errors.append(f"mileage {origin} → {destination}: {exc}")
+
     if added == 0:
         repos.session.rollback()  # no lines → don't leave an empty claim header
-        msg = "Could not read any receipt. " + " · ".join(errors)
+        msg = "Could not add any line. " + " · ".join(errors)
         return _render_capture(request, _capture_categories(repos), _events_for(repos), msg)
 
     _service.submit(repos=repos, claim=claim, actor=_actor(principal), line_count=added)
@@ -496,6 +541,9 @@ def web_capture_mileage(
     if not origin.strip() or not destination.strip():
         return _render_capture(request, _capture_categories(repos), _events_for(repos),
                                "From and To are both required.", form)
+    if not trip_date.strip():
+        return _render_capture(request, _capture_categories(repos), _events_for(repos),
+                               "A trip date is required for a mileage claim.", form)
     try:
         route, recommended_km = _resolve_route(
             origin.strip(), destination.strip(), wps, _parse_int(route_index))
@@ -1025,6 +1073,9 @@ def web_add_mileage(
     if not origin.strip() or not destination.strip():
         return _render_review(request, repos, principal, claim_id,
                               error="Mileage needs a From and a To.")
+    if not trip_date.strip():
+        return _render_review(request, repos, principal, claim_id,
+                              error="A mileage line needs a trip date.")
     try:
         route, recommended_km = _resolve_route(
             origin.strip(), destination.strip(), wps, _parse_int(route_index))

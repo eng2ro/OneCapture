@@ -71,6 +71,18 @@ class Settings(BaseSettings):
 
     image_dir: Path = DEFAULT_IMAGE_DIR
 
+    # "Share gate" — an OUTER HTTP Basic Auth front door for TEMPORARILY exposing a
+    # dev instance (e.g. through a tunnel) to a colleague, so a random visitor who
+    # finds the public URL can't reach the passwordless app. INACTIVE unless BOTH are
+    # set, so local dev is unaffected. A coarse gate on top of the app's own login —
+    # NOT a substitute for real auth.
+    share_gate_user: str = ""
+    share_gate_pass: str = ""
+
+    @property
+    def share_gate_on(self) -> bool:
+        return bool(self.share_gate_user and self.share_gate_pass)
+
     # Identity is single-firm for now; real auth (Entra ID) is a deferred seam.
     default_releaser: str = "system"
 
