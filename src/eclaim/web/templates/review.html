@@ -4,7 +4,76 @@
 {% set line_badge = {"pending":"info","approved":"success","queried":"warning","rejected":"danger"} %}
 {% set status_badge = {'submitted':'info','in_review':'warning','approved':'success','partially_approved':'warning','sent_back':'info','released':'success','rejected':'danger'} %}
 {% block content %}
-<div class="screen active" id="screen-review">
+<style>
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap");
+.capx{
+  --paper:#fff;--rail:#f7f8f6;--ink:#171715;--ink-2:#3f423c;--graphite:#6b6e66;--faint:#9a9d94;
+  --rule:#e1e1db;--rule-2:#edebe6;--rule-strong:#cfcfc8;
+  --pine:#1f5d44;--pine-2:#184832;--pine-tint:#e9f1ec;--pine-line:#bcd6c8;
+  --rust:#9a4a1f;--rust-2:#7a3a17;--rust-tint:#f7ece2;--rust-line:#e6cbb4;--grey-tint:#f1f1ed;
+  --serif:'Source Serif 4',Georgia,serif;--sans:'Public Sans',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+  --r:5px;--r-lg:8px;
+  font-family:var(--sans);color:var(--ink);font-size:13.5px;line-height:1.45;-webkit-font-smoothing:antialiased;
+}
+.capx b{font-weight:600}
+/* top bar */
+.capx .review-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+.capx .doc-title{font-family:var(--serif);font-size:21px;font-weight:600;letter-spacing:-.018em;color:var(--ink)}
+.capx .doc-ref{font-family:var(--mono);font-size:12px;color:var(--graphite)}
+/* badges -> stamps */
+.capx .badge{font-size:9.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;padding:3px 8px;border:1px solid var(--rule);border-radius:4px;background:var(--grey-tint);color:var(--graphite);display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.capx .badge.success{color:var(--pine-2);border-color:var(--pine-line);background:var(--pine-tint)}
+.capx .badge.warning,.capx .badge.danger{color:var(--rust-2);border-color:var(--rust-line);background:var(--rust-tint)}
+.capx .badge.info,.capx .badge.neutral{color:var(--graphite);border-color:var(--rule);background:var(--grey-tint)}
+/* cards -> sheet blocks */
+.capx .card{background:var(--paper);border:1px solid var(--rule);border-radius:var(--r-lg);box-shadow:0 1px 1px rgba(20,22,18,.03),0 12px 36px rgba(20,22,18,.05);padding:20px 22px}
+.capx .card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.capx .card-title{font-family:var(--serif);font-size:16px;font-weight:600;color:var(--ink);display:flex;align-items:center;gap:8px}
+/* claim-header facts */
+.capx .doc-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:15px 20px}
+.capx .fk,.capx .pk{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+.capx .fv,.capx .pv{font-size:13.5px;color:var(--ink)}
+.capx .fv.amount{font-family:var(--serif);font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+.capx .fv.muted,.capx .pv.muted{color:var(--faint)}
+.capx .doc-prose2{margin-top:16px;padding-top:14px;border-top:1px solid var(--rule);display:grid;grid-template-columns:1fr 1fr;gap:18px}
+/* lines schedule */
+.capx table.data{width:100%;border-collapse:collapse;font-size:13px}
+.capx table.data thead th{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);white-space:nowrap}
+.capx table.data tbody td{padding:11px 10px;border-bottom:1px solid var(--rule-2);vertical-align:middle}
+.capx table.data tbody tr:last-child td{border-bottom:none}
+.capx .line-row{transition:background .1s}
+.capx .line-row:hover{background:var(--rail)}
+.capx .line-row.active{background:var(--pine-tint)}
+.capx .fig,.capx td[style*="text-align:right"]{font-variant-numeric:tabular-nums}
+/* buttons */
+.capx .btn{height:36px;padding:0 14px;border-radius:var(--r);display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;border:1px solid var(--rule);background:var(--paper);color:var(--ink-2);cursor:pointer}
+.capx .btn:hover{background:var(--rail);border-color:var(--rule-strong)}
+.capx .btn-accent{background:var(--pine);border-color:var(--pine);color:#fff}
+.capx .btn-accent:hover{background:var(--pine-2)}
+.capx .btn-primary{background:var(--ink);border-color:var(--ink);color:#fff}
+.capx .btn-primary:hover{background:#2b2b27}
+.capx .btn-danger{background:var(--rust);border-color:var(--rust);color:#fff}
+.capx .btn:disabled{opacity:.5;cursor:not-allowed}
+/* fields */
+.capx .field,.capx input.field,.capx select.field{height:38px;border:1px solid var(--rule);border-radius:var(--r);background:var(--paper);padding:0 11px;font-size:13px;color:var(--ink)}
+.capx .field:focus{outline:none;border-color:var(--pine-line);box-shadow:0 0 0 3px var(--pine-tint)}
+.capx select.field{appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6e66' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;padding-right:28px}
+.capx .label-tiny{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:5px;display:block}
+/* route alternatives picker */
+.capx .route-alts{display:flex;flex-direction:column;gap:7px}
+.capx .route-alts .alt{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--rule);border-radius:var(--r);cursor:pointer;font-size:13px;background:var(--paper)}
+.capx .route-alts .alt.sel{border-color:var(--pine);box-shadow:0 0 0 1px var(--pine) inset}
+.capx .route-alts .alt input{accent-color:var(--pine);margin:0}
+.capx .route-alts .alt-main{font-weight:600}.capx .route-alts .alt-km{margin-left:auto;color:var(--graphite);white-space:nowrap}
+.capx .route-alts .alt-flag{color:var(--rust);font-weight:600}.capx .route-alts .alt-best{color:var(--pine-2);font-weight:600}
+/* notices + modals */
+.capx .error{background:var(--rust-tint);border:1px solid var(--rust-line);color:var(--rust-2);border-radius:var(--r);padding:10px 13px;font-size:13px}
+.capx .hint-warn{background:var(--rail);border:1px solid var(--rule);color:var(--ink-2);border-radius:var(--r);padding:10px 13px;font-size:12.5px;display:flex;align-items:center;gap:8px}
+.capx .modal-card,.capx .modal-content,.capx .modal-box{background:var(--paper);border:1px solid var(--rule);border-radius:var(--r-lg);box-shadow:0 24px 60px rgba(20,22,18,.25)}
+.capx .card-title{font-family:var(--serif)}
+@media(max-width:1080px){.capx .doc-facts{grid-template-columns:repeat(2,1fr)}}
+</style>
+<div class="capx" id="screen-review">
 
 {% if not claim %}
   <div class="card"><div class="card-title">Claim not found</div></div>
@@ -140,9 +209,6 @@
     <div class="card-header">
       <div class="card-title">Lines <span style="font-weight:400;color:var(--text-tertiary);">({{ lines | length }})</span></div>
       <div style="display:flex;gap:8px;align-items:center;">
-        <span class="badge {{ 'success' if carbon_count else 'neutral' }}">
-          <i class="ti ti-leaf" style="font-size:11px;"></i>{{ carbon_count }} of {{ lines | length }} carbon-relevant
-        </span>
         {% if can_edit %}<button type="button" class="btn" style="font-size:11px;padding:5px 10px;" onclick="openModal('mileage-modal')"><i class="ti ti-map-2"></i> Add mileage</button>{% endif %}
       </div>
     </div>
@@ -155,7 +221,7 @@
         <tr>
           <th></th>
           <th>#</th><th>Doc no</th><th>Category</th><th>Vendor</th><th>Date</th>
-          <th style="text-align:right;">Amount</th><th>Pay</th><th title="Carbon-relevant">CO₂</th><th title="GL code + cost centre present">Posting</th><th>Status</th>
+          <th style="text-align:right;">Amount</th><th>Pay</th><th title="GL code + cost centre present">Posting</th><th>Status</th>
           {% if can_review %}<th>Decision</th>{% endif %}
         </tr>
       </thead>
@@ -175,10 +241,6 @@
           <td>{{ ln.doc_date or '—' }}</td>
           <td style="text-align:right;">{{ ln.total_amount if ln.total_amount is not none else '—' }}</td>
           <td><span style="font-size:10px;">{{ ln.payment_method.replace('_',' ') }}</span></td>
-          <td style="text-align:center;">
-            {% if ln.carbon_relevant %}<i class="ti ti-leaf" style="color:var(--green-pos);" title="Carbon-relevant — forwarded to CarbonNext"></i>
-            {% else %}<span style="color:var(--text-tertiary);">—</span>{% endif %}
-          </td>
           <td style="text-align:center;">
             {% set cd = coding.get(ln.id) %}
             {% if cd and cd.ready %}<i class="ti ti-circle-check" style="color:var(--green-pos);" title="Coded — GL {{ ln.gl_code }} · cost centre {{ cd.cost_centre }}"></i>
@@ -306,7 +368,7 @@
                 <label class="label-tiny">Category</label>
                 <div style="display:flex;gap:8px;">
                   <select class="field" name="category_id" style="flex:1;">
-                    {% for cat in categories %}<option value="{{ cat.id }}" {{ 'selected' if ln.category_id == cat.id else '' }}>{{ cat.name }}{% if cat.carbon_relevant %} · carbon{% endif %}</option>{% endfor %}
+                    {% for cat in categories %}<option value="{{ cat.id }}" {{ 'selected' if ln.category_id == cat.id else '' }}>{{ cat.name }}</option>{% endfor %}
                   </select>
                   <button class="btn btn-primary" type="submit">Assign</button>
                 </div>
@@ -419,7 +481,6 @@
 
               <div style="margin-top:8px;font-size:11px;color:var(--text-secondary);">
                 Status <span class="badge {{ line_badge.get(ln.line_status,'info') }}">{{ ln.line_status }}</span>
-                {% if ln.carbon_relevant %} · <i class="ti ti-leaf" style="color:var(--green-pos);"></i> carbon-relevant{% endif %}
               </div>
             </div>
             {% endfor %}
