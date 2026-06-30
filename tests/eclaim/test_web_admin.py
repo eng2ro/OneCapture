@@ -88,20 +88,34 @@ def test_partner_edits_category(client, db_session):
     assert diesel.gl_export_code == "GL-EDIT"
 
 
-def test_duplicate_category_expense_type_errors(client, db_session):
+def test_duplicate_expense_type_now_allowed(client, db_session):
+    """Since 0007, a client may have several categories sharing one carbon
+    expense_type — a different name is all that's required."""
     ids = db_session.info["principal"]
     resp = client.post("/admin/categories", data={
         "client_id": str(ids["client"]), "name": "Dup Diesel", "expense_type": "fuel_diesel",
         "factor_key": "fuel_diesel", "gl_export_code": "", "default_limit": "", "status": "active",
     }, follow_redirects=False)
-    assert resp.status_code == 200            # re-rendered, not a redirect
-    assert "already exists" in resp.text
-    # Nothing created: fuel_diesel still has exactly the one seeded category.
+    assert resp.status_code == 303            # committed, not re-rendered with an error
     count = db_session.execute(
         select(func.count()).select_from(Category)
         .where(Category.client_id == ids["client"], Category.expense_type == "fuel_diesel")
     ).scalar_one()
-    assert count == 1
+    assert count == 2                         # the seeded one + the new one
+
+
+def test_duplicate_category_name_still_errors(client, db_session):
+    """Name stays the human-unique key per client (uq_category_client_name)."""
+    ids = db_session.info["principal"]
+    existing = db_session.execute(
+        select(Category).where(Category.client_id == ids["client"])
+    ).scalars().first()
+    resp = client.post("/admin/categories", data={
+        "client_id": str(ids["client"]), "name": existing.name, "expense_type": "other",
+        "factor_key": "", "gl_export_code": "", "default_limit": "", "status": "active",
+    }, follow_redirects=False)
+    assert resp.status_code == 200            # re-rendered, not a redirect
+    assert "already exists" in resp.text
 
 
 # --------------------------------------------------------------------------- #

@@ -1,8 +1,11 @@
 """End-to-end e-Claim tests (spec §10), against a Postgres test DB; OCR mocked.
 
-Covers: upload+classify, release (one entry/batch + linked audit chain),
-idempotent re-release, immutability + reversing correction, ledger scope totals,
-and deterministic batch hash recomputed from stored rows.
+e-Claim is pure claim handling — it does NO carbon maths. It keeps a per-line
+``carbon_relevant`` flag and, on release, FORWARDS the raw data of relevant lines
+to CarbonNext (the ``carbon_handoff`` log). These cover: upload + relevance,
+release (one handoff/batch + linked audit chain), idempotent re-release,
+immutability + reversing correction, the handoff log counts, and the deterministic
+batch hash recomputed from stored rows.
 """
 
 from __future__ import annotations
@@ -15,10 +18,9 @@ from sqlalchemy import select
 
 from core.release import canonical_hash
 from eclaim.auth.principal import Principal
-from eclaim.db.models import Category, Claim, EmissionEntry
+from eclaim.db.models import CarbonHandoff, Category, Claim, ClaimLine
 from eclaim.ocr.base import Extraction
 from eclaim.services.claims import ClaimService, Repos
-from eclaim.services.classify import DQ_SPEND, DQ_UNMAPPED
 from eclaim.services.sod import SoDViolation
 
 
@@ -34,28 +36,26 @@ def _release(client, claim_id):
 
 
 # 1 -------------------------------------------------------------------------
-def test_upload_classifies_activity_and_spend(client, fake_ocr):
+def test_upload_maps_category_and_flags_relevance(client, fake_ocr):
+    # No carbon maths — e-Claim resolves the category and snapshots carbon_relevant.
     diesel = _upload(client, fake_ocr, Extraction(
         expense_type="fuel_diesel", quantity=Decimal("450"), unit="L",
         total_amount=Decimal("2000"))).json()
-    assert diesel["basis"] == "activity"
-    assert diesel["scope"] == 1
-    assert diesel["tco2e"] == "1.206000"
+    assert diesel["category_id"] is not None
+    assert diesel["carbon_relevant"] is True
+    assert Decimal(diesel["quantity"]) == Decimal("450")  # raw activity data kept
+    assert "tco2e" not in diesel and "scope" not in diesel
 
-    elec = _upload(client, fake_ocr, Extraction(
-        expense_type="electricity", quantity=Decimal("12000"), unit="kWh")).json()
-    assert elec["scope"] == 2
-    assert elec["tco2e"] == "7.020000"
-
-    spend = _upload(client, fake_ocr, Extraction(
-        expense_type="fuel_diesel", quantity=None, total_amount=Decimal("500"))).json()
-    assert spend["basis"] == "spend"
-    assert spend["tco2e"] == "0.175000"  # 500 * 0.35 / 1000
-    assert "lower data quality" in spend["data_quality"]
+    # An expense_type with no category is unmapped → defaults carbon_relevant True
+    # (not dropped before review).
+    other = _upload(client, fake_ocr, Extraction(
+        expense_type="other", total_amount=Decimal("500"))).json()
+    assert other["category_id"] is None
+    assert other["carbon_relevant"] is True
 
 
 # 2 -------------------------------------------------------------------------
-def test_release_writes_one_entry_and_linked_audit_chain(client, fake_ocr):
+def test_release_writes_one_handoff_and_linked_audit_chain(client, fake_ocr):
     cid = _upload(client, fake_ocr, Extraction(
         expense_type="fuel_diesel", quantity=Decimal("450"), unit="L")).json()["id"]
     batch = _release(client, cid).json()
@@ -64,11 +64,11 @@ def test_release_writes_one_entry_and_linked_audit_chain(client, fake_ocr):
 
     ledger = client.get("/api/ledger").json()
     assert len(ledger["entries"]) == 1
+    assert ledger["forwarded"] == 1
 
     events = client.get(f"/api/audit/{cid}").json()
     types = [e["event_type"] for e in events]
     assert types == ["submitted", "approved", "released", "tsa_anchored"]
-    # The chain links: each prev_hash equals the previous event's hash.
     assert events[0]["prev_hash"] in (None, "")
     for prev, cur in zip(events, events[1:]):
         assert cur["prev_hash"] == prev["hash"]
@@ -95,31 +95,37 @@ def test_released_claim_is_immutable_and_corrected_by_reversal(client, fake_ocr)
     # No delete capability at all.
     assert client.delete(f"/api/claims/{cid}").status_code == 405
 
-    # Correction = a reversing entry (negative tCO2e), original untouched.
+    # Correction = a reversing handoff (negated amount/quantity), original untouched.
     rev = client.post(f"/api/claims/{cid}/reverse").json()
-    assert Decimal(rev["tco2e"]) == Decimal("-1.206000")
-    entries = client.get("/api/ledger").json()["entries"]
+    assert rev["record_count"] == 1
+    ledger = client.get("/api/ledger").json()
+    entries = ledger["entries"]
     assert len(entries) == 2
-    assert sum(Decimal(e["tco2e"]) for e in entries) == Decimal("0.000000")
+    assert ledger["forwarded"] == 1 and ledger["reversed"] == 1
+    # The forward + reversal cancel out.
+    qsum = sum(Decimal(e["quantity"]) for e in entries if e["quantity"] is not None)
+    assert qsum == Decimal("0")
 
 
 # 5 -------------------------------------------------------------------------
-def test_ledger_scope_totals_equal_entry_sum(client, fake_ocr):
+def test_ledger_counts_forwarded_lines(client, fake_ocr):
+    """The handoff log counts lines FORWARDED to CarbonNext (which owns the
+    tonnage) — three carbon-relevant claims → three forwarded records."""
     specs = [
-        Extraction(expense_type="fuel_diesel", quantity=Decimal("450"), unit="L"),    # S1
-        Extraction(expense_type="electricity", quantity=Decimal("12000"), unit="kWh"),  # S2
-        Extraction(expense_type="air_travel", quantity=Decimal("1000"), unit="km"),   # S3
+        Extraction(expense_type="fuel_diesel", quantity=Decimal("450"), unit="L"),
+        Extraction(expense_type="electricity", quantity=Decimal("12000"), unit="kWh"),
+        Extraction(expense_type="air_travel", quantity=Decimal("1000"), unit="km"),
     ]
     for ex in specs:
         cid = _upload(client, fake_ocr, ex).json()["id"]
         _release(client, cid)
 
     ledger = client.get("/api/ledger").json()
-    entry_sum = sum(Decimal(e["tco2e"]) for e in ledger["entries"])
-    assert Decimal(ledger["scope_1"]) == Decimal("1.206000")
-    assert Decimal(ledger["scope_2"]) == Decimal("7.020000")
-    assert Decimal(ledger["scope_3"]) == Decimal("0.180000")
-    assert Decimal(ledger["total_tco2e"]) == entry_sum
+    assert ledger["forwarded"] == 3
+    assert ledger["reversed"] == 0
+    assert ledger["total_records"] == 3
+    # No tonnage / scope on the e-Claim side — that is CarbonNext's job.
+    assert all("tco2e" not in e and "scope" not in e for e in ledger["entries"])
 
 
 # 6 -------------------------------------------------------------------------
@@ -128,12 +134,17 @@ def test_batch_hash_recomputes_from_stored_rows(client, fake_ocr, db_session):
         expense_type="fuel_diesel", quantity=Decimal("450"), unit="L")).json()["id"]
     batch = _release(client, cid).json()
 
-    claim = db_session.get(Claim, cid)
-    recomputed = canonical_hash([ClaimService._projection(claim)])
+    line = db_session.execute(
+        select(ClaimLine).filter_by(claim_id=uuid.UUID(cid))
+    ).scalar_one()
+    category = db_session.get(Category, line.category_id)
+    recomputed = canonical_hash([ClaimService._payload(line, category)])
     assert recomputed == batch["batch_hash"]
 
-    entry = db_session.query(EmissionEntry).filter_by(source_id=claim.id).one()
-    assert entry.carbon_ref == f"CARB-{batch['batch_hash'][:12].upper()}"
+    handoff = db_session.query(CarbonHandoff).filter_by(line_id=line.id).one()
+    assert handoff.carbon_ref == f"CARB-{batch['batch_hash'][:12].upper()}"
+    assert handoff.direction == "forward"
+    assert handoff.category_name == category.name  # raw data forwarded
 
 
 # 7 -------------------------------------------------------------------------
@@ -146,7 +157,6 @@ def test_send_back_edit_resubmit_then_approve(client, fake_ocr):
     sb = client.post(f"/api/claims/{cid}/send-back", json={"reason": "missing GST no."})
     assert sb.status_code == 200 and sb.json()["status"] == "submitted"
 
-    # A sent-back claim is editable (it is not released); fix it, then resubmit.
     assert client.patch(f"/api/claims/{cid}", json={"vendor": "Shell"}).status_code == 200
     rs = client.post(f"/api/claims/{cid}/resubmit")
     assert rs.status_code == 200 and rs.json()["status"] == "in_review"
@@ -159,7 +169,6 @@ def test_send_back_edit_resubmit_then_approve(client, fake_ocr):
     ]
     sent_back = next(e for e in events if e["event_type"] == "sent_back")
     assert sent_back["detail"]["reason"] == "missing GST no."
-    # The chain still links end to end across the new events.
     for prev, cur in zip(events, events[1:]):
         assert cur["prev_hash"] == prev["hash"]
 
@@ -172,7 +181,6 @@ def test_reject_is_terminal(client, fake_ocr):
     rj = client.post(f"/api/claims/{cid}/reject", json={"reason": "duplicate submission"})
     assert rj.status_code == 200 and rj.json()["status"] == "rejected"
 
-    # Terminal: no forward or backward transition out of rejected.
     assert client.post(f"/api/claims/{cid}/approve").status_code == 409
     assert client.post(f"/api/claims/{cid}/send-back", json={"reason": "x"}).status_code == 409
     assert client.post(f"/api/claims/{cid}/resubmit").status_code == 409
@@ -187,7 +195,8 @@ def test_reject_is_terminal(client, fake_ocr):
 # 9 -------------------------------------------------------------------------
 def test_unauthorized_reviewer_cannot_send_back_or_reject(client, fake_ocr, db_session):
     """A viewer (no review authority) is denied at the shared SoD guard, and the
-    claim stays in_review — no state change, no audit event."""
+    claim stays in_review — and the blocked attempt is now AUDITED (governance):
+    the guard records an ``approval_denied`` event instead of failing silently."""
     cid = _upload(client, fake_ocr, Extraction(
         expense_type="fuel_diesel", quantity=Decimal("450"), unit="L")).json()["id"]
 
@@ -205,62 +214,70 @@ def test_unauthorized_reviewer_cannot_send_back_or_reject(client, fake_ocr, db_s
         svc.reject(repos=repos, claim_id=uuid.UUID(cid), reviewer=viewer, reason="x")
 
     assert db_session.get(Claim, uuid.UUID(cid)).status == "in_review"
-    # No sent_back / rejected event was written by the denied attempts.
-    assert client.get(f"/api/audit/{cid}").json()[-1]["event_type"] == "submitted"
+    # The two blocked attempts are recorded as approval_denied (not silent).
+    events = client.get(f"/api/audit/{cid}").json()
+    denied = [e for e in events if e["event_type"] == "approval_denied"]
+    assert len(denied) == 2
+    assert {e["detail"]["action"] for e in denied} == {"send_back", "reject"}
+    assert all(e["actor"] == "viewer@seed.test" for e in denied)
 
 
 # 10 ------------------------------------------------------------------------
-def test_category_drives_activity_and_spend_matched(client, fake_ocr):
-    """A mapped expense_type resolves a category whose factor_key drives the EF
-    lookup: activity with a usable quantity, spend-matched without — and the
-    resolved category is stamped on the claim."""
+def test_mapped_category_is_stamped_and_relevant(client, fake_ocr):
+    """A mapped expense_type resolves a category, which is stamped on the claim
+    with its carbon_relevant flag — no scope/factor (CarbonNext's job)."""
     act = _upload(client, fake_ocr, Extraction(
         expense_type="electricity", quantity=Decimal("12000"), unit="kWh")).json()
-    assert act["basis"] == "activity" and act["scope"] == 2
-    assert act["data_quality"] == "Activity-based"
     assert act["category_id"] is not None
+    assert act["carbon_relevant"] is True
 
-    sm = _upload(client, fake_ocr, Extraction(
-        expense_type="fuel_diesel", quantity=None, total_amount=Decimal("500"))).json()
-    assert sm["basis"] == "spend" and sm["factor_key"] == "fuel_diesel" and sm["scope"] == 1
-    assert "lower data quality" in sm["data_quality"]
-    assert sm["category_id"] is not None
+    petrol = _upload(client, fake_ocr, Extraction(
+        expense_type="fuel_petrol", total_amount=Decimal("500"))).json()
+    assert petrol["category_id"] is not None
 
 
 # 11 ------------------------------------------------------------------------
-def test_null_factor_category_is_governed_spend(client, fake_ocr):
-    """A category that is spend-based by intent (factor_key NULL — fuel_petrol in
-    the seed) → governed spend at scope 3, marked spend-based (NOT unmapped)."""
-    gov = _upload(client, fake_ocr, Extraction(
-        expense_type="fuel_petrol", total_amount=Decimal("1000"))).json()
-    assert gov["basis"] == "spend" and gov["scope"] == 3
-    assert gov["factor_key"] == "spend_eeio"
-    assert gov["data_quality"] == DQ_SPEND
-    assert gov["category_id"] is not None      # a category exists; it just has no factor
+def test_non_relevant_category_is_not_forwarded(client, fake_ocr, db_session):
+    """A category flagged carbon_relevant=False (e.g. parking) still approves and
+    exports to ERP, but is NOT forwarded to CarbonNext on release."""
+    ids = db_session.info["principal"]
+    db_session.add(Category(
+        firm_id=ids["firm"], client_id=ids["client"], name="Parking",
+        expense_type="parking", carbon_relevant=False,
+    ))
+    db_session.flush()
+
+    fake_ocr.extraction = Extraction(vendor="Wilson Parking", expense_type="other",
+                                     total_amount=Decimal("12"))
+    files = {"file": ("r.png", b"\x89PNG\r\n fake", "image/png")}
+    cid = client.post("/api/claims/upload", files=files).json()["id"]
+    claim = client.get(f"/api/claims/{cid}").json()
+    assert claim["carbon_relevant"] is False     # merchant 'parking' → non-relevant
+
+    _release(client, cid)
+    # Nothing forwarded to CarbonNext (no relevant lines), but the claim released.
+    assert client.get("/api/ledger").json()["forwarded"] == 0
+    assert db_session.get(Claim, uuid.UUID(cid)).status == "released"
 
 
 # 12 ------------------------------------------------------------------------
-def test_unmapped_expense_is_flagged_not_silently_absorbed(client, fake_ocr):
-    """An expense_type with no category is a valid spend_eeio row but flagged with
-    a distinct, reviewable data_quality — never silently absorbed."""
+def test_unmapped_expense_has_no_category(client, fake_ocr):
+    """An expense_type with no category is left unmapped (category_id None) for a
+    reviewer to assign — never silently absorbed."""
     un = _upload(client, fake_ocr, Extraction(
-        expense_type="other", quantity=Decimal("3"), unit="L",
-        total_amount=Decimal("1000"))).json()
-    assert un["scope"] == 3 and un["factor_key"] == "spend_eeio"
-    assert un["data_quality"] == DQ_UNMAPPED
-    assert un["data_quality"].startswith("Unmapped")
+        expense_type="other", total_amount=Decimal("1000"))).json()
     assert un["category_id"] is None
+    assert un["carbon_relevant"] is True          # default: not dropped before review
 
 
 # 13 ------------------------------------------------------------------------
 def test_reviewer_assigns_category_to_clear_unmapped(client, fake_ocr, db_session):
-    """A reviewer clears an unmapped claim by assigning a category; the claim
-    reclassifies through that category's factor_key (qty retained → activity)."""
+    """A reviewer clears an unmapped claim by assigning a category; the line picks
+    up that category and its carbon_relevant flag."""
     cid = _upload(client, fake_ocr, Extraction(
-        expense_type="other", quantity=Decimal("450"), unit="L",
-        total_amount=Decimal("2000"))).json()["id"]
+        expense_type="other", total_amount=Decimal("2000"))).json()["id"]
     before = client.get(f"/api/claims/{cid}").json()
-    assert before["data_quality"] == DQ_UNMAPPED and before["category_id"] is None
+    assert before["category_id"] is None
 
     diesel = db_session.execute(
         select(Category).filter_by(
@@ -270,6 +287,4 @@ def test_reviewer_assigns_category_to_clear_unmapped(client, fake_ocr, db_sessio
     after = client.patch(f"/api/claims/{cid}", json={"category_id": str(diesel.id)}).json()
 
     assert after["category_id"] == str(diesel.id)
-    assert after["basis"] == "activity" and after["scope"] == 1
-    assert after["tco2e"] == "1.206000"        # 450 * 2.68 / 1000 — retained qty used
-    assert after["data_quality"] == "Activity-based"
+    assert after["carbon_relevant"] is True

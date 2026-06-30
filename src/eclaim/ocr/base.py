@@ -39,6 +39,12 @@ class Extraction(BaseModel):
     quantity: Decimal | None = None
     unit: Unit | None = None
     confidence: Decimal | None = None
+    # Per-field bounding boxes on the receipt image, NORMALIZED to 0..1 as
+    # ``[x, y, w, h]`` (origin top-left). Field name -> box. Optional and
+    # provider-agnostic: the vision OCR returns approximate boxes; a precise
+    # document-AI provider can populate the same shape later. ``None`` (or a
+    # missing field) simply means "no highlight available" — never an error.
+    boxes: dict[str, list[float]] | None = None
 
 
 class OcrProvider(Protocol):

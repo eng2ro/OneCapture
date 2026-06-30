@@ -89,7 +89,7 @@ def test_review_page_flags_unmapped(client, fake_ocr):
     cid = _upload(client, fake_ocr, Extraction(expense_type="other", total_amount=Decimal("100")))
     page = client.get(f"/claims/{cid}/review")
     assert page.status_code == 200
-    assert "Unmapped" in page.text   # data_quality flag rendered
+    assert "no category" in page.text   # unmapped line flagged for review
 
 
 # 4 -------------------------------------------------------------------------
@@ -125,7 +125,7 @@ def test_web_reject_transitions(client, fake_ocr):
 def test_web_assign_category_clears_unmapped(client, fake_ocr, db_session):
     cid = _upload(client, fake_ocr, Extraction(
         expense_type="other", quantity=Decimal("450"), unit="L", total_amount=Decimal("2000")))
-    assert client.get(f"/api/claims/{cid}").json()["data_quality"].startswith("Unmapped")
+    assert client.get(f"/api/claims/{cid}").json()["category_id"] is None
 
     diesel = db_session.execute(
         select(Category).filter_by(
@@ -137,4 +137,70 @@ def test_web_assign_category_clears_unmapped(client, fake_ocr, db_session):
 
     after = client.get(f"/api/claims/{cid}").json()
     assert after["category_id"] == str(diesel.id)
-    assert after["scope"] == 1 and after["data_quality"] == "Activity-based"
+    assert after["carbon_relevant"] is True
+
+
+# 8b ------------------------------------------------------------------------
+def test_approved_claim_is_locked_until_unapproved(client, fake_ocr):
+    """An approved claim cannot be amended directly; you unapprove it (back to
+    in_review) first, then amend. Released/exported data would stay locked."""
+    cid = _upload(client, fake_ocr, _DIESEL)
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+    assert _status(client, cid) == "approved"
+
+    # Direct edit of an approved claim is refused — status unchanged.
+    client.post(f"/claims/{cid}/edit", data={"line_id": "", "vendor": "Nope"},
+                follow_redirects=False)
+    assert _status(client, cid) == "approved"
+    assert client.get(f"/api/claims/{cid}").json()["vendor"] != "Nope"
+
+    # Unapprove reopens it to in_review.
+    u = client.post(f"/claims/{cid}/unapprove", follow_redirects=False)
+    assert u.status_code == 303
+    assert _status(client, cid) == "in_review"
+
+    # Now it is editable again.
+    client.post(f"/claims/{cid}/edit", data={"line_id": "", "vendor": "Shell-2"},
+                follow_redirects=False)
+    assert client.get(f"/api/claims/{cid}").json()["vendor"] == "Shell-2"
+
+    events = [e["event_type"] for e in client.get(f"/api/audit/{cid}").json()]
+    assert events == ["submitted", "approved", "unapproved", "edited"]
+
+
+# 7b ------------------------------------------------------------------------
+def test_inbox_search_and_export(client, fake_ocr):
+    """The inbox search (?q=) filters by vendor/title and the Export control is a
+    real CSV link — not dead chrome."""
+    a = _upload(client, fake_ocr, Extraction(
+        expense_type="fuel_diesel", vendor="Shell", quantity=Decimal("1"), unit="L"))
+    b = _upload(client, fake_ocr, Extraction(
+        expense_type="electricity", vendor="TNB", quantity=Decimal("1"), unit="kWh"))
+
+    page = client.get("/claims?q=Shell")
+    assert a in page.text and b not in page.text          # vendor search filters
+    assert 'href="/api/claims/export' in page.text         # working CSV export link
+
+
+# 8 -------------------------------------------------------------------------
+def test_nav_shell_renders_live_counts_and_scope(client, fake_ocr, db_session):
+    """The sidebar badges + topbar scope are driven by real per-status counts and
+    the tenant's client name, not the mockup's hardcoded 42/23/8 placeholders."""
+    from eclaim.db.models import Client
+
+    a = _upload(client, fake_ocr, _DIESEL)
+    client.post(f"/api/claims/{a}/approve")            # -> approved
+    _upload(client, fake_ocr, Extraction(
+        expense_type="electricity", quantity=Decimal("12000"), unit="kWh"))  # in_review
+
+    name = db_session.get(Client, db_session.info["principal"]["client"]).name
+    page = client.get("/claims").text
+
+    # Topbar scope reflects the real tenant client.
+    assert f"e-Claim · {name}" in page
+    # Live badges: 2 total, 1 awaiting review, 1 to approve — and none of the
+    # mockup's static counts survive.
+    assert '<span class="nav-badge">2</span>' in page          # All claims total
+    assert '<span class="nav-badge">1</span>' in page          # Awaiting review
+    assert '<span class="nav-badge danger">1</span>' in page   # To approve
+    assert ">42<" not in page and ">23<" not in page

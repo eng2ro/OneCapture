@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from ..auth.principal import Principal
 from ..db.models import Claim
+from .audit import record_event
 from .claims import ClaimError
 
 
@@ -32,7 +33,10 @@ def check_can_approve(claim: Claim, approver: Principal) -> None:
     ):
         raise SoDViolation("the user who created a claim cannot approve it")
 
-    amount = claim.total_amount
+    # The claim's rolled-up header total drives the authority gate (the per-line
+    # amounts sum onto total_claimed). Falls back to the legacy total_amount for
+    # pre-redesign rows that have no header total yet.
+    amount = claim.total_claimed if claim.total_claimed is not None else claim.total_amount
     if (
         amount is not None
         and approver.authority_limit is not None
@@ -41,6 +45,39 @@ def check_can_approve(claim: Claim, approver: Principal) -> None:
         raise SoDViolation(
             f"amount {amount} exceeds approver authority limit {approver.authority_limit}"
         )
+
+
+def authorize_approval(repos, claim: Claim, approver: Principal, *, action: str) -> None:
+    """Run :func:`check_can_approve` and, if it fails, persist a COMMITTED
+    ``approval_denied`` audit event before re-raising — so a blocked attempt
+    (maker==checker, over-authority, viewer, no client grant) is never invisible to
+    auditors. The guard runs before any business mutation, so the only pending change
+    committed here is this single audit event; the caller still gets the 403/error.
+
+    Use this (not bare ``check_can_approve``) on the real approval transitions. The
+    non-raising :func:`can_approve` predicate stays audit-free — it's only the UI
+    deciding whether to draw a button, not an attempted sign-off."""
+    try:
+        check_can_approve(claim, approver)
+    except SoDViolation as exc:
+        # The denial event lives on the claim's tenant audit chain, so it can only
+        # be written when the actor actually has access to that client (the
+        # maker==checker, over-authority and viewer-with-grant cases). A cross-tenant
+        # attempt with no grant cannot — and must not — write into another client's
+        # chain under RLS; the attempt fails closed either way.
+        if approver.can_access_client(claim.client_id):
+            record_event(
+                repos.audit,
+                firm_id=claim.firm_id,
+                client_id=claim.client_id,
+                entity_type="claim",
+                entity_id=claim.id,
+                event_type="approval_denied",
+                actor=approver.email or str(approver.user_id),
+                detail={"action": action, "reason": str(exc)},
+            )
+            repos.session.commit()
+        raise
 
 
 def can_approve(claim: Claim, approver: Principal) -> bool:

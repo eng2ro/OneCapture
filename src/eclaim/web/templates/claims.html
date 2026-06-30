@@ -1,40 +1,89 @@
 {% extends "base.html" %}
-{% block title %}Claims — OneCapture e-Claim{% endblock %}
+{% block title %}Claims · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}{{ claims | length }} claims in view{% endblock %}
+{% set badge = {"submitted":"info","in_review":"warning","approved":"success","partially_approved":"warning","sent_back":"info","released":"success","rejected":"danger","exported":"success","paid":"success"} %}
+{% set label = {"submitted":"Submitted","in_review":"In review","approved":"Approved","partially_approved":"Partially approved","sent_back":"Sent back","released":"Released","rejected":"Rejected","exported":"Exported","paid":"Paid"} %}
 {% block content %}
-<section class="card">
-  <h1>Claims</h1>
-  <div class="filters">
-    <a href="/claims" class="chip {{ 'active' if not current_status else '' }}">All</a>
-    {% for s in statuses %}
-      <a href="/claims?status={{ s }}" class="chip {{ 'active' if current_status == s else '' }}">{{ s }}</a>
-    {% endfor %}
+<div class="screen active" id="screen-inbox">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">All claims</h1>
+      <p class="page-sub">{{ claims | length }} claims{% if current_status %} · {{ current_status }}{% endif %}</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <a class="btn" href="/api/claims/export?status={{ current_status or 'released' }}"
+         title="Download a CSV for the accounting/ERP system"><i class="ti ti-download"></i>Export CSV</a>
+    </div>
   </div>
 
-  <table class="ledger">
-    <thead>
-      <tr><th>Received</th><th>Client</th><th>Vendor</th><th>Expense</th>
-          <th>tCO2e</th><th>Data quality</th><th>Status</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for c in claims %}
-      <tr>
-        <td>{{ c.created_at.strftime('%Y-%m-%d') }}</td>
-        <td>{{ client_names.get(c.client_id, '') }}</td>
-        <td>{{ c.vendor or '—' }}</td>
-        <td>{{ c.expense_type or '—' }}</td>
-        <td>{{ c.tco2e if c.tco2e is not none else '—' }}</td>
-        <td>
-          {% if c.data_quality and c.data_quality.startswith('Unmapped') %}
-            <span class="pill flag">{{ c.data_quality }}</span>
-          {% else %}{{ c.data_quality or '—' }}{% endif %}
-        </td>
-        <td><span class="pill pill-{{ c.status }}">{{ c.status }}</span></td>
-        <td><a href="/claims/{{ c.id }}/review">Review →</a></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8" class="muted">No claims for this view.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+  <div class="kpi-mini-grid" style="margin-bottom:16px;">
+    <div class="kpi-mini"><div class="l">Total claims</div><div class="v">{{ summary.total }}</div><div class="d">RM {{ '%.2f' | format(summary.total_amount) }}</div></div>
+    <div class="kpi-mini"><div class="l">Awaiting review</div><div class="v">{{ nav_counts.get('in_review', 0) }}</div><div class="d">in the review queue</div></div>
+    <div class="kpi-mini"><div class="l">To approve</div><div class="v" style="color:#6b5c0e;">{{ nav_counts.get('approved', 0) }}</div><div class="d">ready to release</div></div>
+    <div class="kpi-mini"><div class="l">Carbon-relevant</div><div class="v" style="color:var(--green-pos);">{{ summary.carbon_count }}</div><div class="d">{{ summary.carbon_pct }}% of total</div></div>
+  </div>
+
+  <div class="toolbar">
+    <select class="field" style="width:auto;min-width:140px;" onchange="location.href=this.value">
+      <option value="/claims" {{ 'selected' if not current_status else '' }}>All status</option>
+      {% for s in statuses %}<option value="/claims?status={{ s }}" {{ 'selected' if current_status == s else '' }}>{{ s }}</option>{% endfor %}
+    </select>
+    <form method="get" action="/claims" style="display:flex;gap:8px;flex:1;">
+      {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
+      <input class="field" name="q" value="{{ q or '' }}" placeholder="Search title, vendor or ref…" style="flex:1;max-width:320px;">
+      <button class="btn" type="submit"><i class="ti ti-search"></i>Search</button>
+      {% if q %}<a class="btn" href="/claims{% if current_status %}?status={{ current_status }}{% endif %}">Clear</a>{% endif %}
+    </form>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="data">
+      <thead>
+        <tr>
+          <th style="width:34px;"><input type="checkbox" /></th>
+          <th>Ref</th>
+          <th>Claimant</th>
+          <th>Lines</th>
+          <th style="text-align:right;">Amount (RM)</th>
+          <th>Date</th>
+          <th style="text-align:center;">Carbon</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in claims %}
+        {% set ri = row_info.get(c.id, {}) %}
+        <tr style="cursor:pointer;" onclick="location.href='/claims/{{ c.id }}/review'">
+          <td><input type="checkbox" /></td>
+          <td style="font-family:'SF Mono',monospace;font-size:11px;">{{ c.claim_no or (c.id | string | truncate(8, true, '')) }}</td>
+          <td><strong>{{ c.title or ri.get('vendor') or '—' }}</strong><br><span style="font-size:10px;color:var(--text-tertiary);">{{ client_names.get(c.client_id, '') }}</span></td>
+          <td>{{ ri.get('count', 0) }} line{{ '' if ri.get('count', 0) == 1 else 's' }}</td>
+          <td style="text-align:right;font-weight:500;">{{ c.total_claimed if c.total_claimed is not none else '—' }}</td>
+          <td>{{ c.created_at.strftime('%d %b') }}</td>
+          <td style="text-align:center;">
+            {% if ri.get('carbon') %}<i class="ti ti-leaf" style="color:var(--green-pos);font-size:16px;"></i>
+            {% else %}<span style="color:var(--text-tertiary);">—</span>{% endif %}
+          </td>
+          <td>
+            <span class="badge {{ badge.get(c.status, 'info') }}">{{ label.get(c.status, c.status) }}</span>
+            {% if ri.get('flagged') %} <span class="badge danger">Flagged</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" style="text-align:center;padding:28px;color:var(--text-tertiary);">No claims in this view.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% set base_qs = (('status=' + current_status) if current_status else '') ~ (('&q=' + q) if (current_status and q) else (('q=' + q) if q else '')) %}
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:11px;color:var(--text-secondary);">
+    <span>{{ total_results }} claim{{ '' if total_results == 1 else 's' }}{% if q %} matching “{{ q }}”{% endif %}</span>
+    <span style="display:flex;align-items:center;gap:10px;">
+      {% if page > 1 %}<a class="btn" style="padding:4px 8px;" href="/claims?{{ base_qs }}{{ '&' if base_qs else '' }}page={{ page - 1 }}"><i class="ti ti-chevron-left"></i></a>{% endif %}
+      Page {{ page }} of {{ total_pages }}
+      {% if page < total_pages %}<a class="btn" style="padding:4px 8px;" href="/claims?{{ base_qs }}{{ '&' if base_qs else '' }}page={{ page + 1 }}"><i class="ti ti-chevron-right"></i></a>{% endif %}
+    </span>
+  </div>
+</div>
 {% endblock %}

@@ -32,7 +32,8 @@ class LoginResponse(BaseModel):
 def login(body: LoginRequest, session: Session = Depends(get_session)) -> LoginResponse:
     settings = get_settings()
     provider = DevAuthProvider(
-        session, secret=settings.jwt_secret, ttl_seconds=settings.jwt_ttl_seconds
+        session, secret=settings.jwt_secret, ttl_seconds=settings.jwt_ttl_seconds,
+        allow_passwordless=settings.dev_auth_allowed,
     )
     try:
         token = provider.login(body.email, body.password)

@@ -1,35 +1,50 @@
 {% extends "base.html" %}
-{% block title %}Ledger — OneCapture e-Claim{% endblock %}
+{% block title %}CarbonNext handoff · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}CarbonNext handoff{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>Emission ledger</h1>
-  <div class="totals">
-    <div class="total"><span>Scope 1</span><strong>{{ scope_1 }}</strong></div>
-    <div class="total"><span>Scope 2</span><strong>{{ scope_2 }}</strong></div>
-    <div class="total"><span>Scope 3</span><strong>{{ scope_3 }}</strong></div>
-    <div class="total grand"><span>Total tCO₂e</span><strong>{{ total }}</strong></div>
+<div class="screen active" id="screen-ledger">
+  <div style="margin-bottom:14px;">
+    <h1 class="page-title">CarbonNext handoff</h1>
+    <p class="page-sub">Carbon-relevant lines forwarded to CarbonNext (which computes the tCO₂e) · {{ entries | length }} records</p>
   </div>
 
-  <table class="ledger">
-    <thead>
-      <tr><th>Carbon ref</th><th>Scope</th><th>Factor</th><th>Basis</th>
-          <th>Qty</th><th>tCO₂e</th><th>Batch hash</th></tr>
-    </thead>
-    <tbody>
-      {% for e in entries %}
-      <tr>
-        <td class="mono">{{ e.carbon_ref }}</td>
-        <td>{{ e.scope }}</td>
-        <td>{{ e.factor_key }} v{{ e.factor_version }}</td>
-        <td>{{ e.basis }}</td>
-        <td>{{ e.quantity if e.quantity is not none else '—' }} {{ e.unit or '' }}</td>
-        <td>{{ e.tco2e }}</td>
-        <td class="mono">{{ e.release_batch_id }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="7" class="muted">No released records yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+  <div class="banner">
+    <i class="ti ti-info-circle"></i>
+    <span><strong>Raw data, not carbon maths.</strong> e-Claim is pure claim handling — it forwards each carbon-relevant line's category, amount, quantity, vendor and date. <strong>CarbonNext</strong> owns scope, factors and the tCO₂e.</span>
+  </div>
+
+  <div class="kpi-mini-grid" style="margin:16px 0;">
+    <div class="kpi-mini"><div class="l">Forwarded</div><div class="v" style="color:var(--green-pos);">{{ forwarded }}</div><div class="d">lines</div></div>
+    <div class="kpi-mini"><div class="l">Reversed</div><div class="v">{{ reversed }}</div><div class="d">corrections</div></div>
+    <div class="kpi-mini"><div class="l">Total</div><div class="v">{{ total }}</div><div class="d">records</div></div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Carbon ref</th><th>Category</th><th>Vendor</th><th>Date</th>
+          <th style="text-align:right;">Amount</th><th style="text-align:right;">Qty</th>
+          <th>Direction</th><th>Batch</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td style="font-family:'SF Mono',monospace;font-size:11px;">{{ e.carbon_ref }}</td>
+          <td>{{ e.category_name or e.expense_type or '—' }}</td>
+          <td>{{ e.vendor or '—' }}</td>
+          <td style="font-size:11px;">{{ e.doc_date or '—' }}</td>
+          <td style="text-align:right;">{{ e.currency or '' }} {{ e.amount if e.amount is not none else '—' }}</td>
+          <td style="text-align:right;">{{ e.quantity if e.quantity is not none else '—' }} {{ e.unit or '' }}</td>
+          <td>{% if e.direction == 'reversal' %}<span class="badge danger">reversal</span>{% else %}<span class="badge success">forward</span>{% endif %}</td>
+          <td style="font-family:'SF Mono',monospace;font-size:10px;color:var(--text-tertiary);">{{ e.release_batch_id | string | truncate(8, true, '') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-tertiary);">Nothing forwarded to CarbonNext yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

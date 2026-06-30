@@ -61,8 +61,7 @@ def test_assembly_released_claim_full(client, fake_ocr, db_session):
     assert ev.currency == "MYR" and ev.total_amount == Decimal("2000.00")
     assert ev.quantity == Decimal("450.0000") and ev.unit == "L"
     assert ev.category_name == "Diesel"        # the seeded fuel_diesel category
-    assert ev.scope == 1 and ev.factor_key == "fuel_diesel" and ev.factor_version == 1
-    assert ev.tco2e == Decimal("1.206000") and ev.data_quality == "Activity-based"
+    assert ev.carbon_relevant is True          # forwarded to CarbonNext
     # Claimant
     assert (ev.claimant_name, ev.employee_ref, ev.cost_centre) == ("Alice", "E-7", "CC-42")
     # Approval trail — ordered + hash-linked
@@ -85,7 +84,7 @@ def test_assembly_in_review_claim(client, fake_ocr, db_session):
     assert ev.status == "in_review" and not ev.released
     assert ev.batch_hash is None and ev.tsa_token is None
     assert [e.event_type for e in ev.trail] == ["submitted"]
-    assert ev.scope == 2 and ev.factor_key == "electricity"
+    assert ev.carbon_relevant is True
     assert (ev.claimant_name, ev.category_name) == (None, "Grid electricity")
 
 

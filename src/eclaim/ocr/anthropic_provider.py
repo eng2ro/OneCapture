@@ -22,10 +22,19 @@ Extract this receipt as JSON with exactly these keys:
 vendor (string), doc_no (string|null), date (string|null), currency (string|null),
 total_amount (number|null), expense_type ("fuel_diesel"|"fuel_petrol"|"electricity"|
 "natural_gas"|"air_travel"|"other"), quantity (number|null), unit ("L"|"kWh"|"m3"|"km"|null),
-confidence (number 0..1).
+confidence (number 0..1),
+boxes (object|null).
 Rules: fuel pump receipt -> fuel_diesel/fuel_petrol by product (RON95/97=petrol; diesel/B7/B10=diesel),
 quantity = litres. Electricity bill (e.g. Tenaga Nasional/TNB) -> electricity, quantity = kWh.
 Strip thousands separators. Use null where a value is not printed.
+"boxes" maps each non-null field above (vendor, doc_no, date, total_amount, quantity, ...)
+to the bounding box of the EXACT printed text you took that value from, as [x, y, w, h]
+NORMALIZED to 0..1, origin TOP-LEFT (x right, y down). The box must TIGHTLY enclose only
+that value's characters — not the whole line, not a nearby label. For a fuel receipt the
+"quantity" box is the dispensed VOLUME number (e.g. "34.146" or "34.146 L" / "LITRES"),
+NOT the price, unit price, or pump number. Double-check each box visually covers the value
+you reported. Omit a field from "boxes" if you cannot confidently locate it; use null if
+you cannot produce boxes at all.
 Return ONLY the JSON object, no prose, no code fences."""
 
 
@@ -37,6 +46,25 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
+def _coerce_boxes(raw) -> dict[str, list[float]] | None:
+    """Keep only well-formed boxes — field -> [x, y, w, h] of 4 numbers clamped to
+    0..1. Tolerant by design: a malformed box (or the whole ``boxes`` object) is
+    dropped, never raised, so the bounding-box overlay degrades gracefully without
+    failing the receipt read."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, list[float]] = {}
+    for field, box in raw.items():
+        if not isinstance(box, (list, tuple)) or len(box) != 4:
+            continue
+        try:
+            coords = [max(0.0, min(1.0, float(v))) for v in box]
+        except (TypeError, ValueError):
+            continue
+        out[str(field)] = coords
+    return out or None
+
+
 class AnthropicVisionProvider(OcrProvider):
     def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
         settings = get_settings()
@@ -44,11 +72,13 @@ class AnthropicVisionProvider(OcrProvider):
         self._model = model or settings.ocr_model
 
     def extract(self, image_bytes: bytes, media_type: str) -> Extraction:
-        # Imported lazily so the package imports without the SDK / a key present.
-        from anthropic import Anthropic
-
-        client = Anthropic(api_key=self._api_key)
         try:
+            # Imported + constructed inside the try so a missing SDK or an
+            # unconfigured/invalid key surfaces as OcrError (the documented
+            # contract) rather than escaping — callers degrade to manual entry.
+            from anthropic import Anthropic
+
+            client = Anthropic(api_key=self._api_key)
             message = client.messages.create(
                 model=self._model,
                 max_tokens=1024,
@@ -70,7 +100,12 @@ class AnthropicVisionProvider(OcrProvider):
                 ],
             )
             raw = "".join(block.text for block in message.content if block.type == "text")
-            return Extraction.model_validate(json.loads(_strip_fences(raw)))
+            data = json.loads(_strip_fences(raw))
+            # Pull boxes out and re-attach after tolerant coercion, so a malformed
+            # box object can never fail the field extraction itself.
+            boxes = _coerce_boxes(data.pop("boxes", None)) if isinstance(data, dict) else None
+            extraction = Extraction.model_validate(data)
+            return extraction.model_copy(update={"boxes": boxes}) if boxes else extraction
         except (json.JSONDecodeError, ValidationError) as exc:
             raise OcrError(f"could not parse OCR response: {exc}") from exc
         except Exception as exc:  # transport / API failure

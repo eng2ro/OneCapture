@@ -35,6 +35,11 @@ _service = ClaimService()
 _SUPPORTED_MEDIA = {"image/jpeg", "image/png", "image/webp"}
 
 
+def _claim_out(repos: Repos, claim) -> ClaimOut:
+    """ClaimOut for one claim, loading its lines (the per-receipt records)."""
+    return ClaimOut.of(claim, repos.claims.lines(claim.id))
+
+
 def _handle(exc: ClaimError) -> HTTPException:
     if isinstance(exc, ClaimNotFound):
         return HTTPException(status_code=404, detail="claim not found")
@@ -64,9 +69,10 @@ async def upload_claim(
     principal: Principal = Depends(deps.get_principal),
     ocr: OcrProvider = Depends(deps.get_ocr),
     image_dir: Path = Depends(deps.get_image_dir),
-    spend_factor: Decimal = Depends(deps.get_spend_factor),
     actor: str = Depends(deps.get_actor),
 ) -> ClaimOut:
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot submit claims")
     media_type = file.content_type or "application/octet-stream"
     if media_type not in _SUPPORTED_MEDIA:
         raise HTTPException(status_code=415, detail=f"unsupported media type {media_type!r}")
@@ -80,13 +86,12 @@ async def upload_claim(
             media_type=media_type,
             ocr=ocr,
             image_dir=image_dir,
-            spend_factor=spend_factor,
             actor=actor,
             claimant_ref=claimant_ref,
         )
     except OcrError as exc:
         raise HTTPException(status_code=422, detail=f"could not read receipt: {exc}")
-    return ClaimOut.of(claim)
+    return _claim_out(repos, claim)
 
 
 @router.get("/claims", response_model=list[ClaimOut])
@@ -94,13 +99,20 @@ def list_claims(
     status: str | None = None, repos: Repos = Depends(deps.get_repos)
 ) -> list[ClaimOut]:
     client_id = deps.default_client_id(repos.session)
-    return [ClaimOut.of(c) for c in repos.claims.list(client_id, status)]
+    claims = repos.claims.list(client_id, status)
+    lines = repos.claims.lines_by_claim([c.id for c in claims])
+    return [ClaimOut.of(c, lines.get(c.id, [])) for c in claims]
 
 
+# ERP reimbursement export — one row per APPROVED line (all classes; the carbon
+# split is on the Carbon Next side). No tCO2e/scope here.
 EXPORT_COLUMNS = [
-    "claim_id", "doc_date", "status", "claimant_name", "employee_ref", "cost_centre",
-    "vendor", "doc_no", "category_name", "gl_export_code", "currency", "total_amount",
-    "scope", "basis", "tco2e", "factor_key", "release_batch_id",
+    "claim_id", "line_no", "doc_date", "claim_status", "line_status",
+    "claimant_name", "employee_ref", "cost_centre", "vendor", "doc_no",
+    "category_name", "gl_code", "payment_method", "reimbursable",
+    "currency", "total_amount", "tax_amount", "tax_code", "net_amount",
+    "fx_rate", "base_amount", "posting_date", "department", "project_code",
+    "supplier_tax_id", "carbon_relevant", "release_batch_id",
 ]
 
 
@@ -152,7 +164,7 @@ def export_claims(
 @router.get("/claims/{claim_id}", response_model=ClaimOut)
 def get_claim(claim_id: uuid.UUID, repos: Repos = Depends(deps.get_repos)) -> ClaimOut:
     try:
-        return ClaimOut.of(_service.get(repos, claim_id))
+        return _claim_out(repos, _service.get(repos, claim_id))
     except ClaimError as exc:
         raise _handle(exc)
 
@@ -162,7 +174,7 @@ def edit_claim(
     claim_id: uuid.UUID,
     edit: ClaimEdit,
     repos: Repos = Depends(deps.get_repos),
-    spend_factor: Decimal = Depends(deps.get_spend_factor),
+    principal: Principal = Depends(deps.get_principal),
     actor: str = Depends(deps.get_actor),
 ) -> ClaimOut:
     data = edit.model_dump(exclude_unset=True)
@@ -172,13 +184,13 @@ def edit_claim(
             repos=repos,
             claim_id=claim_id,
             fields=data,
-            spend_factor=spend_factor,
             actor=actor,
             category_id=category_id,
+            principal=principal,
         )
     except ClaimError as exc:
         raise _handle(exc)
-    return ClaimOut.of(claim)
+    return _claim_out(repos, claim)
 
 
 @router.post("/claims/{claim_id}/approve", response_model=ClaimOut)
@@ -189,10 +201,11 @@ def approve_claim(
     actor: str = Depends(deps.get_actor),
 ) -> ClaimOut:
     try:
-        return ClaimOut.of(
+        return _claim_out(
+            repos,
             _service.approve(
                 repos=repos, claim_id=claim_id, actor=actor, approver=principal
-            )
+            ),
         )
     except ClaimError as exc:
         raise _handle(exc)
@@ -207,13 +220,14 @@ def send_back_claim(
 ) -> ClaimOut:
     """Return an in-review claim to the submitter for rework (→ submitted)."""
     try:
-        return ClaimOut.of(
+        return _claim_out(
+            repos,
             _service.send_back(
                 repos=repos,
                 claim_id=claim_id,
                 reviewer=principal,
                 reason=(decision.reason if decision else None),
-            )
+            ),
         )
     except ClaimError as exc:
         raise _handle(exc)
@@ -228,13 +242,14 @@ def reject_claim(
 ) -> ClaimOut:
     """Reject an in-review claim outright (→ rejected, terminal)."""
     try:
-        return ClaimOut.of(
+        return _claim_out(
+            repos,
             _service.reject(
                 repos=repos,
                 claim_id=claim_id,
                 reviewer=principal,
                 reason=(decision.reason if decision else None),
-            )
+            ),
         )
     except ClaimError as exc:
         raise _handle(exc)
@@ -248,12 +263,13 @@ def resubmit_claim(
 ) -> ClaimOut:
     """Re-enter a sent-back claim into the review queue (→ in_review)."""
     try:
-        return ClaimOut.of(
+        return _claim_out(
+            repos,
             _service.resubmit(
                 repos=repos,
                 claim_id=claim_id,
                 actor=principal.email or str(principal.user_id),
-            )
+            ),
         )
     except ClaimError as exc:
         raise _handle(exc)
@@ -263,23 +279,31 @@ def resubmit_claim(
 def release_claim(
     claim_id: uuid.UUID,
     repos: Repos = Depends(deps.get_repos),
-    actor: str = Depends(deps.get_actor),
+    principal: Principal = Depends(deps.get_principal),
 ) -> BatchOut:
+    # Attribute the release to the real caller (not the anonymous "system" actor)
+    # and gate on role; this is a downstream sign-off to CarbonNext/ERP.
+    actor = principal.email or str(principal.user_id)
     try:
-        return BatchOut.of(_service.release(repos=repos, claim_id=claim_id, actor=actor))
+        return BatchOut.of(
+            _service.release(repos=repos, claim_id=claim_id, actor=actor, principal=principal)
+        )
     except ClaimError as exc:
         raise _handle(exc)
 
 
-@router.post("/claims/{claim_id}/reverse", response_model=EntryOut)
+@router.post("/claims/{claim_id}/reverse", response_model=BatchOut)
 def reverse_claim(
     claim_id: uuid.UUID,
     repos: Repos = Depends(deps.get_repos),
-    actor: str = Depends(deps.get_actor),
-) -> EntryOut:
-    """Correct a released claim with a reversing (negative) ledger entry."""
+    principal: Principal = Depends(deps.get_principal),
+) -> BatchOut:
+    """Correct a released claim with a reversing (negative-quantity) batch."""
+    actor = principal.email or str(principal.user_id)
     try:
-        return EntryOut.of(_service.reverse(repos=repos, claim_id=claim_id, actor=actor))
+        return BatchOut.of(
+            _service.reverse(repos=repos, claim_id=claim_id, actor=actor, principal=principal)
+        )
     except ClaimError as exc:
         raise _handle(exc)
 
@@ -291,14 +315,13 @@ def ledger(repos: Repos = Depends(deps.get_repos)) -> LedgerOut:
     client_id = deps.default_client_id(repos.session)
     ledger_repo = LedgerRepository(repos.session)
     entries = ledger_repo.entries(client_id)
-    totals = ledger_repo.scope_totals(client_id)
-    s1, s2, s3 = totals.get(1, Decimal(0)), totals.get(2, Decimal(0)), totals.get(3, Decimal(0))
+    counts = ledger_repo.direction_counts(client_id)
+    forwarded, reversed_ = counts.get("forward", 0), counts.get("reversal", 0)
     return LedgerOut(
         entries=[EntryOut.of(e) for e in entries],
-        scope_1=s1,
-        scope_2=s2,
-        scope_3=s3,
-        total_tco2e=s1 + s2 + s3,
+        forwarded=forwarded,
+        reversed=reversed_,
+        total_records=forwarded + reversed_,
     )
 
 

@@ -65,8 +65,9 @@ def render(evidence: Evidence, generated_at: datetime) -> bytes:
         if evidence.quantity is not None
         else None
     )
-    factor = (
-        f"{evidence.factor_key} v{evidence.factor_version}" if evidence.factor_key else None
+    carbon = (
+        None if evidence.carbon_relevant is None
+        else ("yes — forwarded to CarbonNext" if evidence.carbon_relevant else "no")
     )
     for label, value in (
         ("Vendor", evidence.vendor),
@@ -76,10 +77,7 @@ def render(evidence: Evidence, generated_at: datetime) -> bytes:
         ("Total amount", evidence.total_amount),
         ("Quantity", qty),
         ("Category", evidence.category_name),
-        ("Scope", evidence.scope),
-        ("Factor", factor),
-        ("tCO2e", evidence.tco2e),
-        ("Data quality", evidence.data_quality),
+        ("Carbon relevant", carbon),
     ):
         _kv(pdf, label, value)
 

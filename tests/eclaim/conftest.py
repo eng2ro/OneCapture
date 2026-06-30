@@ -21,6 +21,8 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
+from fastapi import Request
+
 from eclaim.auth.principal import Principal
 from eclaim.config import get_settings
 from eclaim.db.models import AppUser, Category, Client, EmissionFactor
@@ -205,17 +207,15 @@ def _seed(session: Session) -> None:
         )
     session.flush()
 
-    # Category master maps the OCR expense-type vocabulary to factors (so the
-    # category-gated classifier resolves them and the factor-based flow tests stay
-    # green). fuel_petrol is mapped factor-less — a client that treats petrol as
-    # spend-based by intent (the governed-spend path). "other" gets no category at
-    # all (the unmapped path).
-    governed_spend = {"fuel_petrol"}
+    # Category master keyed by the OCR expense-type vocabulary, all carbon-relevant
+    # (forwarded to CarbonNext). e-Claim does no carbon maths — a category just
+    # carries ``carbon_relevant``. "other" gets no category at all (the unmapped
+    # path); tests add their own 'none'/spend categories as needed.
     for key, label, *_ in DEMO_FACTORS:
         session.add(
             Category(
                 firm_id=firm_id, client_id=client.id, name=label, expense_type=key,
-                factor_key=(None if key in governed_spend else key),
+                carbon_relevant=True,
             )
         )
     session.flush()
@@ -252,19 +252,24 @@ def client(db_session, fake_ocr, tmp_path):
             db_session.rollback()
             raise
 
-    def _principal() -> Principal:
+    def _principal(request: Request) -> Principal:
         # Firm-scoped partner bound to the default firm/client, mirroring a
         # logged-in firm user. Firm-scoped so it can access the default client;
         # uploads leave created_by_user_id null, so approving here never trips
         # the SoD self-approval rule.
         ids = db_session.info["principal"]
-        return Principal(
+        principal = Principal(
             user_id=ids["user"],
             firm_id=ids["firm"],
             base_role="partner",
             allowed_client_ids=frozenset({ids["client"]}),
             email="partner@seed.test",
         )
+        # Mirror the real get_session_principal so the nav context processor can
+        # render the sidebar chrome (Admin section, badge counts, tenant scope).
+        request.state.principal = principal
+        request.state.db = db_session
+        return principal
 
     app = create_app()
     app.dependency_overrides[deps.get_db] = _override_db

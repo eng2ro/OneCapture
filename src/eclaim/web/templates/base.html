@@ -4,21 +4,123 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}OneCapture e-Claim{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260630a">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="/">OneCapture <span>e-Claim</span></a>
-    <nav>
-      <a href="/capture">Capture</a>
-      <a href="/claims">Claims</a>
-      <a href="/ledger">Ledger</a>
-      {% if is_firm_scoped %}<a href="/admin/categories">Admin</a>{% endif %}
-      <form method="post" action="/logout" class="signout"><button type="submit">Sign out</button></form>
-    </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+
+<div class="app" id="app">
+
+<aside class="sidebar" id="sidebar">
+  <div class="brand" style="gap:0;padding-left:14px;">
+    <div class="brand-name" style="margin-left:0;">
+      <div style="font-size:18px;font-weight:700;letter-spacing:-0.025em;line-height:1.05;color:#fdfffe;">One<span style="color:#5ce1e6;">Capture</span></div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.5);letter-spacing:0.08em;font-weight:600;margin-top:2px;">E-CLAIM</div>
+    </div>
+    <span class="brand-collapse">«</span>
+  </div>
+
+  <div class="nav-section" style="flex:1; overflow-y:auto;">
+    <a class="btn btn-accent" href="/capture" style="width:calc(100% - 12px);margin:10px 6px;justify-content:center;padding:9px;"><i class="ti ti-plus"></i>New claim</a>
+
+    <div class="nav-label">Inbox</div>
+    <a class="nav-item {{ 'active' if request.url.path == '/claims' and not request.url.query else '' }}" href="/claims">
+      <i class="ti ti-inbox"></i>
+      <span class="label">All claims</span>
+      {% if nav_total %}<span class="nav-badge">{{ nav_total }}</span>{% endif %}
+    </a>
+    <a class="nav-item {{ 'active' if 'status=in_review' in request.url.query else '' }}" href="/claims?status=in_review">
+      <i class="ti ti-clock"></i>
+      <span class="label">Awaiting review</span>
+      {% if nav_counts.get('in_review') %}<span class="nav-badge">{{ nav_counts['in_review'] }}</span>{% endif %}
+    </a>
+    <a class="nav-item {{ 'active' if 'status=approved' in request.url.query else '' }}" href="/claims?status=approved">
+      <i class="ti ti-user-check"></i>
+      <span class="label">To approve</span>
+      {% if nav_counts.get('approved') %}<span class="nav-badge danger">{{ nav_counts['approved'] }}</span>{% endif %}
+    </a>
+    <a class="nav-item {{ 'active' if 'status=rejected' in request.url.query else '' }}" href="/claims?status=rejected">
+      <i class="ti ti-flag"></i>
+      <span class="label">Flagged</span>
+      {% if nav_counts.get('rejected') %}<span class="nav-badge danger">{{ nav_counts['rejected'] }}</span>{% endif %}
+    </a>
+    <a class="nav-item {{ 'active' if 'status=released' in request.url.query else '' }}" href="/claims?status=released">
+      <i class="ti ti-check"></i>
+      <span class="label">Released</span>
+      {% if nav_counts.get('released') %}<span class="nav-badge">{{ nav_counts['released'] }}</span>{% endif %}
+    </a>
+
+    <div class="nav-label">Manage</div>
+    <a class="nav-item {{ 'active' if request.url.path == '/admin/events' else '' }}" href="/admin/events">
+      <i class="ti ti-map-pin"></i>
+      <span class="label">Events &amp; budgets</span>
+    </a>
+    <a class="nav-item {{ 'active' if request.url.path == '/admin/claimants' else '' }}" href="/admin/claimants">
+      <i class="ti ti-users"></i>
+      <span class="label">Claimants</span>
+    </a>
+    <a class="nav-item {{ 'active' if request.url.path == '/admin/categories' else '' }}" href="/admin/categories">
+      <i class="ti ti-list-check"></i>
+      <span class="label">Categories</span>
+    </a>
+    <a class="nav-item {{ 'active' if request.url.path == '/ledger' else '' }}" href="/ledger">
+      <i class="ti ti-shield-check"></i>
+      <span class="label">Audit trail</span>
+    </a>
+
+    <div class="nav-label">Account</div>
+    <a class="nav-item" href="/">
+      <i class="ti ti-circles-relation"></i>
+      <span class="label">Back to Hub</span>
+    </a>
+    <form method="post" action="/logout" style="margin:0;">
+      <button class="nav-item" type="submit" style="width:100%;background:none;border:0;text-align:left;cursor:pointer;color:inherit;font:inherit;">
+        <i class="ti ti-logout"></i>
+        <span class="label">Sign out</span>
+      </button>
+    </form>
+  </div>
+</aside>
+
+<div class="main" id="main">
+
+<header class="topbar" id="topbar">
+  <div class="topbar-greeting">
+    <div class="hi" id="greeting">e-Claim · {{ scope_name or 'All clients' }}</div>
+    <div class="sub" id="greeting-sub">{% block topbar_sub %}{{ nav_total }} claim{{ '' if nav_total == 1 else 's' }} · {{ nav_counts.get('in_review', 0) }} awaiting review{% endblock %}</div>
+  </div>
+  <form class="topbar-search" method="get" action="/claims" role="search">
+    <i class="ti ti-search"></i>
+    <input type="text" name="q" aria-label="Search claims"
+           placeholder="Search claims by title, vendor or ref..." />
+  </form>
+  <div class="topbar-actions">
+    <div class="topbar-scope">
+      <span class="dot"></span>
+      <span>{{ scope_name or 'All clients' }}</span>
+      <i class="ti ti-chevron-down"></i>
+    </div>
+    <button class="topbar-icon" aria-label="Help"><i class="ti ti-help"></i></button>
+    <button class="topbar-icon" aria-label="Notifications"><i class="ti ti-bell"></i><span class="dot"></span></button>
+    <div class="user-chip">
+      <div class="user-avatar">{{ (principal.email or 'U')[:2] | upper if principal else 'U' }}</div>
+      <div class="user-info">
+        <span class="name">{{ principal.email if principal else '—' }}</span>
+        <span class="role">{{ principal.base_role | capitalize if principal else '' }}</span>
+      </div>
+      <i class="ti ti-chevron-down" style="font-size:13px;color:var(--text-tertiary);"></i>
+    </div>
+  </div>
+</header>
+
+<div class="content">
+
+{% block content %}{% endblock %}
+
+</div>
+
+</div>
+
+</div>
+
 </body>
 </html>

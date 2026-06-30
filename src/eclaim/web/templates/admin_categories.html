@@ -1,60 +1,91 @@
 {% extends "base.html" %}
-{% block title %}Admin · Categories — OneCapture e-Claim{% endblock %}
+{% block title %}Categories · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Claim categories{% endblock %}
 {% block content %}
-<section class="card">
-  <div class="filters">
-    <a href="/admin/categories" class="chip active">Categories</a>
-    <a href="/admin/claimants" class="chip">Claimants</a>
+<div class="screen active" id="screen-categories">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">Claim categories</h1>
+      <p class="page-sub">{{ categories | length }} categories · each maps to an emission factor and a GL export code</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <a class="btn" href="/admin/claimants"><i class="ti ti-users"></i>Claimants</a>
+    </div>
   </div>
-  <h1>{{ 'Edit category' if editing else 'Categories' }}</h1>
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
 
-  <form class="fields" method="post" action="/admin/categories">
-    {% if editing %}<input type="hidden" name="category_id" value="{{ editing.id }}">{% endif %}
-    <label>Client
-      <select name="client_id">
-        {% for c in clients %}
-          <option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Name <input name="name" value="{{ editing.name if editing else '' }}" required></label>
-    <label>Expense type
-      <select name="expense_type">
-        {% for et in expense_types %}
-          <option value="{{ et }}" {{ 'selected' if editing and editing.expense_type == et else '' }}>{{ et }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Factor key (blank = spend-based) <input name="factor_key" value="{{ editing.factor_key or '' if editing else '' }}"></label>
-    <label>GL export code <input name="gl_export_code" value="{{ editing.gl_export_code or '' if editing else '' }}"></label>
-    <label>Default limit <input name="default_limit" value="{{ editing.default_limit if editing and editing.default_limit is not none else '' }}"></label>
-    <label>Status <input name="status" value="{{ editing.status if editing else 'active' }}"></label>
-    <button type="submit" class="primary">{{ 'Save' if editing else 'Create' }} category</button>
-    {% if editing %}<a href="/admin/categories" class="chip">Cancel</a>{% endif %}
-  </form>
+  <div class="banner">
+    <i class="ti ti-info-circle"></i>
+    <span><strong>Categories drive routing.</strong> When a claim is captured, its expense type matches a category, which determines the emission factor it feeds to Carbon Next and the GL code stamped on the CSV export. A category with no factor key is treated as spend-based.</span>
+  </div>
 
-  <table class="ledger">
-    <thead>
-      <tr><th>Client</th><th>Name</th><th>Expense type</th><th>Factor</th>
-          <th>GL</th><th>Limit</th><th>Status</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for cat in categories %}
-      <tr>
-        <td>{{ client_names.get(cat.client_id, '') }}</td>
-        <td>{{ cat.name }}</td>
-        <td>{{ cat.expense_type }}</td>
-        <td>{{ cat.factor_key or '(spend)' }}</td>
-        <td>{{ cat.gl_export_code or '—' }}</td>
-        <td>{{ cat.default_limit if cat.default_limit is not none else '—' }}</td>
-        <td>{{ cat.status }}</td>
-        <td><a href="/admin/categories?edit={{ cat.id }}">Edit</a></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="8" class="muted">No categories.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">{{ 'Edit category' if editing else 'Add a category' }}</div>
+    <form method="post" action="/admin/categories">
+      {% if editing %}<input type="hidden" name="category_id" value="{{ editing.id }}">{% endif %}
+      <div class="field-row">
+        <div><label class="label-tiny">Client</label>
+          <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}</select>
+        </div>
+        <div><label class="label-tiny">Name</label><input class="field" name="name" value="{{ editing.name if editing else '' }}" required></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Expense type (auto-match key)</label>
+          <input class="field" name="expense_type" value="{{ editing.expense_type if editing else '' }}" placeholder="e.g. meals, taxi, hotel" required>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;padding-bottom:8px;">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;">
+            <input type="checkbox" name="carbon_relevant" value="1" {{ 'checked' if (editing and editing.carbon_relevant) or not editing else '' }}>
+            Carbon-relevant (send to CarbonNext)
+          </label>
+        </div>
+      </div>
+      <div class="field-row" style="margin-top:4px;">
+        <div style="font-size:11px;color:var(--text-tertiary);">Tick = this category's spend is forwarded to CarbonNext (which computes the carbon). Untick for non-emitting claims (parking, tolls, bank charges) — they still post to ERP. e-Claim itself does no carbon maths.</div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">GL export code</label><input class="field" name="gl_export_code" value="{{ editing.gl_export_code or '' if editing else '' }}"></div>
+        <div><label class="label-tiny">Default limit (RM)</label><input class="field" name="default_limit" value="{{ editing.default_limit if editing and editing.default_limit is not none else '' }}"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Status</label>
+          {% set st = editing.status if editing else 'active' %}
+          <select class="field" name="status">
+            <option value="active" {{ 'selected' if st == 'active' else '' }}>Active</option>
+            <option value="inactive" {{ 'selected' if st == 'inactive' else '' }}>Inactive</option>
+          </select></div>
+        <div style="display:flex;align-items:flex-end;gap:8px;">
+          <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i>{{ 'Save' if editing else 'Add category' }}</button>
+          {% if editing %}<a class="btn" href="/admin/categories">Cancel</a>{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Category</th><th>GL code (export)</th><th style="text-align:right;">Default limit (RM)</th>
+          <th>CarbonNext</th><th>Status</th><th style="width:60px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cat in categories %}
+        <tr>
+          <td><strong>{{ cat.name }}</strong><br><span style="font-size:10px;color:var(--text-tertiary);">{{ cat.expense_type }} · {{ client_names.get(cat.client_id, '') }}</span></td>
+          <td style="font-family:'SF Mono',monospace;font-size:11px;">{{ cat.gl_export_code or '—' }}</td>
+          <td style="text-align:right;">{{ cat.default_limit if cat.default_limit is not none else '—' }}</td>
+          <td>{% if cat.carbon_relevant %}<span class="badge success"><i class="ti ti-leaf" style="font-size:10px;"></i>Forwarded</span>{% else %}<span class="badge neutral">ERP only</span>{% endif %}</td>
+          <td><span class="badge {{ 'success' if cat.status == 'active' else 'neutral' }}">{{ cat.status }}</span></td>
+          <td><a href="/admin/categories?edit={{ cat.id }}" title="Edit"><i class="ti ti-edit" style="color:var(--text-tertiary);"></i></a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-tertiary);">No categories yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

@@ -42,12 +42,27 @@ class DevAuthProvider:
     carries ``user_id`` + ``firm_id`` + ``base_role`` per the spec.
     """
 
-    def __init__(self, session: Session, *, secret: str, ttl_seconds: int) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        secret: str,
+        ttl_seconds: int,
+        allow_passwordless: bool = True,
+    ) -> None:
         self._session = session
         self._secret = secret
         self._ttl = ttl_seconds
+        # When False (production), passwordless identity-only login is refused —
+        # the deployment must front this with a real credential/SSO provider.
+        self._allow_passwordless = allow_passwordless
 
     def login(self, email: str, password: str | None = None) -> str:
+        if not self._allow_passwordless:
+            raise AuthError(
+                "passwordless dev login is disabled in production — "
+                "configure a real identity provider (Entra/OIDC)"
+            )
         rows = self._session.execute(_LOOKUP, {"email": email}).all()
         if not rows:
             raise AuthError("unknown user")

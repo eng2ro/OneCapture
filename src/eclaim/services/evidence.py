@@ -21,7 +21,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from ..db.models import Claimant, Client, EmissionEntry, ReleaseBatch
+from ..db.models import CarbonHandoff, Claimant, Client, ReleaseBatch
 from .claims import ClaimNotFound, Repos
 
 
@@ -57,11 +57,8 @@ class Evidence:
     quantity: Decimal | None
     unit: str | None
     category_name: str | None
-    scope: int | None
-    factor_key: str | None
-    factor_version: int | None
-    tco2e: Decimal | None
-    data_quality: str | None
+    # e-Claim does no carbon maths — just whether this line forwards to CarbonNext.
+    carbon_relevant: bool | None
 
     # Claimant
     claimant_name: str | None
@@ -94,9 +91,14 @@ class EvidenceService:
             raise ClaimNotFound(str(claim_id))
         session = repos.session
 
+        # Carbon + receipt fields live on the lines now; the evidence pack shows the
+        # claim's first line (single-receipt claims are the common case).
+        line = repos.claims.first_line(claim_id)
         client = session.get(Client, claim.client_id)
         category = (
-            repos.categories.get_by_id(claim.category_id) if claim.category_id else None
+            repos.categories.get_by_id(line.category_id)
+            if line and line.category_id
+            else None
         )
         claimant = (
             session.get(Claimant, claim.submitted_by_claimant_id)
@@ -116,42 +118,43 @@ class EvidenceService:
             for e in repos.audit.chain("claim", claim_id)
         )
 
-        # The claim's original release batch — earliest ledger entry, so a later
-        # reversal entry doesn't override the original release hash/TSA.
-        entry = session.execute(
-            select(EmissionEntry)
-            .where(
-                EmissionEntry.source_type == "eclaim",
-                EmissionEntry.source_id == claim.id,
-            )
-            .order_by(EmissionEntry.created_at)
-            .limit(1)
-        ).scalar_one_or_none()
-        batch = session.get(ReleaseBatch, entry.release_batch_id) if entry else None
+        # The claim's original release batch — earliest FORWARD handoff for any of
+        # its lines, so a later reversal doesn't override the original hash/TSA.
+        line_ids = [ln.id for ln in repos.claims.lines(claim_id)]
+        handoff = (
+            session.execute(
+                select(CarbonHandoff)
+                .where(
+                    CarbonHandoff.line_id.in_(line_ids),
+                    CarbonHandoff.direction == "forward",
+                )
+                .order_by(CarbonHandoff.created_at)
+                .limit(1)
+            ).scalar_one_or_none()
+            if line_ids
+            else None
+        )
+        batch = session.get(ReleaseBatch, handoff.release_batch_id) if handoff else None
 
         return Evidence(
             claim_id=claim.id,
             client_id=claim.client_id,
             client_name=client.name if client else "",
             status=claim.status,
-            vendor=claim.vendor,
-            doc_no=claim.doc_no,
-            doc_date=claim.doc_date,
-            currency=claim.currency,
-            total_amount=claim.total_amount,
-            quantity=claim.quantity,
-            unit=claim.unit,
+            vendor=line.vendor if line else None,
+            doc_no=line.doc_no if line else None,
+            doc_date=line.doc_date if line else None,
+            currency=line.currency if line else None,
+            total_amount=line.total_amount if line else claim.total_claimed,
+            quantity=line.quantity if line else None,
+            unit=line.unit if line else None,
             category_name=category.name if category else None,
-            scope=claim.scope,
-            factor_key=claim.factor_key,
-            factor_version=claim.factor_version,
-            tco2e=claim.tco2e,
-            data_quality=claim.data_quality,
+            carbon_relevant=line.carbon_relevant if line else None,
             claimant_name=claimant.name if claimant else None,
             employee_ref=claimant.employee_ref if claimant else None,
             cost_centre=claimant.cost_centre if claimant else None,
-            image_path=claim.image_path,
-            image_sha256=claim.image_sha256,
+            image_path=line.image_path if line else "",
+            image_sha256=line.image_sha256 if line else "",
             trail=trail,
             batch_hash=batch.batch_hash if batch else None,
             tsa_token=batch.tsa_token if batch else None,

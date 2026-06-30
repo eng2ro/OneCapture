@@ -13,6 +13,10 @@ __pycache__/
 
 # --- Runtime / generated data (image store, JSON persistence stores) ---
 data/
+logs/
+
+# --- Local operator notes (lists login accounts; keep out of VCS) ---
+LOGIN_ACCESS.txt
 
 # --- Local editor / harness state ---
 .claude/settings.local.json

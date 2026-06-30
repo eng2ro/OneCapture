@@ -12,42 +12,20 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select, text
 from sqlalchemy.orm import Session
 
 from .db.models import (
     AuditEvent,
+    CarbonHandoff,
     Category,
     Claim,
     Claimant,
+    ClaimLine,
     EmissionEntry,
-    EmissionFactor,
+    Event,
     ReleaseBatch,
 )
-from .services.classify import FactorView
-
-
-class FactorRepository:
-    def __init__(self, session: Session) -> None:
-        self._s = session
-
-    def get_active(self, factor_key: str) -> FactorView | None:
-        """Highest-version active factor for a key, or None."""
-        row = self._s.execute(
-            select(EmissionFactor)
-            .where(EmissionFactor.factor_key == factor_key, EmissionFactor.active.is_(True))
-            .order_by(EmissionFactor.version.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if row is None:
-            return None
-        return FactorView(
-            factor_key=row.factor_key,
-            version=row.version,
-            scope=row.scope,
-            unit=row.unit,
-            factor_kg_per_unit=row.factor_kg_per_unit,
-        )
 
 
 class CategoryRepository:
@@ -57,14 +35,54 @@ class CategoryRepository:
     def __init__(self, session: Session) -> None:
         self._s = session
 
-    def get(self, client_id: uuid.UUID, expense_type: str) -> Category | None:
-        """The category for one client + OCR expense_type, or None (unmapped)."""
-        return self._s.execute(
-            select(Category).where(
-                Category.client_id == client_id,
-                Category.expense_type == expense_type,
-            )
-        ).scalar_one_or_none()
+    def match_single(self, client_id: uuid.UUID, expense_type: str) -> Category | None:
+        """Auto-match an OCR ``expense_type`` to a category ONLY when unambiguous:
+        exactly one active category maps that type. Since 0007 a client may have
+        several categories sharing one carbon ``expense_type`` (e.g. many
+        spend-based 'other' categories), so zero *or* more-than-one match returns
+        None → the claim is left unmapped for a reviewer/claimant to pick the
+        right category. Used by channels that don't choose a category explicitly
+        (API/email); the web capture form posts ``category_id`` instead."""
+        rows = list(
+            self._s.execute(
+                select(Category).where(
+                    Category.client_id == client_id,
+                    Category.expense_type == expense_type,
+                    Category.status == "active",
+                )
+            ).scalars()
+        )
+        return rows[0] if len(rows) == 1 else None
+
+    def match_by_merchant(
+        self, client_id: uuid.UUID, vendor: str | None, ocr_expense_type: str | None
+    ) -> Category | None:
+        """Auto-suggest a category using the merchant name when the OCR type is
+        ambiguous. Precedence:
+
+        1. If OCR gave a SPECIFIC type (not 'other') that maps to exactly one
+           category, trust it — OCR's fuel_diesel/electricity/air_travel is more
+           precise than a merchant guess.
+        2. Otherwise (OCR='other' or its type has no/many categories), map the
+           merchant name to a category slug (McDonald's -> meals, Grab -> taxi,
+           Shell -> fuel) and match that.
+        3. Fall back to the OCR type as-is (usually None for 'other').
+
+        Returns None only when nothing resolves — the line stays unmapped for
+        review, never wrong-guessed."""
+        from .services.merchant import merchant_slug
+
+        et = (ocr_expense_type or "other").strip() or "other"
+        if et != "other":
+            cat = self.match_single(client_id, et)
+            if cat is not None:
+                return cat
+        slug = merchant_slug(vendor)
+        if slug is not None:
+            cat = self.match_single(client_id, slug)
+            if cat is not None:
+                return cat
+        return self.match_single(client_id, et)
 
     def get_by_id(self, category_id: uuid.UUID) -> Category | None:
         return self._s.get(Category, category_id)
@@ -127,6 +145,57 @@ class ClaimRepository:
     def get(self, claim_id: uuid.UUID) -> Claim | None:
         return self._s.get(Claim, claim_id)
 
+    # -- lines (the per-receipt records under a claim header) --------------- #
+    def add_line(self, line: ClaimLine) -> ClaimLine:
+        self._s.add(line)
+        self._s.flush()
+        return line
+
+    def lines(self, claim_id: uuid.UUID) -> list[ClaimLine]:
+        return list(
+            self._s.execute(
+                select(ClaimLine)
+                .where(ClaimLine.claim_id == claim_id)
+                .order_by(ClaimLine.line_no)
+            ).scalars()
+        )
+
+    def line(self, line_id: uuid.UUID) -> ClaimLine | None:
+        return self._s.get(ClaimLine, line_id)
+
+    def first_line(self, claim_id: uuid.UUID) -> ClaimLine | None:
+        return self._s.execute(
+            select(ClaimLine)
+            .where(ClaimLine.claim_id == claim_id)
+            .order_by(ClaimLine.line_no)
+            .limit(1)
+        ).scalar_one_or_none()
+
+    def next_line_no(self, claim_id: uuid.UUID) -> int:
+        mx = self._s.execute(
+            select(func.max(ClaimLine.line_no)).where(ClaimLine.claim_id == claim_id)
+        ).scalar()
+        return (mx or 0) + 1
+
+    def next_claim_no(self, *, year: int) -> str:
+        """Allocate the next human-readable claim reference, ``CLM-<year>-<NNNNNN>``,
+        from the atomic ``claim_no_seq`` sequence (migration 0016)."""
+        seq = self._s.execute(text("SELECT nextval('claim_no_seq')")).scalar_one()
+        return f"CLM-{year}-{int(seq):06d}"
+
+    def lines_by_claim(self, claim_ids) -> dict[uuid.UUID, list[ClaimLine]]:
+        """All lines for a set of claims, grouped by claim_id — one query for the
+        inbox/review carbon chips so the page doesn't N+1."""
+        claim_ids = list(claim_ids)
+        if not claim_ids:
+            return {}
+        out: dict[uuid.UUID, list[ClaimLine]] = {}
+        for ln in self._s.execute(
+            select(ClaimLine).where(ClaimLine.claim_id.in_(claim_ids)).order_by(ClaimLine.line_no)
+        ).scalars():
+            out.setdefault(ln.claim_id, []).append(ln)
+        return out
+
     def list(self, client_id: uuid.UUID, status: str | None = None) -> list[Claim]:
         stmt = select(Claim).where(Claim.client_id == client_id)
         if status is not None:
@@ -148,6 +217,47 @@ class ClaimRepository:
             stmt = stmt.where(Claim.status == status)
         return list(self._s.execute(stmt.order_by(Claim.created_at.desc())).scalars())
 
+    def status_counts(self, client_ids) -> dict[str, int]:
+        """Per-status claim counts across the principal's visible clients — feeds
+        the sidebar badges and topbar summary. One GROUP BY, RLS-scoped like the
+        listings, with the same explicit client filter as belt-and-suspenders."""
+        client_ids = list(client_ids)
+        if not client_ids:
+            return {}
+        rows = self._s.execute(
+            select(Claim.status, func.count())
+            .where(Claim.client_id.in_(client_ids))
+            .group_by(Claim.status)
+        ).all()
+        return {status: count for status, count in rows}
+
+    def inbox_summary(self, client_ids) -> dict:
+        """Aggregate figures for the inbox KPI strip — total claim count, summed
+        claimed amount (header total_claimed), and the number of carbon-relevant
+        claims (≥1 line flagged carbon_relevant) — in one pass."""
+        client_ids = list(client_ids)
+        if not client_ids:
+            return {"total": 0, "total_amount": Decimal("0"), "carbon_count": 0}
+        carbon_line = (
+            exists()
+            .where(
+                ClaimLine.claim_id == Claim.id,
+                ClaimLine.carbon_relevant.is_(True),
+            )
+        )
+        total, total_amount, carbon_count = self._s.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(Claim.total_claimed), 0),
+                func.count().filter(carbon_line),
+            ).where(Claim.client_id.in_(client_ids))
+        ).one()
+        return {
+            "total": total,
+            "total_amount": total_amount,
+            "carbon_count": carbon_count,
+        }
+
     def export_rows(
         self,
         *,
@@ -157,47 +267,67 @@ class ClaimRepository:
         date_to: datetime | None = None,
         batch_id: uuid.UUID | None = None,
     ):
-        """Read-only join for the accounting CSV export — one row per matching
-        claim: claim → claimant (name/employee_ref/cost_centre) and claim →
-        category (name/gl_export_code), with the release_batch_id of the claim's
-        original ledger entry. RLS scopes every table to the caller's firm/clients.
+        """Read-only join for the accounting / ERP reimbursement export — one row
+        per line: claim_line → claim → claimant → category, with the
+        release_batch_id of the line's ledger entry and its ``line_status`` (so the
+        consumer can take approved lines only). ALL lines export (carbon and
+        non-carbon alike) — the carbon split happens on the Carbon Next side, not
+        here. RLS scopes every table to the caller's firm/clients.
 
-        Columns are emitted in CSV order. ``date_from``/``date_to`` filter on
-        ``created_at`` (a real timestamptz; ``doc_date`` is free text). A reversed
-        claim has a second negative entry — the scalar subquery takes the earliest
-        (original release) batch, so the claim stays a single row."""
-        ee = EmissionEntry
+        ``status`` filters the CLAIM status (default 'released'). ``date_from``/
+        ``date_to`` filter the claim ``created_at``. The scalar subquery takes the
+        line's earliest (original forward) handoff batch, so a reversed line stays
+        one row. Non-carbon lines have no handoff → NULL batch (they still export)."""
+        ch = CarbonHandoff
         batch_col = (
-            select(ee.release_batch_id)
-            .where(ee.source_type == "eclaim", ee.source_id == Claim.id)
-            .order_by(ee.created_at)
+            select(ch.release_batch_id)
+            .where(ch.line_id == ClaimLine.id, ch.direction == "forward")
+            .order_by(ch.created_at)
             .limit(1)
-            .correlate(Claim)
+            .correlate(ClaimLine)
             .scalar_subquery()
         )
         stmt = (
             select(
-                Claim.id,
-                Claim.doc_date,
-                Claim.status,
+                Claim.id.label("claim_id"),
+                ClaimLine.line_no,
+                ClaimLine.doc_date,
+                Claim.status.label("claim_status"),
+                ClaimLine.line_status,
                 Claimant.name.label("claimant_name"),
                 Claimant.employee_ref,
-                Claimant.cost_centre,
-                Claim.vendor,
-                Claim.doc_no,
+                # Resolved posting dimensions: a line override wins over the
+                # claimant default, then the event's cost centre — the SAME order
+                # the release posting-gate (_resolved_cost_centre) checks, so a line
+                # that passed the gate via the event never exports a blank cost centre.
+                func.coalesce(
+                    ClaimLine.cost_centre_override, Claimant.cost_centre, Event.cost_centre
+                ).label("cost_centre"),
+                ClaimLine.vendor,
+                ClaimLine.doc_no,
                 Category.name.label("category_name"),
-                Category.gl_export_code,
-                Claim.currency,
-                Claim.total_amount,
-                Claim.scope,
-                Claim.basis,
-                Claim.tco2e,
-                Claim.factor_key,
+                func.coalesce(ClaimLine.gl_code, Category.gl_export_code).label("gl_code"),
+                ClaimLine.payment_method,
+                ClaimLine.reimbursable,
+                ClaimLine.currency,
+                ClaimLine.total_amount,
+                ClaimLine.tax_amount,
+                ClaimLine.tax_code,
+                ClaimLine.net_amount,
+                ClaimLine.fx_rate,
+                ClaimLine.base_amount,
+                ClaimLine.posting_date,
+                ClaimLine.department,
+                ClaimLine.project_code,
+                ClaimLine.supplier_tax_id,
+                ClaimLine.carbon_relevant,
                 batch_col.label("release_batch_id"),
             )
-            .select_from(Claim)
+            .select_from(ClaimLine)
+            .join(Claim, ClaimLine.claim_id == Claim.id)
             .outerjoin(Claimant, Claim.submitted_by_claimant_id == Claimant.id)
-            .outerjoin(Category, Claim.category_id == Category.id)
+            .outerjoin(Category, ClaimLine.category_id == Category.id)
+            .outerjoin(Event, Claim.event_id == Event.id)
         )
         if status is not None:
             stmt = stmt.where(Claim.status == status)
@@ -210,15 +340,21 @@ class ClaimRepository:
         if batch_id is not None:
             stmt = stmt.where(
                 exists().where(
-                    ee.source_type == "eclaim",
-                    ee.source_id == Claim.id,
-                    ee.release_batch_id == batch_id,
+                    ch.line_id == ClaimLine.id,
+                    ch.release_batch_id == batch_id,
                 )
             )
-        return self._s.execute(stmt.order_by(Claim.created_at)).all()
+        return self._s.execute(stmt.order_by(Claim.created_at, ClaimLine.line_no)).all()
 
 
 class ReleaseRepository:
+    """Release batches + the shared ``emission_entry`` ledger.
+
+    e-Claim no longer writes ``emission_entry`` (its per-line payload lives in
+    ``carbon_handoff``; see :class:`CarbonHandoffRepository`). But **ERP Sync** DOES
+    — it computes real tonnage and writes ``emission_entry`` via ``add_entry`` /
+    ``entry_for`` / ``entry_for_sources`` here — so these stay for ERP Sync."""
+
     def __init__(self, session: Session) -> None:
         self._s = session
 
@@ -227,15 +363,72 @@ class ReleaseRepository:
         self._s.flush()
         return batch
 
+    def batch_by_hash(self, client_id: uuid.UUID, batch_hash: str) -> ReleaseBatch | None:
+        """Find a release batch by its (deterministic) content hash — used to make
+        release idempotent for a claim that produced NO carbon handoffs to key on."""
+        return self._s.execute(
+            select(ReleaseBatch).where(
+                ReleaseBatch.client_id == client_id,
+                ReleaseBatch.batch_hash == batch_hash,
+            )
+        ).scalars().first()
+
     def entry_for(self, idempotency_key: str) -> EmissionEntry | None:
         return self._s.execute(
             select(EmissionEntry).where(EmissionEntry.idempotency_key == idempotency_key)
+        ).scalar_one_or_none()
+
+    def entry_for_sources(self, source_ids) -> EmissionEntry | None:
+        """Earliest ledger entry for any of these source ids — used by ERP Sync to
+        detect an already-released line and find its original batch."""
+        source_ids = list(source_ids)
+        if not source_ids:
+            return None
+        return self._s.execute(
+            select(EmissionEntry)
+            .where(EmissionEntry.source_id.in_(source_ids))
+            .order_by(EmissionEntry.created_at)
+            .limit(1)
         ).scalar_one_or_none()
 
     def add_entry(self, entry: EmissionEntry) -> EmissionEntry:
         self._s.add(entry)
         self._s.flush()
         return entry
+
+
+class CarbonHandoffRepository:
+    """e-Claim -> CarbonNext raw handoff log. One row per forwarded (or reversed)
+    carbon-relevant line. RLS scopes reads to the caller's firm/clients."""
+
+    def __init__(self, session: Session) -> None:
+        self._s = session
+
+    def add(self, handoff: CarbonHandoff) -> CarbonHandoff:
+        self._s.add(handoff)
+        self._s.flush()
+        return handoff
+
+    def by_idempotency(self, key: str) -> CarbonHandoff | None:
+        return self._s.execute(
+            select(CarbonHandoff).where(CarbonHandoff.idempotency_key == key)
+        ).scalar_one_or_none()
+
+    def first_for_lines(self, line_ids) -> CarbonHandoff | None:
+        """Earliest FORWARD handoff for any of these line ids — used to detect an
+        already-released claim and return its original batch (idempotency)."""
+        line_ids = list(line_ids)
+        if not line_ids:
+            return None
+        return self._s.execute(
+            select(CarbonHandoff)
+            .where(
+                CarbonHandoff.line_id.in_(line_ids),
+                CarbonHandoff.direction == "forward",
+            )
+            .order_by(CarbonHandoff.created_at)
+            .limit(1)
+        ).scalar_one_or_none()
 
 
 class AuditRepository:
@@ -297,25 +490,72 @@ class AuditRepository:
 
 
 class LedgerRepository:
+    """The CarbonNext handoff log (post-0011). e-Claim does no carbon maths — this
+    is the record of which lines were FORWARDED to CarbonNext with what raw data."""
+
     def __init__(self, session: Session) -> None:
         self._s = session
 
-    def entries(self, client_id: uuid.UUID) -> list[EmissionEntry]:
+    def entries(self, client_id: uuid.UUID) -> list[CarbonHandoff]:
         return list(
             self._s.execute(
-                select(EmissionEntry)
-                .where(EmissionEntry.client_id == client_id)
-                .order_by(EmissionEntry.created_at)
+                select(CarbonHandoff)
+                .where(CarbonHandoff.client_id == client_id)
+                .order_by(CarbonHandoff.created_at)
             ).scalars()
         )
 
-    def scope_totals(self, client_id: uuid.UUID) -> dict[int, Decimal]:
-        """tCO2e summed per scope, computed in SQL."""
-        from sqlalchemy import func
-
+    def direction_counts(self, client_id: uuid.UUID) -> dict[str, int]:
+        """How many lines forwarded vs reversed — the handoff KPI (e-Claim forwards
+        raw data; CarbonNext owns scope/factor/tonnage, so there is no scope split
+        here)."""
         rows = self._s.execute(
-            select(EmissionEntry.scope, func.coalesce(func.sum(EmissionEntry.tco2e), 0))
-            .where(EmissionEntry.client_id == client_id)
-            .group_by(EmissionEntry.scope)
+            select(CarbonHandoff.direction, func.count())
+            .where(CarbonHandoff.client_id == client_id)
+            .group_by(CarbonHandoff.direction)
         ).all()
-        return {int(scope): Decimal(total) for scope, total in rows}
+        return {direction: int(n) for direction, n in rows}
+
+
+class EventRepository:
+    """Event grouping (trips / trainings) above claims — holds the budget and the
+    cross-claim rollup. RLS scopes reads to the caller's firm/clients."""
+
+    def __init__(self, session: Session) -> None:
+        self._s = session
+
+    def add(self, event: Event) -> Event:
+        self._s.add(event)
+        self._s.flush()
+        return event
+
+    def get(self, event_id: uuid.UUID) -> Event | None:
+        return self._s.get(Event, event_id)
+
+    def list_for_clients(self, client_ids) -> list[Event]:
+        client_ids = list(client_ids)
+        if not client_ids:
+            return []
+        return list(
+            self._s.execute(
+                select(Event)
+                .where(Event.client_id.in_(client_ids))
+                .order_by(Event.created_at.desc())
+            ).scalars()
+        )
+
+    def spent(self, event_id: uuid.UUID) -> Decimal:
+        """Total claimed across every claim tied to this event (across all people)
+        — the figure the budget bar compares against ``budget_amount``."""
+        return self._s.execute(
+            select(func.coalesce(func.sum(Claim.total_claimed), 0)).where(
+                Claim.event_id == event_id
+            )
+        ).scalar_one()
+
+    def claims(self, event_id: uuid.UUID) -> list[Claim]:
+        return list(
+            self._s.execute(
+                select(Claim).where(Claim.event_id == event_id).order_by(Claim.created_at)
+            ).scalars()
+        )

@@ -15,9 +15,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Local-disk image store (object storage is a deferred seam).
 DEFAULT_IMAGE_DIR = Path("data/eclaim_images")
 
+# The committed placeholder signing secret. Safe for local dev only; the app
+# refuses to run in production while jwt_secret is still this value.
+DEFAULT_JWT_SECRET = "dev-only-change-me"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Deployment environment. "dev" (default) keeps the local passwordless login
+    # and placeholder secret working; set ENVIRONMENT=production for deployments,
+    # which hardens auth (see ``dev_auth_allowed`` / ``assert_production_safe``).
+    environment: str = "dev"
 
     # Admin/owner DSN — runs Alembic migrations (table owner, may bypass RLS).
     database_url: str = "postgresql+psycopg://localhost:5432/onecapture"
@@ -31,7 +40,7 @@ class Settings(BaseSettings):
 
     # DevAuthProvider token signing secret (HMAC). Real Entra ID is a seam. The
     # browser session cookie carries this same signed token — no separate secret.
-    jwt_secret: str = "dev-only-change-me"
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_ttl_seconds: int = 3600
     # Session cookie Secure flag: True (HTTPS-only) for deployments; set
     # SESSION_COOKIE_SECURE=false for local http dev so the cookie rides over http.
@@ -45,6 +54,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     ocr_model: str = "claude-sonnet-4-6"
 
+    # Google Maps Platform — mileage claims (Directions for distance + Places +
+    # Maps JS). ``google_maps_api_key`` is used SERVER-SIDE (Directions REST, key
+    # hidden) and is the authoritative distance source for reimbursement.
+    # ``google_maps_browser_key`` is the key injected into the page for Maps JS +
+    # Places (necessarily visible to the browser — restrict it by HTTP referrer in
+    # Cloud Console); falls back to ``google_maps_api_key`` if unset.
+    google_maps_api_key: str = ""
+    google_maps_browser_key: str = ""
+    # Per-km reimbursement rate (MYR). A real client overrides this; sane default.
+    mileage_rate_per_km: str = "0.60"
+
     # Spend-based EEIO fallback factor (kgCO2e per unit currency). Placeholder
     # value (decision D14); lives here so the carbon lead can revise it.
     spend_factor: str = "0.35"
@@ -53,6 +73,31 @@ class Settings(BaseSettings):
 
     # Identity is single-firm for now; real auth (Entra ID) is a deferred seam.
     default_releaser: str = "system"
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ("production", "prod")
+
+    @property
+    def dev_auth_allowed(self) -> bool:
+        """Passwordless DevAuthProvider login is permitted only outside production.
+        In production, login must go through a real credential/SSO provider."""
+        return not self.is_production
+
+    def assert_production_safe(self) -> None:
+        """Fail fast at startup if a deployment is misconfigured in a way that
+        would weaken auth. No-op in dev so local runs are unaffected."""
+        if not self.is_production:
+            return
+        problems = []
+        if self.jwt_secret == DEFAULT_JWT_SECRET:
+            problems.append("JWT_SECRET is still the committed default — set a strong secret")
+        if not self.session_cookie_secure:
+            problems.append("SESSION_COOKIE_SECURE must be true in production")
+        if problems:
+            raise RuntimeError(
+                "Insecure production configuration: " + "; ".join(problems)
+            )
 
 
 @lru_cache

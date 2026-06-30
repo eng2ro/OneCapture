@@ -10,12 +10,16 @@ from erpsync.review.routes import api_router as erpsync_api_router
 from erpsync.review.routes import web_router as erpsync_web_router
 
 from ..auth.routes import router as auth_router
+from ..config import get_settings
 from ..web.routes import WEB_DIR, router as web_router
 from .deps import NeedsLogin
 from .routes import router as api_router
 
 
 def create_app() -> FastAPI:
+    # Fail fast if a production deployment is misconfigured (default secret,
+    # insecure cookie). No-op in dev, so local runs are unaffected.
+    get_settings().assert_production_safe()
     app = FastAPI(title="OneCapture", version="0.2.0")
     app.include_router(auth_router)
     app.include_router(api_router)

@@ -98,9 +98,11 @@ def get_session_principal(
         principal = build_principal(db, claims)
     except (TokenError, KeyError, ValueError) as exc:
         raise NeedsLogin() from exc
-    # Stash on request.state so the nav context processor can show/hide the
-    # Admin section by role without threading the principal through every page.
+    # Stash the principal + session on request.state so the nav context processor
+    # can render the sidebar (Admin section, live badge counts, tenant scope)
+    # without threading either through every page.
     request.state.principal = principal
+    request.state.db = db
     return principal
 
 
@@ -125,6 +127,18 @@ def require_firm_scope(
 
 def get_ocr() -> OcrProvider:
     return AnthropicVisionProvider()
+
+
+def get_directions():
+    """Server-side Google Directions provider (authoritative mileage distance).
+    Raises MapError at call time if no key is configured; tests override this."""
+    from ..maps import GoogleDirectionsProvider
+
+    return GoogleDirectionsProvider(get_settings().google_maps_api_key)
+
+
+def get_mileage_rate() -> Decimal:
+    return Decimal(get_settings().mileage_rate_per_km)
 
 
 def get_image_dir() -> Path:

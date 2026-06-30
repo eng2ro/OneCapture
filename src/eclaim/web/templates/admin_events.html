@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Events &amp; budgets · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Events &amp; budgets{% endblock %}
+{% block content %}
+<div class="screen active" id="screen-events">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">Events &amp; budgets</h1>
+      <p class="page-sub">{{ events | length }} events · a trip or training that groups claims across people and holds a budget</p>
+    </div>
+  </div>
+
+  <div class="banner">
+    <i class="ti ti-info-circle"></i>
+    <span><strong>Events bundle related claims.</strong> Staff attach a claim to an event at capture; the event aggregates spend across everyone's claims and tracks it against a budget. Late bills for the same event are surfaced and combined on review.</span>
+  </div>
+
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">{{ 'Edit event' if editing else 'Create an event' }}</div>
+    <form method="post" action="/admin/events">
+      {% if editing %}<input type="hidden" name="event_id" value="{{ editing.id }}">{% endif %}
+      <div class="field-row">
+        <div><label class="label-tiny">Client</label>
+          <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}</select>
+        </div>
+        <div><label class="label-tiny">Title</label><input class="field" name="title" value="{{ editing.title if editing else '' }}" required></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Purpose</label><input class="field" name="purpose" value="{{ editing.purpose or '' if editing else '' }}"></div>
+        <div><label class="label-tiny">Type</label>
+          <select class="field" name="event_type">{% for et in event_types %}<option value="{{ et }}" {{ 'selected' if editing and editing.event_type == et else '' }}>{{ et }}</option>{% endfor %}</select>
+        </div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Attendees (pax)</label><input class="field" name="attendee_count" value="{{ editing.attendee_count if editing and editing.attendee_count is not none else '' }}"></div>
+        <div><label class="label-tiny">Location</label><input class="field" name="location" value="{{ editing.location or '' if editing else '' }}"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Start date</label><input class="field" type="date" name="start_date" value="{{ editing.start_date if editing and editing.start_date else '' }}"></div>
+        <div><label class="label-tiny">End date</label><input class="field" type="date" name="end_date" value="{{ editing.end_date if editing and editing.end_date else '' }}"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre" value="{{ editing.cost_centre or '' if editing else '' }}"></div>
+        <div><label class="label-tiny">Project code</label><input class="field" name="project_code" value="{{ editing.project_code or '' if editing else '' }}"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Budget (RM)</label><input class="field" name="budget_amount" value="{{ editing.budget_amount if editing and editing.budget_amount is not none else '' }}"></div>
+        <div style="display:flex;align-items:flex-end;gap:8px;">
+          <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i>{{ 'Save' if editing else 'Create event' }}</button>
+          {% if editing %}<a class="btn" href="/admin/events">Cancel</a>{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Event</th><th>Type</th><th>Dates</th>
+          <th style="text-align:right;">Budget</th><th style="text-align:right;">Spent</th>
+          <th style="text-align:right;">Remaining</th><th>Status</th><th style="width:60px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in events %}
+        {% set r = rollup.get(ev.id, {}) %}
+        <tr>
+          <td><strong>{{ ev.title }}</strong><br><span style="font-size:10px;color:var(--text-tertiary);">{% if ev.attendee_count %}{{ ev.attendee_count }} pax · {% endif %}{{ client_names.get(ev.client_id, '') }}</span></td>
+          <td>{{ ev.event_type or '—' }}</td>
+          <td style="font-size:11px;">{% if ev.start_date %}{{ ev.start_date }}{% if ev.end_date %} – {{ ev.end_date }}{% endif %}{% else %}—{% endif %}</td>
+          <td style="text-align:right;">{{ '%.2f' | format(ev.budget_amount) if ev.budget_amount is not none else '—' }}</td>
+          <td style="text-align:right;">{{ '%.2f' | format(r.get('spent')) if r.get('spent') is not none else '0.00' }}</td>
+          <td style="text-align:right;color:{{ 'var(--red-neg)' if r.get('over') else 'inherit' }};">{{ '%.2f' | format(r.get('remaining')) if r.get('remaining') is not none else '—' }}</td>
+          <td><span class="badge {{ 'success' if ev.status == 'active' else 'neutral' }}">{{ ev.status }}</span></td>
+          <td><a href="/admin/events?edit={{ ev.id }}" title="Edit"><i class="ti ti-edit" style="color:var(--text-tertiary);"></i></a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-tertiary);">No events yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
