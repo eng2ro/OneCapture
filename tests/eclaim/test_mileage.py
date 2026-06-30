@@ -103,7 +103,7 @@ def test_preview_returns_alternatives_recommended_first(client, monkeypatch):
                     data={"origin": "A", "destination": "B", "waypoints": "[]"})
     body = r.json()
     assert body["ok"] is True
-    assert body["recommended_km"] == "38.200"
+    assert body["shortest_km"] == "38.200"
     assert [x["distance_km"] for x in body["routes"]] == ["38.200", "45.000"]
     assert body["routes"][1]["description"] == "via Federal Hwy"
 
@@ -123,8 +123,8 @@ def test_chosen_longer_route_is_reimbursed_and_flagged(client, db_session, monke
     line = db_session.execute(select(ClaimLine)).scalar_one()
     assert line.quantity == Decimal("45.000")            # chosen route reimbursed
     assert line.total_amount == Decimal("27.00")         # 45.000 km × RM 0.60/km
-    assert line.mileage["recommended_km"] == "38.200"
-    assert line.mileage["over_recommended"] is True
+    assert line.mileage["shortest_km"] == "38.200"
+    assert line.mileage["over_shortest"] is True
     assert line.mileage["route_description"] == "via Federal Hwy"
 
 
@@ -137,7 +137,7 @@ def test_recommended_route_not_flagged(client, db_session, monkeypatch):
                 follow_redirects=False)   # route_index defaults to 0 (recommended)
     line = db_session.execute(select(ClaimLine)).scalar_one()
     assert line.quantity == Decimal("38.200")
-    assert line.mileage["over_recommended"] is False
+    assert line.mileage["over_shortest"] is False
 
 
 def test_mileage_requires_from_and_to(client, db_session, monkeypatch):

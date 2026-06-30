@@ -401,7 +401,7 @@ function resetMileageEntry() {
   var stops = document.getElementById("m-stops"); if (stops) stops.innerHTML = "";
   document.getElementById("m-waypoints").value = "[]";
   document.getElementById("m-route-index").value = "0";
-  _routeOpts = []; _recommendedKm = 0;
+  _routeOpts = []; _shortestKm = 0;
   renderAlts();
   var img = document.getElementById("m-map-img"); if (img) img.style.display = "none";
   var note = document.getElementById("m-summary"); if (note) note.textContent = "Enter From, To and a trip date.";
@@ -484,7 +484,7 @@ function attachAuto(input) {
   });
 }
 
-var _routeOpts = [], _recommendedKm = 0;   // alternatives for the current route
+var _routeOpts = [], _shortestKm = 0;   // alternatives for the current route
 var MRATE = parseFloat("{{ mileage_rate }}");
 function mEsc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
@@ -493,8 +493,8 @@ function mEsc(s) {
 }
 // Overage vs Google's recommended (shortest) route, in %, or 0 if within tolerance.
 function overPct(km) {
-  if (!_recommendedKm || km - _recommendedKm <= 0.1) return 0;
-  return (km - _recommendedKm) / _recommendedKm * 100;
+  if (!_shortestKm || km - _shortestKm <= 0.1) return 0;
+  return (km - _shortestKm) / _shortestKm * 100;
 }
 
 function recompute() {
@@ -523,9 +523,10 @@ function recompute() {
           _routeOpts = []; renderAlts(); return;
         }
         _routeOpts = d.routes || [];
-        _recommendedKm = parseFloat(d.recommended_km);
-        // Editing the route invalidates any prior pick — reset to recommended.
-        selectRoute(0);
+        _shortestKm = parseFloat(d.shortest_km);
+        // Editing the route invalidates any prior pick — default to the SHORTEST
+        // (cheapest) route; the claimant can switch to a longer one they actually drove.
+        selectRoute(shortestIndex());
         renderAlts();
       })
       .catch(function () { note.textContent = "Route lookup failed."; submit.disabled = true; });
@@ -544,7 +545,7 @@ function selectRoute(i) {
   var vias = (r.stops && r.stops > 2) ? r.stops - 2 : 0;   // stops = endpoints + vias
   var txt = km.toFixed(1) + " km" + (vias ? " · " + vias + " stop" + (vias === 1 ? "" : "s") : "") +
             " · RM " + (km * MRATE).toFixed(2);
-  if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over recommended";
+  if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over shortest";
   note.textContent = txt;
   submit.disabled = false;
   drawRoute(r.polyline);
@@ -567,13 +568,20 @@ function selectRoute(i) {
   });
 }
 
+// Index of the shortest (cheapest) route among the options.
+function shortestIndex() {
+  var idx = 0, best = Infinity;
+  _routeOpts.forEach(function (r, i) { var k = parseFloat(r.distance_km); if (k < best) { best = k; idx = i; } });
+  return idx;
+}
+
 // Render the route picker — only when Google returned >1 option (direct trips; it
-// never returns alternatives once there's a stop). Recommended is always first.
+// never returns alternatives once there's a stop). Sorted cheapest-first; the
+// shortest is badged and the rest show how much extra distance/cost they add.
 function renderAlts() {
   var wrap = document.getElementById("m-alts");
   if (!wrap) return;
   if (!_routeOpts.length) { wrap.hidden = true; wrap.innerHTML = ""; return; }
-  // Google returns alternatives only when they exist (and only for a direct trip).
   // Show a small note for a single route so it doesn't look like the picker is missing.
   if (_routeOpts.length === 1) {
     wrap.hidden = false;
@@ -581,15 +589,21 @@ function renderAlts() {
     return;
   }
   var sel = parseInt(document.getElementById("m-route-index").value, 10) || 0;
+  // Sort by distance ascending; keep each route's ORIGINAL index (the route_index the
+  // server reimburses on) in data-i so the order is purely a display concern.
+  var order = _routeOpts.map(function (r, i) { return { r: r, i: i, km: parseFloat(r.distance_km) }; })
+                        .sort(function (a, b) { return a.km - b.km; });
+  var minKm = order[0].km;
   wrap.hidden = false;
   wrap.innerHTML = '<div class="label-tiny" style="margin-bottom:6px;">Choose the route you drove — we reimburse the one you pick</div>' +
-    _routeOpts.map(function (r, i) {
-      var km = parseFloat(r.distance_km), pct = overPct(km);
-      var label = i === 0 ? "Recommended" : (r.description || ("Alternative " + i));
-      var badge = pct ? '<span class="alt-flag">+' + pct.toFixed(0) + '%</span>'
-                      : (i === 0 ? '<span class="alt-best">shortest</span>' : '');
-      return '<label class="alt' + (i === sel ? ' sel' : '') + '" data-i="' + i + '">' +
-        '<input type="radio" name="m-alt"' + (i === sel ? ' checked' : '') + '>' +
+    order.map(function (o) {
+      var km = o.km, extra = km - minKm;
+      var label = o.r.description || ("Route " + (o.i + 1));
+      var badge = extra <= 0.1
+        ? '<span class="alt-best">shortest · cheapest</span>'
+        : '<span class="alt-flag">+' + (extra / minKm * 100).toFixed(0) + '% · +RM ' + (extra * MRATE).toFixed(2) + '</span>';
+      return '<label class="alt' + (o.i === sel ? ' sel' : '') + '" data-i="' + o.i + '">' +
+        '<input type="radio" name="m-alt"' + (o.i === sel ? ' checked' : '') + '>' +
         '<span class="alt-main">' + mEsc(label) + '</span>' +
         '<span class="alt-km">' + km.toFixed(1) + ' km · RM ' + (km * MRATE).toFixed(2) + ' ' + badge + '</span>' +
         '</label>';

@@ -437,11 +437,11 @@ async def web_capture(
             ridx = 0
         try:
             with repos.session.begin_nested():
-                route, recommended_km = _resolve_route(origin, destination, wps, ridx)
+                route, shortest_km = _resolve_route(origin, destination, wps, ridx)
                 _service.add_mileage_line(
                     repos=repos, claim=claim, origin=origin, destination=destination,
                     waypoints=wps, route=route, date=sdate or None,
-                    rate=deps.get_mileage_rate(), recommended_km=recommended_km,
+                    rate=deps.get_mileage_rate(), shortest_km=shortest_km,
                 )
             added += 1
         except (MapError, ClaimError, ValueError) as exc:
@@ -465,12 +465,14 @@ def _parse_int(value: str, default: int = 0) -> int:
 
 def _resolve_route(origin: str, destination: str, wps: list[str], route_index: int):
     """Authoritatively compute the route the claimant chose. Returns
-    ``(chosen, recommended_km)``: ``recommended_km`` is always Google's recommended
-    route (``routes[0]``) — the cap the chosen route is flagged against. Alternatives
-    only exist for a direct trip; an out-of-range index falls back to recommended."""
+    ``(chosen, shortest_km)``: ``shortest_km`` is the SHORTEST route's distance among
+    the options (the cheapest to reimburse) — the baseline a longer chosen route is
+    flagged against. (Google's ``routes[0]`` is the fastest by time, which can be
+    longer than the shortest, so it is NOT the baseline.) Alternatives only exist for
+    a direct trip; an out-of-range index falls back to the first route."""
     options = deps.get_directions().routes(origin, destination, wps)
     idx = route_index if 0 <= route_index < len(options) else 0
-    return options[idx], options[0].distance_km
+    return options[idx], min(o.distance_km for o in options)
 
 
 @router.post("/capture/mileage/preview")
@@ -499,7 +501,7 @@ def web_mileage_preview(
         return JSONResponse({"ok": False, "error": str(exc)})
     return JSONResponse({
         "ok": True,
-        "recommended_km": str(options[0].distance_km),
+        "shortest_km": str(min(o.distance_km for o in options)),
         "routes": [
             {
                 "distance_km": str(r.distance_km),
@@ -545,7 +547,7 @@ def web_capture_mileage(
         return _render_capture(request, _capture_categories(repos), _events_for(repos),
                                "A trip date is required for a mileage claim.", form)
     try:
-        route, recommended_km = _resolve_route(
+        route, shortest_km = _resolve_route(
             origin.strip(), destination.strip(), wps, _parse_int(route_index))
     except MapError as exc:
         return _render_capture(request, _capture_categories(repos), _events_for(repos),
@@ -565,7 +567,7 @@ def web_capture_mileage(
         _service.add_mileage_line(
             repos=repos, claim=claim, origin=origin.strip(), destination=destination.strip(),
             waypoints=wps, route=route, date=trip_date or None,
-            rate=deps.get_mileage_rate(), recommended_km=recommended_km,
+            rate=deps.get_mileage_rate(), shortest_km=shortest_km,
         )
     except (ClaimError, ValueError) as exc:
         repos.session.rollback()
@@ -1077,7 +1079,7 @@ def web_add_mileage(
         return _render_review(request, repos, principal, claim_id,
                               error="A mileage line needs a trip date.")
     try:
-        route, recommended_km = _resolve_route(
+        route, shortest_km = _resolve_route(
             origin.strip(), destination.strip(), wps, _parse_int(route_index))
     except MapError as exc:
         return _render_review(request, repos, principal, claim_id,
@@ -1088,7 +1090,7 @@ def web_add_mileage(
             repos=repos, claim_id=claim_id, origin=origin.strip(),
             destination=destination.strip(), waypoints=wps, route=route,
             date=trip_date or None, rate=deps.get_mileage_rate(), actor=_actor(principal),
-            principal=principal, recommended_km=recommended_km,
+            principal=principal, shortest_km=shortest_km,
         ),
     )
 

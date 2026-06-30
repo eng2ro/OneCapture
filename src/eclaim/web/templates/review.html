@@ -647,11 +647,11 @@ function showLine(lineId, lineNo, row) {
         ' · <strong>' + mil.distance_km + ' km</strong> @ RM ' + mil.rate_per_km + '/km';
       // Claimant picked a route longer than Google's recommended one — flag it so the
       // approver can scrutinise the detour before approving (we still pay the chosen).
-      if (mil.over_recommended && mil.recommended_km) {
-        var ck = parseFloat(mil.distance_km), rk = parseFloat(mil.recommended_km);
+      if (mil.over_shortest && mil.shortest_km) {
+        var ck = parseFloat(mil.distance_km), rk = parseFloat(mil.shortest_km);
         var pct = rk ? ((ck - rk) / rk * 100).toFixed(0) : "";
         html += '<span style="color:#b45309;font-weight:600;"> · ⚠ +' + pct +
-          '% over recommended (' + mil.recommended_km + ' km)</span>';
+          '% over shortest (' + mil.shortest_km + ' km)</span>';
       }
       routeEl.innerHTML = html;
     }
@@ -754,10 +754,10 @@ function amDrawRoute(polyline) {
 // preview returns the recommended route first plus alternatives for a direct trip;
 // the picker lets the claimant choose the one they drove (we reimburse that one and
 // flag a longer-than-recommended route).
-var _amRouteOpts = [], _amRecommendedKm = 0;
+var _amRouteOpts = [], _amShortestKm = 0;
 function amOverPct(km) {
-  if (!_amRecommendedKm || km - _amRecommendedKm <= 0.1) return 0;
-  return (km - _amRecommendedKm) / _amRecommendedKm * 100;
+  if (!_amShortestKm || km - _amShortestKm <= 0.1) return 0;
+  return (km - _amShortestKm) / _amShortestKm * 100;
 }
 function amSelectRoute(i) {
   if (!_amRouteOpts.length) return;
@@ -768,7 +768,7 @@ function amSelectRoute(i) {
   var km = parseFloat(r.distance_km), pct = amOverPct(km);
   var vias = (r.stops && r.stops > 2) ? r.stops - 2 : 0;
   var txt = km.toFixed(1) + " km" + (vias ? " · " + vias + " stop" + (vias === 1 ? "" : "s") : "");
-  if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over recommended";
+  if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over shortest";
   if (dist) dist.textContent = txt;
   amDrawRoute(r.polyline);
   var wrap = document.getElementById("am-alts");
@@ -789,15 +789,19 @@ function amRenderAlts() {
   var sel = parseInt((document.getElementById("am-route-index") || {}).value, 10) || 0;
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  var order = _amRouteOpts.map(function (r, i) { return { r: r, i: i, km: parseFloat(r.distance_km) }; })
+                          .sort(function (a, b) { return a.km - b.km; });
+  var minKm = order[0].km;
   wrap.hidden = false;
   wrap.innerHTML = '<div class="label-tiny" style="margin-bottom:6px;">Choose the route you drove — we reimburse the one you pick</div>' +
-    _amRouteOpts.map(function (r, i) {
-      var km = parseFloat(r.distance_km), pct = amOverPct(km);
-      var label = i === 0 ? "Recommended" : (r.description || ("Alternative " + i));
-      var badge = pct ? '<span class="alt-flag">+' + pct.toFixed(0) + '%</span>'
-                      : (i === 0 ? '<span class="alt-best">shortest</span>' : '');
-      return '<label class="alt' + (i === sel ? ' sel' : '') + '" data-i="' + i + '">' +
-        '<input type="radio" name="am-alt"' + (i === sel ? ' checked' : '') + '>' +
+    order.map(function (o) {
+      var km = o.km, extra = km - minKm;
+      var label = o.r.description || ("Route " + (o.i + 1));
+      var badge = extra <= 0.1
+        ? '<span class="alt-best">shortest · cheapest</span>'
+        : '<span class="alt-flag">+' + (extra / minKm * 100).toFixed(0) + '%</span>';
+      return '<label class="alt' + (o.i === sel ? ' sel' : '') + '" data-i="' + o.i + '">' +
+        '<input type="radio" name="am-alt"' + (o.i === sel ? ' checked' : '') + '>' +
         '<span class="alt-main">' + esc(label) + '</span>' +
         '<span class="alt-km">' + km.toFixed(1) + ' km ' + badge + '</span>' +
         '</label>';
@@ -805,6 +809,11 @@ function amRenderAlts() {
   wrap.querySelectorAll(".alt").forEach(function (el) {
     el.addEventListener("click", function () { amSelectRoute(+el.getAttribute("data-i")); });
   });
+}
+function amShortestIndex() {
+  var idx = 0, best = Infinity;
+  _amRouteOpts.forEach(function (r, i) { var k = parseFloat(r.distance_km); if (k < best) { best = k; idx = i; } });
+  return idx;
 }
 
 // Live route preview in the add-mileage modal: compute the distance server-side
@@ -832,13 +841,13 @@ function amPreview() {
       .then(function (r) { return r.json(); })
       .then(function (d) {
         _amRouteOpts = (d.ok && d.routes) || [];
-        _amRecommendedKm = parseFloat(d.recommended_km);
+        _amShortestKm = parseFloat(d.shortest_km);
         if (!_amRouteOpts.length) {
           if (dist) dist.textContent = (d && d.error) || "No route found.";
           if (map) map.style.display = "none";
           amRenderAlts(); return;
         }
-        amSelectRoute(0);   // recommended first; the picker lets the user switch
+        amSelectRoute(amShortestIndex());   // default to the cheapest; user can switch
         amRenderAlts();
       })
       .catch(function () { if (dist) dist.textContent = "Route lookup failed."; });

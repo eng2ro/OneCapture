@@ -317,7 +317,7 @@ class ClaimService:
         rate: Decimal,
         category_id: uuid.UUID | None = None,
         payment_method: str = "out_of_pocket",
-        recommended_km: Decimal | None = None,
+        shortest_km: Decimal | None = None,
     ) -> ClaimLine:
         """Append a MILEAGE line — no receipt, the route is the evidence. The server
         passes the AUTHORITATIVE distance (``route`` from the Directions provider);
@@ -325,16 +325,16 @@ class ClaimService:
         forwarded to CarbonNext (Mileage is carbon-relevant). The route detail lives
         in the ``mileage`` jsonb for the audit pack and the map view.
 
-        When the claimant chose a route longer than Google's recommended one,
-        ``recommended_km`` is the recommended distance; we keep it and flag the
-        overage so the approver sees a claimant took a longer-than-suggested route
-        (we still reimburse the chosen route — policy: pay chosen, flag if longer)."""
+        ``shortest_km`` is the distance of the SHORTEST route Google offered for the
+        same trip (the cheapest to reimburse). When the claimant picked a longer
+        route we keep it and flag the overage, so the approver sees they took a
+        longer-than-necessary route (policy: pay chosen, flag if longer)."""
         km = route.distance_km
         amount = (km * rate).quantize(Decimal("0.01"))
-        # Flag only a material overage (ignore sub-100 m rounding noise between a
-        # fresh recompute and the previewed alternative).
-        over_recommended = (
-            recommended_km is not None and (km - recommended_km) > Decimal("0.1")
+        # Flag only a material overage vs the shortest route (ignore sub-100 m
+        # rounding noise between a fresh recompute and the previewed alternative).
+        over_shortest = (
+            shortest_km is not None and (km - shortest_km) > Decimal("0.1")
         )
         if category_id is not None:
             category = repos.categories.get_by_id(category_id)
@@ -366,8 +366,8 @@ class ClaimService:
                 "rate_per_km": str(rate),
                 "polyline": route.polyline,
                 "legs": route.legs,
-                "recommended_km": (str(recommended_km) if recommended_km is not None else None),
-                "over_recommended": over_recommended,
+                "shortest_km": (str(shortest_km) if shortest_km is not None else None),
+                "over_shortest": over_shortest,
                 "route_description": getattr(route, "description", None),
             },
             payment_method=payment_method,
@@ -393,7 +393,7 @@ class ClaimService:
         rate: Decimal,
         actor: str,
         principal: "Principal | None" = None,
-        recommended_km: Decimal | None = None,
+        shortest_km: Decimal | None = None,
     ) -> ClaimLine:
         """Add a mileage line to an EXISTING editable claim (the review screen / a
         mixed receipts+mileage claim). Same editability rule as :meth:`edit`; the
@@ -407,7 +407,7 @@ class ClaimService:
         line = self.add_mileage_line(
             repos=repos, claim=claim, origin=origin, destination=destination,
             waypoints=waypoints, route=route, date=date, rate=rate,
-            recommended_km=recommended_km,
+            shortest_km=shortest_km,
         )
         record_event(
             repos.audit,

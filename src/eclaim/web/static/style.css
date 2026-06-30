@@ -543,7 +543,7 @@ input.field:focus, select.field:focus { border-color: var(--focus-ring); box-sha
 
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 
-/* Capture page: section headings + mileage entry card */
+/* Capture page: section headings + mileage entry card (full-page width) */
 .cap-head {
   font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
   color: var(--text-secondary); margin: 22px 0 8px;
@@ -898,6 +898,9 @@ input.field:focus, select.field:focus { border-color: var(--focus-ring); box-sha
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 12px; font-size: 12px; font-weight: 500; color: var(--text-secondary);
 }
+/* The class sets display:flex, which would otherwise beat the [hidden] attribute —
+   honour hidden so the "add more" bar shows ONLY once receipts have been added. */
+.dropzone-compact[hidden] { display: none; }
 .dropzone-compact i { font-size: 16px; color: var(--olive); }
 /* Optional-details disclosure on the capture form (purpose / remarks). */
 .more-opts > summary {
