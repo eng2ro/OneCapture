@@ -2,9 +2,130 @@
 {% block title %}Submit expense claims · OneCapture e-Claim{% endblock %}
 {% block topbar_sub %}Submit expense claims{% endblock %}
 {% block content %}
-<div class="screen active" id="screen-submit">
-  <h1 class="page-title">Submit an expense claim</h1>
-  <p class="page-sub">Drop receipts and/or add mileage trips — each becomes a line on the same claim — then verify the lines on the next screen.</p>
+<style>
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap");
+.capx{
+  --paper:#fff;--rail:#f7f8f6;--ink:#171715;--ink-2:#3f423c;--graphite:#6b6e66;--faint:#9a9d94;
+  --rule:#e1e1db;--rule-2:#edebe6;--rule-strong:#cfcfc8;
+  --pine:#1f5d44;--pine-2:#184832;--pine-tint:#e9f1ec;--pine-line:#bcd6c8;
+  --rust:#9a4a1f;--rust-tint:#f7ece2;--grey-tint:#f1f1ed;
+  --serif:'Source Serif 4',Georgia,serif;--sans:'Public Sans',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+  --r:5px;--r-lg:8px;
+  font-family:var(--sans);color:var(--ink);font-size:13.5px;line-height:1.45;-webkit-font-smoothing:antialiased;
+}
+.capx [hidden]{display:none!important}
+.capx b{font-weight:600}
+/* claim head */
+.cap-chead{margin-bottom:18px}
+.cap-cmeta-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px}
+.cap-stamp{font-size:9.5px;font-weight:700;letter-spacing:.13em;text-transform:uppercase;padding:3px 8px;border:1px solid;border-radius:4px;display:inline-flex;align-items:center;gap:6px}
+.cap-stamp.st-grey{color:var(--graphite);border-color:var(--rule);background:var(--grey-tint)}
+.cap-stamp.st-pine{color:var(--pine-2);border-color:var(--pine-line);background:var(--pine-tint)}
+.cap-h1{font-family:var(--serif);font-size:24px;font-weight:600;letter-spacing:-.018em;margin:0;color:var(--ink)}
+.cap-sub{font-size:13px;color:var(--graphite);margin:6px 0 0;max-width:620px}
+.cap-chead{display:flex;align-items:flex-start;gap:20px}
+.cap-cmeta{flex:1;min-width:0}
+.cap-stepper{display:flex;align-items:center;flex:none;padding-top:4px}
+.cap-step{display:flex;align-items:center;gap:8px;color:var(--faint)}
+.cap-step .sd{width:25px;height:25px;border-radius:50%;border:1.5px solid var(--rule-strong);display:grid;place-items:center;font-family:var(--mono);font-size:11px;color:var(--faint)}
+.cap-step .sl{font-size:11.5px;font-weight:600}
+.cap-step.on{color:var(--ink)}
+.cap-step.on .sd{background:var(--pine);border-color:var(--pine);color:#fff}
+.cap-step-conn{width:26px;height:1.5px;background:var(--rule);margin:0 11px}
+/* sheet */
+.cap-sheet{background:var(--paper);border:1px solid var(--rule);border-radius:var(--r-lg);box-shadow:0 1px 1px rgba(20,22,18,.03),0 14px 40px rgba(20,22,18,.05)}
+.cap-block{padding:22px 26px}
+.cap-block+.cap-block{border-top:1px solid var(--rule)}
+.cap-block-h{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.cap-ref{font-family:var(--mono);font-size:11px;color:var(--faint);border:1px solid var(--rule);border-radius:4px;padding:2px 6px}
+.cap-eyebrow{font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:-.01em;color:var(--ink)}
+.cap-badge{font-family:var(--mono);font-size:11px;background:var(--pine-tint);color:var(--pine-2);border-radius:5px;padding:2px 7px}
+.cap-hint{margin-left:auto;font-size:12px;color:var(--graphite);display:flex;align-items:center;gap:7px}
+.cap-hint .ti{color:var(--pine)}
+/* form fields (restyled) */
+.capx .field-row{display:grid;grid-template-columns:1fr 1fr;gap:15px 20px;margin-bottom:0}
+.capx .field-row+.field-row{margin-top:15px}
+.capx .label-tiny{display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;margin-bottom:6px}
+.capx .field{width:100%;height:42px;border:1px solid var(--rule);border-radius:var(--r);background:var(--paper);padding:0 12px;font-size:13.5px;color:var(--ink)}
+.capx textarea.field,.capx .field[type=date]{height:42px}
+.capx .field::placeholder{color:var(--faint)}
+.capx .field:focus{outline:none;border-color:var(--pine-line);box-shadow:0 0 0 3px var(--pine-tint)}
+.capx select.field{appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b6e66' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 11px center}
+.capx .more-opts{margin-top:15px}
+.capx .more-opts>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--pine-2)}
+.capx .more-opts>summary::-webkit-details-marker{display:none}
+#newtrip-row{margin-top:15px;padding:14px;border:1px dashed var(--rule-strong);border-radius:var(--r);background:var(--rail)}
+/* dropzone */
+.capx .dropzone{display:flex;flex-direction:column;align-items:center;text-align:center;border:2px dashed var(--rule-strong);border-radius:10px;background:var(--rail);padding:30px 22px;cursor:pointer;min-height:0;transition:border-color .15s,background .15s}
+.capx .dropzone:hover,.capx .dropzone.drag{border-color:var(--pine-line);background:var(--pine-tint)}
+.capx .dropzone-empty{padding:0;text-align:center}
+.capx .dropzone-empty>.ti{font-size:30px;color:var(--pine);width:54px;height:54px;border-radius:13px;background:var(--paper);border:1px solid var(--rule);display:grid;place-items:center;margin:0 auto 14px}
+.capx .dz-title{font-family:var(--serif);font-size:16px;font-weight:600;margin:0;color:var(--ink)}
+.capx .dz-hint{font-size:12px;color:var(--graphite);margin-top:5px}
+.capx .dropzone-compact{display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.capx .dropzone-compact[hidden]{display:none!important}
+.capx .dropzone-compact .ti{color:var(--pine)}
+.capx .dropzone.compact{padding:0;border-style:dashed}
+/* receipt + trip rows (rendered by JS) */
+.capx .receipt-list{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+.capx .receipt-card{display:flex;align-items:center;gap:13px;padding:11px 13px;border:1px solid var(--rule);border-radius:var(--r);background:var(--paper)}
+.capx .rc-thumb{width:38px;height:46px;border-radius:5px;object-fit:cover;background:var(--grey-tint);border:1px solid var(--rule);color:var(--graphite);flex:none}
+.capx .rc-body{flex:1;min-width:0}
+.capx .rc-name{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.capx .rc-tags{margin-top:4px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.capx .rc-cat,.capx .rc-chip{font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--graphite);background:var(--grey-tint);border:1px solid var(--rule);border-radius:4px;padding:2px 7px;display:inline-flex;align-items:center;gap:5px}
+.capx .rc-cat.none,.capx .rc-chip.warn{color:var(--rust);background:var(--rust-tint);border-color:var(--rust-tint)}
+.capx .rc-cat i,.capx .rc-chip i{font-size:11px}
+.capx .rc-amount{font-family:var(--serif);font-size:16px;font-weight:600;font-variant-numeric:tabular-nums;flex:none;white-space:nowrap}
+.capx .rc-remove{width:30px;height:30px;border:none;background:none;border-radius:var(--r);color:var(--faint);cursor:pointer;font-size:18px;line-height:1;flex:none}
+.capx .rc-remove:hover{background:var(--rust-tint);color:var(--rust)}
+.capx .spinner{width:11px;height:11px;border:2px solid var(--pine-line);border-top-color:var(--pine);border-radius:50%;display:inline-block;animation:capspin .7s linear infinite}
+@keyframes capspin{to{transform:rotate(360deg)}}
+/* mileage */
+.capx .mileage-entry{border:1px solid var(--rule);border-radius:var(--r);background:var(--paper);padding:17px;box-shadow:inset 0 0 0 1px var(--pine-tint);margin-bottom:0}
+.capx .mileage-entry .card-title{font-family:var(--serif);font-weight:600}
+.capx .btn-add-line{width:100%;height:48px;border:1.5px dashed var(--rule-strong);border-radius:var(--r);background:var(--rail);display:flex;align-items:center;justify-content:center;gap:9px;font-size:13px;font-weight:600;color:var(--ink-2);cursor:pointer;margin-top:14px}
+.capx .btn-add-line:hover{border-color:var(--pine-line);color:var(--pine-2);background:var(--pine-tint)}
+.capx .btn{height:38px;padding:0 15px;border-radius:var(--r);display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;border:1px solid var(--rule);background:var(--paper);color:var(--ink-2);cursor:pointer}
+.capx .btn:hover{background:var(--rail);border-color:var(--rule-strong)}
+.capx .btn-accent{background:var(--pine);border-color:var(--pine);color:#fff}
+.capx .btn-accent:hover{background:var(--pine-2)}
+.capx .btn-accent:disabled{background:#dadbd6;border-color:#dadbd6;color:#9b9e96;cursor:not-allowed}
+.capx .route-alts{margin-top:14px;display:flex;flex-direction:column;gap:7px}
+.capx .route-alts .alt{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--rule);border-radius:var(--r);cursor:pointer;font-size:13px;background:var(--paper)}
+.capx .route-alts .alt:hover{border-color:var(--pine-line)}
+.capx .route-alts .alt.sel{border-color:var(--pine);box-shadow:0 0 0 1px var(--pine) inset}
+.capx .route-alts .alt input{accent-color:var(--pine);margin:0}
+.capx .route-alts .alt-main{font-weight:600}
+.capx .route-alts .alt-km{margin-left:auto;color:var(--graphite);white-space:nowrap;font-variant-numeric:tabular-nums}
+.capx .route-alts .alt-flag{color:var(--rust);font-weight:600}
+.capx .route-alts .alt-best{color:var(--pine-2);font-weight:600}
+.capx .bar-note{font-size:12.5px;color:var(--graphite)}
+/* action bar */
+.capx .capture-bar{position:sticky;bottom:0;margin-top:18px;background:rgba(255,255,255,.94);backdrop-filter:saturate(1.3) blur(8px);border:1px solid var(--rule);border-radius:var(--r-lg);padding:13px 20px;display:flex;align-items:center;gap:16px;box-shadow:0 8px 28px rgba(20,22,18,.07)}
+.capx .capture-bar .bar-note{font-family:var(--serif);font-size:15px;font-weight:600;color:var(--ink-2)}
+.capx .capture-bar .btn{height:44px;padding:0 20px;margin-left:auto}
+@media(max-width:1080px){.cap-stepper{display:none}.capx .field-row{grid-template-columns:1fr}}
+</style>
+
+<div class="capx" id="screen-submit">
+  <div class="cap-chead">
+    <div class="cap-cmeta">
+      <div class="cap-cmeta-top">
+        <span class="cap-stamp st-grey"><i class="ti ti-pencil"></i> Draft</span>
+        {% if scope_name %}<span class="cap-stamp st-pine">{{ scope_name }}</span>{% endif %}
+      </div>
+      <h1 class="cap-h1">Submit an expense claim</h1>
+      <p class="cap-sub">Drop receipts and/or add mileage trips — <b>each becomes a line on the same claim</b> — then verify the lines on the next screen.</p>
+    </div>
+    <div class="cap-stepper">
+      <div class="cap-step on"><span class="sd">1</span><span class="sl">Capture</span></div>
+      <span class="cap-step-conn"></span>
+      <div class="cap-step"><span class="sd">2</span><span class="sl">Verify</span></div>
+      <span class="cap-step-conn"></span>
+      <div class="cap-step"><span class="sd">3</span><span class="sl">Release</span></div>
+    </div>
+  </div>
 
   {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
   {% if not categories %}
@@ -15,126 +136,131 @@
     <input type="hidden" name="items" id="f-items" value="[]">
     <input type="hidden" name="mileage" id="f-mileage" value="[]">
 
-    <div class="field-row" style="margin-bottom:12px;">
-      <div><label class="label-tiny">Claim title (optional)</label>
-        <input class="field" name="title" value="{{ form.get('title', '') }}" placeholder="e.g. KL client trip — Mar"></div>
-      <div><label class="label-tiny">Claim type</label>
-        <select class="field" name="claim_type" id="f-claim-type" required>
-          {% for ct in claim_types %}
-          <option value="{{ ct }}" {{ 'selected' if form.get('claim_type', 'general') == ct else '' }}>{{ ct.replace('_', ' ') | capitalize }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
-
-    <div class="field-row" style="margin-bottom:12px;">
-      <div><label class="label-tiny">Event / trip (optional)</label>
-        <select class="field" name="event_id" id="f-event">
-          <option value="">— none —</option>
-          {% for ev in events %}<option value="{{ ev.id }}" {{ 'selected' if form.get('event_id') == (ev.id | string) else '' }}>{{ ev.title }}</option>{% endfor %}
-          <option value="__new__" {{ 'selected' if form.get('event_id') == '__new__' else '' }}>+ New trip…</option>
-        </select>
-      </div>
-      <div></div>
-    </div>
-
-    {# Standalone non-general claim → ask for the date range the approver checks
-       against (per-diem, late submission, duplicates). Hidden for General and when
-       an event is attached (the event supplies the dates). Toggled by the script. #}
-    <div class="field-row" style="margin-bottom:12px;" id="date-row" hidden>
-      <div><label class="label-tiny">Start date</label>
-        <input class="field" type="date" name="start_date" id="f-start" value="{{ form.get('start_date', '') }}"></div>
-      <div><label class="label-tiny">End date</label>
-        <input class="field" type="date" name="end_date" id="f-end" value="{{ form.get('end_date', '') }}"></div>
-    </div>
-
-    {# Inline "+ New trip": title + dates only; the manager sets the budget later
-       under Manage → Events. Shown only when "+ New trip…" is chosen. #}
-    <div id="newtrip-row" hidden style="margin-bottom:12px;padding:12px;border:1px dashed var(--border);border-radius:10px;">
-      <div class="label-tiny" style="margin-bottom:8px;"><i class="ti ti-map-pin"></i> New trip — staff create it here; budget is added later under Manage → Events.</div>
-      <div class="field-row">
-        <div><label class="label-tiny">Trip title</label>
-          <input class="field" name="new_event_title" id="f-nt-title" placeholder="e.g. KL — Sales Training"></div>
-        <div></div>
-      </div>
-      <div class="field-row" style="margin-top:8px;">
-        <div><label class="label-tiny">Trip start</label><input class="field" type="date" name="new_event_start" id="f-nt-start"></div>
-        <div><label class="label-tiny">Trip end</label><input class="field" type="date" name="new_event_end" id="f-nt-end"></div>
-      </div>
-    </div>
-
-    {# Optional details — kept out of the way so the capture screen stays simple.
-       Purpose (business justification, posts to ERP) + Remarks (internal). The
-       accounting posting date is set later by finance on the claim header. #}
-    <details class="more-opts" style="margin-bottom:12px;">
-      <summary><i class="ti ti-plus"></i> Add purpose &amp; remarks (optional)</summary>
-      <div style="margin-top:10px;">
-        <div style="margin-bottom:10px;"><label class="label-tiny">Purpose</label>
-          <input class="field" name="purpose" value="{{ form.get('purpose', '') }}" placeholder="Business justification — why this spend happened"></div>
-        <div><label class="label-tiny">Remarks</label>
-          <input class="field" name="remarks" value="{{ form.get('remarks', '') }}" placeholder="Any internal note — not posted to the ERP"></div>
-      </div>
-    </details>
-
-    <div class="cap-head"><i class="ti ti-receipt"></i> Receipts</div>
-    <label class="dropzone" for="file" id="dropzone">
-      <div class="dropzone-empty" id="dz-empty">
-        <i class="ti ti-cloud-upload"></i>
-        <div class="dz-title">Drag receipts here or browse</div>
-        <div class="dz-hint">JPG · PNG · WebP — add as many as you like (optional)</div>
-      </div>
-      <div class="dropzone-compact" id="dz-compact" hidden>
-        <i class="ti ti-plus"></i> <span>Drop or browse to add more receipts</span>
-      </div>
-      <input type="file" id="file" name="files" accept="image/png,image/jpeg,image/webp" multiple hidden>
-    </label>
-
-    <div id="receipt-list" class="receipt-list"></div>
-
-    {# Mileage trips on THIS claim — each added trip becomes a mileage line, sent
-       alongside the receipts in one submit. The route entry is a panel (not a
-       nested form); JS stores each added trip in the hidden f-mileage field. #}
-    <div class="cap-head"><i class="ti ti-map-2"></i> Mileage trips</div>
-    <div class="mileage-section">
-      <div id="mileage-list" class="receipt-list"></div>
-      <div id="mileage-entry" hidden class="mileage-entry">
-        <div class="card-title" style="margin:0 0 12px;font-size:13px;"><i class="ti ti-map-pin"></i> New mileage trip</div>
-        {% if not maps_key %}
-        <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Google Maps isn't configured — type addresses manually; the server still computes the distance once <code>GOOGLE_MAPS_API_KEY</code> has the Routes API enabled.</div>
-        {% endif %}
-        <input type="hidden" id="m-waypoints" value="[]">
-        <input type="hidden" id="m-route-index" value="0">
+    <div class="cap-sheet">
+      {# ---- § A — Claim details ---- #}
+      <section class="cap-block">
+        <div class="cap-block-h"><span class="cap-ref">§ A</span><span class="cap-eyebrow">Claim details</span></div>
         <div class="field-row">
-          <div><label class="label-tiny">From</label><input class="field" id="m-from" placeholder="Start location" autocomplete="off"></div>
-          <div><label class="label-tiny">To</label><input class="field" id="m-to" placeholder="Destination" autocomplete="off"></div>
-        </div>
-        <div id="m-stops"></div>
-        <div style="margin-top:8px;">
-          <button type="button" class="btn" style="font-size:11px;" onclick="addStop()"><i class="ti ti-plus"></i> Add stop</button>
-        </div>
-        <div class="field-row" style="margin-top:12px;">
-          <div><label class="label-tiny">Trip date</label><input class="field" type="date" id="m-date"></div>
-          <div></div>
-        </div>
-        <div id="m-alts" class="route-alts" hidden></div>
-        <div id="m-map" style="position:relative;height:200px;border-radius:10px;border:1px solid var(--border);margin-top:12px;background:#eef1f4;overflow:hidden;">
-          <img id="m-map-img" alt="route preview" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
-        </div>
-        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
-          <span class="bar-note" id="m-summary">Enter From, To and a trip date.</span>
-          <div style="display:flex;gap:8px;">
-            <button type="button" class="btn" onclick="cancelTrip()">Cancel</button>
-            <button type="button" class="btn btn-accent" id="m-add" onclick="addTrip()" disabled><i class="ti ti-plus"></i> Add this trip</button>
+          <div><label class="label-tiny">Claim title (optional)</label>
+            <input class="field" name="title" value="{{ form.get('title', '') }}" placeholder="e.g. KL client trip — Mar"></div>
+          <div><label class="label-tiny">Claim type</label>
+            <select class="field" name="claim_type" id="f-claim-type" required>
+              {% for ct in claim_types %}
+              <option value="{{ ct }}" {{ 'selected' if form.get('claim_type', 'general') == ct else '' }}>{{ ct.replace('_', ' ') | capitalize }}</option>
+              {% endfor %}
+            </select>
           </div>
         </div>
-        <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Distance is recomputed on the server (the authoritative figure); reimbursed at RM {{ mileage_rate }}/km.</div>
-      </div>
-      <button type="button" class="btn btn-add-line" id="m-toggle" onclick="toggleMileage()"><i class="ti ti-map-2"></i> Add a mileage trip</button>
+
+        <div class="field-row">
+          <div><label class="label-tiny">Event / trip (optional)</label>
+            <select class="field" name="event_id" id="f-event">
+              <option value="">— none —</option>
+              {% for ev in events %}<option value="{{ ev.id }}" {{ 'selected' if form.get('event_id') == (ev.id | string) else '' }}>{{ ev.title }}</option>{% endfor %}
+              <option value="__new__" {{ 'selected' if form.get('event_id') == '__new__' else '' }}>+ New trip…</option>
+            </select>
+          </div>
+          <div></div>
+        </div>
+
+        {# Standalone non-general claim → date range the approver checks against.
+           Toggled by the script (mirrors ClaimService.start_claim's date rule). #}
+        <div class="field-row" id="date-row" hidden>
+          <div><label class="label-tiny">Start date</label>
+            <input class="field" type="date" name="start_date" id="f-start" value="{{ form.get('start_date', '') }}"></div>
+          <div><label class="label-tiny">End date</label>
+            <input class="field" type="date" name="end_date" id="f-end" value="{{ form.get('end_date', '') }}"></div>
+        </div>
+
+        {# Inline "+ New trip": title + dates only; manager sets budget later. #}
+        <div id="newtrip-row" hidden>
+          <div class="label-tiny" style="margin-bottom:8px;"><i class="ti ti-map-pin"></i> New trip — staff create it here; budget is added later under Manage → Events.</div>
+          <div class="field-row">
+            <div><label class="label-tiny">Trip title</label>
+              <input class="field" name="new_event_title" id="f-nt-title" placeholder="e.g. KL — Sales Training"></div>
+            <div></div>
+          </div>
+          <div class="field-row" style="margin-top:8px;">
+            <div><label class="label-tiny">Trip start</label><input class="field" type="date" name="new_event_start" id="f-nt-start"></div>
+            <div><label class="label-tiny">Trip end</label><input class="field" type="date" name="new_event_end" id="f-nt-end"></div>
+          </div>
+        </div>
+
+        <details class="more-opts">
+          <summary><i class="ti ti-plus"></i> Add purpose &amp; remarks (optional)</summary>
+          <div style="margin-top:12px;" class="field-row">
+            <div><label class="label-tiny">Purpose · posts to ERP</label>
+              <input class="field" name="purpose" value="{{ form.get('purpose', '') }}" placeholder="Business justification — why this spend happened"></div>
+            <div><label class="label-tiny">Remarks · internal</label>
+              <input class="field" name="remarks" value="{{ form.get('remarks', '') }}" placeholder="Any internal note — not posted to the ERP"></div>
+          </div>
+        </details>
+      </section>
+
+      {# ---- § B — Receipts ---- #}
+      <section class="cap-block">
+        <div class="cap-block-h"><span class="cap-ref">§ B</span><span class="cap-eyebrow">Receipts</span>
+          <span class="cap-hint"><i class="ti ti-sparkles"></i> Each receipt becomes one line · vendor, date &amp; amount read automatically</span>
+        </div>
+        <label class="dropzone" for="file" id="dropzone">
+          <div class="dropzone-empty" id="dz-empty">
+            <i class="ti ti-cloud-upload"></i>
+            <div class="dz-title">Drag receipts here, or browse</div>
+            <div class="dz-hint">JPG · PNG · WebP — add as many as you like (optional)</div>
+          </div>
+          <div class="dropzone-compact" id="dz-compact" hidden>
+            <i class="ti ti-plus"></i> <span>Drop or browse to add more receipts</span>
+          </div>
+          <input type="file" id="file" name="files" accept="image/png,image/jpeg,image/webp" multiple hidden>
+        </label>
+        <div id="receipt-list" class="receipt-list"></div>
+      </section>
+
+      {# ---- § C — Mileage trips ---- #}
+      <section class="cap-block">
+        <div class="cap-block-h"><span class="cap-ref">§ C</span><span class="cap-eyebrow">Mileage trips</span>
+          <span class="cap-hint"><i class="ti ti-map-pin"></i> Reimbursed at RM {{ mileage_rate }}/km</span>
+        </div>
+        <div id="mileage-list" class="receipt-list" style="margin-top:0;"></div>
+        <div id="mileage-entry" hidden class="mileage-entry" style="margin-top:14px;">
+          <div class="card-title" style="margin:0 0 12px;font-size:14px;"><i class="ti ti-map-pin"></i> New mileage trip</div>
+          {% if not maps_key %}
+          <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Google Maps isn't configured — type addresses manually; the server still computes the distance once <code>GOOGLE_MAPS_API_KEY</code> has the Routes API enabled.</div>
+          {% endif %}
+          <input type="hidden" id="m-waypoints" value="[]">
+          <input type="hidden" id="m-route-index" value="0">
+          <div class="field-row">
+            <div><label class="label-tiny">From</label><input class="field" id="m-from" placeholder="Start location" autocomplete="off"></div>
+            <div><label class="label-tiny">To</label><input class="field" id="m-to" placeholder="Destination" autocomplete="off"></div>
+          </div>
+          <div id="m-stops"></div>
+          <div style="margin-top:10px;">
+            <button type="button" class="btn" style="height:34px;font-size:12px;" onclick="addStop()"><i class="ti ti-plus"></i> Add stop</button>
+          </div>
+          <div class="field-row" style="margin-top:14px;">
+            <div><label class="label-tiny">Trip date</label><input class="field" type="date" id="m-date"></div>
+            <div></div>
+          </div>
+          <div id="m-alts" class="route-alts" hidden></div>
+          <div id="m-map" style="position:relative;height:200px;border-radius:var(--r);border:1px solid var(--rule);margin-top:14px;background:#eef1f4;overflow:hidden;">
+            <img id="m-map-img" alt="route preview" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+          </div>
+          <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span class="bar-note" id="m-summary">Enter From, To and a trip date.</span>
+            <div style="display:flex;gap:8px;">
+              <button type="button" class="btn" onclick="cancelTrip()">Cancel</button>
+              <button type="button" class="btn btn-accent" id="m-add" onclick="addTrip()" disabled><i class="ti ti-plus"></i> Add this trip</button>
+            </div>
+          </div>
+          <div style="font-size:10.5px;color:var(--faint);margin-top:8px;">Distance is recomputed on the server (the authoritative figure); reimbursed at RM {{ mileage_rate }}/km.</div>
+        </div>
+        <button type="button" class="btn-add-line" id="m-toggle" onclick="toggleMileage()"><i class="ti ti-map-2"></i> Add a mileage trip</button>
+      </section>
     </div>
 
     <div class="capture-bar" id="capture-bar" hidden>
       <span class="bar-note" id="bar-note"></span>
-      <button class="btn btn-accent" type="submit" id="f-submit" style="padding:10px 18px;" disabled>
+      <button class="btn btn-accent" type="submit" id="f-submit" disabled>
         <i class="ti ti-send"></i><span id="submit-label">Submit for review</span>
       </button>
     </div>
