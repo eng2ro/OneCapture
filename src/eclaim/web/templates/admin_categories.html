@@ -2,20 +2,21 @@
 {% block title %}Categories · OneCapture e-Claim{% endblock %}
 {% block topbar_sub %}Claim categories{% endblock %}
 {% block content %}
-<div class="screen active" id="screen-categories">
+{% include "_editorial.html" %}
+<div class="capx" id="screen-categories">
   <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
     <div>
       <h1 class="page-title">Claim categories</h1>
-      <p class="page-sub">{{ categories | length }} categories · each maps to an emission factor and a GL export code</p>
+      <p class="page-sub">{{ categories | length }} categories · each sets carbon-relevance and a GL export code</p>
     </div>
     <div style="display:flex;gap:8px;">
       <a class="btn" href="/admin/claimants"><i class="ti ti-users"></i>Claimants</a>
     </div>
   </div>
 
-  <div class="banner">
+  <div class="hint-warn" style="margin-bottom:14px;">
     <i class="ti ti-info-circle"></i>
-    <span><strong>Categories drive routing.</strong> When a claim is captured, its expense type matches a category, which determines the emission factor it feeds to Carbon Next and the GL code stamped on the CSV export. A category with no factor key is treated as spend-based.</span>
+    <span><strong>Categories drive routing.</strong> When a claim is captured, its expense type matches a category, which decides whether the line is forwarded to CarbonNext and the GL code stamped on the CSV export. e-Claim does no carbon maths itself.</span>
   </div>
 
   {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}

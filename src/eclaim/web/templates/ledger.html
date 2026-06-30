@@ -2,13 +2,14 @@
 {% block title %}CarbonNext handoff · OneCapture e-Claim{% endblock %}
 {% block topbar_sub %}CarbonNext handoff{% endblock %}
 {% block content %}
-<div class="screen active" id="screen-ledger">
+{% include "_editorial.html" %}
+<div class="capx" id="screen-ledger">
   <div style="margin-bottom:14px;">
     <h1 class="page-title">CarbonNext handoff</h1>
     <p class="page-sub">Carbon-relevant lines forwarded to CarbonNext (which computes the tCO₂e) · {{ entries | length }} records</p>
   </div>
 
-  <div class="banner">
+  <div class="hint-warn" style="margin-bottom:16px;">
     <i class="ti ti-info-circle"></i>
     <span><strong>Raw data, not carbon maths.</strong> e-Claim is pure claim handling — it forwards each carbon-relevant line's category, amount, quantity, vendor and date. <strong>CarbonNext</strong> owns scope, factors and the tCO₂e.</span>
   </div>
