@@ -76,11 +76,12 @@
       </div>
     </details>
 
+    <div class="cap-head"><i class="ti ti-receipt"></i> Receipts</div>
     <label class="dropzone" for="file" id="dropzone">
       <div class="dropzone-empty" id="dz-empty">
         <i class="ti ti-cloud-upload"></i>
         <div class="dz-title">Drag receipts here or browse</div>
-        <div class="dz-hint">JPG · PNG · WebP — add as many as you like</div>
+        <div class="dz-hint">JPG · PNG · WebP — add as many as you like (optional)</div>
       </div>
       <div class="dropzone-compact" id="dz-compact" hidden>
         <i class="ti ti-plus"></i> <span>Drop or browse to add more receipts</span>
@@ -93,9 +94,11 @@
     {# Mileage trips on THIS claim — each added trip becomes a mileage line, sent
        alongside the receipts in one submit. The route entry is a panel (not a
        nested form); JS stores each added trip in the hidden f-mileage field. #}
-    <div class="mileage-section" style="margin-top:14px;">
+    <div class="cap-head"><i class="ti ti-map-2"></i> Mileage trips</div>
+    <div class="mileage-section">
       <div id="mileage-list" class="receipt-list"></div>
-      <div id="mileage-entry" hidden style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px;">
+      <div id="mileage-entry" hidden class="mileage-entry">
+        <div class="card-title" style="margin:0 0 12px;font-size:13px;"><i class="ti ti-map-pin"></i> New mileage trip</div>
         {% if not maps_key %}
         <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Google Maps isn't configured — type addresses manually; the server still computes the distance once <code>GOOGLE_MAPS_API_KEY</code> has the Routes API enabled.</div>
         {% endif %}
@@ -114,10 +117,10 @@
           <div></div>
         </div>
         <div id="m-alts" class="route-alts" hidden></div>
-        <div id="m-map" style="position:relative;height:240px;border-radius:10px;border:1px solid var(--border);margin-top:12px;background:#eef1f4;overflow:hidden;">
+        <div id="m-map" style="position:relative;height:200px;border-radius:10px;border:1px solid var(--border);margin-top:12px;background:#eef1f4;overflow:hidden;">
           <img id="m-map-img" alt="route preview" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
         </div>
-        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
           <span class="bar-note" id="m-summary">Enter From, To and a trip date.</span>
           <div style="display:flex;gap:8px;">
             <button type="button" class="btn" onclick="cancelTrip()">Cancel</button>
@@ -126,7 +129,7 @@
         </div>
         <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Distance is recomputed on the server (the authoritative figure); reimbursed at RM {{ mileage_rate }}/km.</div>
       </div>
-      <button type="button" class="btn" id="m-toggle" onclick="toggleMileage()"><i class="ti ti-map-2"></i> Add a mileage trip</button>
+      <button type="button" class="btn btn-add-line" id="m-toggle" onclick="toggleMileage()"><i class="ti ti-map-2"></i> Add a mileage trip</button>
     </div>
 
     <div class="capture-bar" id="capture-bar" hidden>
@@ -538,7 +541,9 @@ function selectRoute(i) {
   document.getElementById("m-route-index").value = i;
   var note = document.getElementById("m-summary"), submit = document.getElementById("m-add");
   var km = parseFloat(r.distance_km), pct = overPct(km);
-  var txt = km.toFixed(1) + " km · " + r.stops + " stops · RM " + (km * MRATE).toFixed(2);
+  var vias = (r.stops && r.stops > 2) ? r.stops - 2 : 0;   // stops = endpoints + vias
+  var txt = km.toFixed(1) + " km" + (vias ? " · " + vias + " stop" + (vias === 1 ? "" : "s") : "") +
+            " · RM " + (km * MRATE).toFixed(2);
   if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over recommended";
   note.textContent = txt;
   submit.disabled = false;
@@ -567,7 +572,14 @@ function selectRoute(i) {
 function renderAlts() {
   var wrap = document.getElementById("m-alts");
   if (!wrap) return;
-  if (_routeOpts.length < 2) { wrap.hidden = true; wrap.innerHTML = ""; return; }
+  if (!_routeOpts.length) { wrap.hidden = true; wrap.innerHTML = ""; return; }
+  // Google returns alternatives only when they exist (and only for a direct trip).
+  // Show a small note for a single route so it doesn't look like the picker is missing.
+  if (_routeOpts.length === 1) {
+    wrap.hidden = false;
+    wrap.innerHTML = '<div class="label-tiny" style="color:var(--text-tertiary);"><i class="ti ti-route"></i> One route for this trip — no alternatives to choose from.</div>';
+    return;
+  }
   var sel = parseInt(document.getElementById("m-route-index").value, 10) || 0;
   wrap.hidden = false;
   wrap.innerHTML = '<div class="label-tiny" style="margin-bottom:6px;">Choose the route you drove — we reimburse the one you pick</div>' +

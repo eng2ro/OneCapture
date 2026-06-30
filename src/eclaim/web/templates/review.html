@@ -766,7 +766,8 @@ function amSelectRoute(i) {
   var idxEl = document.getElementById("am-route-index"); if (idxEl) idxEl.value = i;
   var dist = document.getElementById("am-dist");
   var km = parseFloat(r.distance_km), pct = amOverPct(km);
-  var txt = km.toFixed(1) + " km · " + r.stops + " stops";
+  var vias = (r.stops && r.stops > 2) ? r.stops - 2 : 0;
+  var txt = km.toFixed(1) + " km" + (vias ? " · " + vias + " stop" + (vias === 1 ? "" : "s") : "");
   if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over recommended";
   if (dist) dist.textContent = txt;
   amDrawRoute(r.polyline);
@@ -779,7 +780,12 @@ function amSelectRoute(i) {
 function amRenderAlts() {
   var wrap = document.getElementById("am-alts");
   if (!wrap) return;
-  if (_amRouteOpts.length < 2) { wrap.hidden = true; wrap.innerHTML = ""; return; }
+  if (!_amRouteOpts.length) { wrap.hidden = true; wrap.innerHTML = ""; return; }
+  if (_amRouteOpts.length === 1) {
+    wrap.hidden = false;
+    wrap.innerHTML = '<div class="label-tiny" style="color:var(--text-tertiary);"><i class="ti ti-route"></i> One route for this trip — no alternatives to choose from.</div>';
+    return;
+  }
   var sel = parseInt((document.getElementById("am-route-index") || {}).value, 10) || 0;
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
