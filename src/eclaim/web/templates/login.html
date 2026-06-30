@@ -4,46 +4,73 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sign in — OneCapture e-Claim</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260629e">
+  <link rel="stylesheet" href="/static/style.css?v=20260630c">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <style>
+  .lx{
+    --paper:#fff;--ink:#171715;--ink-2:#3f423c;--graphite:#6b6e66;--faint:#9a9d94;
+    --rule:#e1e1db;--rule-strong:#cfcfc8;--pine:#1f5d44;--pine-2:#184832;--pine-tint:#e9f1ec;--pine-line:#bcd6c8;
+    --rust-2:#7a3a17;--rust-tint:#f7ece2;--rust-line:#e6cbb4;
+    --serif:'Source Serif 4',Georgia,serif;--sans:'Public Sans',system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+    font-family:var(--sans);color:var(--ink);-webkit-font-smoothing:antialiased;
+    min-height:100vh;display:grid;place-items:center;background:#e8eae7;padding:24px;
+  }
+  .lx-card{width:100%;max-width:880px;display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--rule);border-radius:12px;overflow:hidden;background:var(--paper);box-shadow:0 24px 60px rgba(20,22,18,.12)}
+  .lx-left{background:#16201b;color:#fff;padding:44px 40px;display:flex;flex-direction:column;justify-content:space-between;min-height:540px;position:relative}
+  .lx-left::after{content:"";position:absolute;inset:0;background:radial-gradient(120% 80% at 0% 0%,rgba(31,93,68,.55),transparent 60%);pointer-events:none}
+  .lx-mark{display:flex;align-items:center;gap:11px;position:relative;z-index:1}
+  .lx-mark .m{width:32px;height:32px;border-radius:8px;background:var(--pine);display:grid;place-items:center;font-size:17px}
+  .lx-wm{font-family:var(--serif);font-weight:600;font-size:18px;letter-spacing:-.015em;line-height:1}
+  .lx-sub{font-size:9.5px;font-weight:700;letter-spacing:.2em;color:rgba(255,255,255,.55);margin-top:3px}
+  .lx-headline{font-family:var(--serif);font-size:30px;font-weight:600;line-height:1.2;letter-spacing:-.015em;position:relative;z-index:1}
+  .lx-blurb{font-size:13.5px;color:rgba(255,255,255,.72);line-height:1.6;max-width:330px;margin-top:14px;position:relative;z-index:1}
+  .lx-foot{font-size:11.5px;color:rgba(255,255,255,.6);display:flex;align-items:center;gap:8px;position:relative;z-index:1}
+  .lx-foot i{color:var(--pine-line)}
+  .lx-right{padding:48px 44px;display:flex;flex-direction:column;justify-content:center}
+  .lx-title{font-family:var(--serif);font-size:22px;font-weight:600;letter-spacing:-.01em}
+  .lx-tag{font-size:12.5px;color:var(--graphite);margin:5px 0 26px}
+  .lx-fl{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:6px;display:block}
+  .lx-inp{width:100%;height:44px;border:1px solid var(--rule);border-radius:6px;background:var(--paper);padding:0 13px;font-size:14px;color:var(--ink);font-family:inherit;margin-bottom:15px}
+  .lx-inp::placeholder{color:var(--faint)}
+  .lx-inp:focus{outline:none;border-color:var(--pine-line);box-shadow:0 0 0 3px var(--pine-tint)}
+  .lx-btn{width:100%;height:46px;border:0;border-radius:6px;background:var(--pine);color:#fff;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;margin-top:6px}
+  .lx-btn:hover{background:var(--pine-2)}
+  .lx-help{margin-top:24px;font-size:11px;color:var(--faint);text-align:center}
+  .lx-err{background:var(--rust-tint);border:1px solid var(--rust-line);color:var(--rust-2);border-radius:6px;padding:10px 13px;font-size:13px;margin-bottom:16px}
+  @media(max-width:760px){.lx-card{grid-template-columns:1fr}.lx-left{display:none}}
+  </style>
 </head>
-<body style="background:var(--page-bg);">
-<div style="max-width:860px;margin:6vh auto;padding:0 20px;">
-<div class="screen active" id="screen-login">
-  <div style="display:flex;align-items:stretch;min-height:520px;border-radius:18px;overflow:hidden;border:1px solid var(--border);">
-    <div style="flex:1;padding:40px 36px;background:var(--dark);color:white;display:flex;flex-direction:column;justify-content:space-between;">
+<body class="lx">
+  <div class="lx-card">
+    <div class="lx-left">
       <div>
-        <div style="margin-bottom:36px;">
-          <div style="font-size:24px;font-weight:700;letter-spacing:-0.025em;line-height:1;">One<span style="color:#5ce1e6;">Capture</span></div>
-          <div style="font-size:11px;color:rgba(255,255,255,0.5);letter-spacing:0.08em;font-weight:600;margin-top:4px;">E-CLAIM</div>
-        </div>
-        <div style="font-size:30px;font-weight:600;line-height:1.25;margin-bottom:14px;">e-Claim.<br/>One workflow.</div>
-        <div style="font-size:14px;color:rgba(255,255,255,0.7);line-height:1.6;max-width:340px;">Capture employee expenses. Feed carbon scope 1 and 3 automatically.</div>
+        <div class="lx-mark"><div class="m"><i class="ti ti-leaf"></i></div><div><div class="lx-wm">OneCapture</div><div class="lx-sub">E-CLAIM</div></div></div>
       </div>
       <div>
-        <div style="display:flex;align-items:center;gap:8px;color:var(--light-green);font-size:12px;margin-bottom:6px;"><i class="ti ti-leaf"></i>Part of the Carbon Next family</div>
+        <div class="lx-headline">Expense claims,<br>one audited workflow.</div>
+        <div class="lx-blurb">Capture receipts and mileage, verify every line, and release straight to the ERP — with a clean carbon hand-off to CarbonNext.</div>
       </div>
+      <div class="lx-foot"><i class="ti ti-leaf"></i> Part of the Carbon Next family</div>
     </div>
 
-    <div style="flex:1;padding:48px 40px;background:var(--white);display:flex;flex-direction:column;justify-content:center;">
-      <div style="font-size:22px;font-weight:600;margin-bottom:6px;">Sign in to e-Claim</div>
-      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:26px;">Use your firm account to continue</div>
+    <div class="lx-right">
+      <div class="lx-title">Sign in to e-Claim</div>
+      <div class="lx-tag">Use your firm account to continue</div>
 
-      {% if error %}<div class="error" style="margin-bottom:16px;">{{ error }}</div>{% endif %}
+      {% if error %}<div class="lx-err">{{ error }}</div>{% endif %}
 
       <form method="post" action="/login">
-        <label class="label-tiny">Work email</label>
-        <input class="field" name="email" type="email" autocomplete="username" placeholder="you@firm.com.my" style="margin-bottom:14px;" required />
+        <label class="lx-fl">Work email</label>
+        <input class="lx-inp" name="email" type="email" autocomplete="username" placeholder="you@firm.com.my" required />
 
-        <label class="label-tiny">Password</label>
-        <input class="field" name="password" type="password" autocomplete="current-password" placeholder="••••••••" style="margin-bottom:18px;" required />
+        <label class="lx-fl">Password</label>
+        <input class="lx-inp" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
 
-        <button class="btn btn-primary" type="submit" style="width:100%;justify-content:center;padding:11px;font-size:14px;">Sign in</button>
+        <button class="lx-btn" type="submit">Sign in</button>
       </form>
 
-      <div style="margin-top:24px;font-size:10px;color:var(--text-tertiary);text-align:center;">Need help? Contact your firm administrator</div>
+      <div class="lx-help">Need help? Contact your firm administrator</div>
     </div>
   </div>
-</div>
-</div>
 </body>
 </html>
