@@ -1,37 +1,515 @@
 {% extends "base.html" %}
-{% block title %}Capture — OneCapture e-Claim{% endblock %}
+{% block title %}Submit expense claims · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Submit expense claims{% endblock %}
 {% block content %}
-<section class="card" style="max-width: 560px;">
-  <h1>Capture a receipt</h1>
-  <p class="muted">Upload the receipt image and key the line details. It is
-     carbon-classified through the category mapping and routed to review.</p>
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+<div class="screen active" id="screen-submit">
+  <h1 class="page-title">Submit an expense claim</h1>
+  <p class="page-sub">Give the claim a title (e.g. a trip or training), drop its receipts — each becomes a line — then verify the lines on the next screen.</p>
 
-  <form class="fields" method="post" action="/capture" enctype="multipart/form-data">
-    <label class="drop" for="file">
-      <input type="file" id="file" name="file"
-             accept="image/png,image/jpeg,image/webp" required>
-      <span>Choose a receipt image (PNG / JPEG / WebP)</span>
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+  {% if not categories %}
+  <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> No categories set up yet — add some under Manage → Categories.</div>
+  {% endif %}
+
+  {# Mode toggle: drop receipts, or claim mileage by route. #}
+  <div style="display:flex;gap:8px;margin-bottom:14px;">
+    <button type="button" class="btn btn-accent" id="tab-receipt" onclick="setMode('receipt')"><i class="ti ti-receipt"></i> Receipts</button>
+    <button type="button" class="btn" id="tab-mileage" onclick="setMode('mileage')"><i class="ti ti-map-2"></i> Mileage</button>
+  </div>
+
+  <div id="mode-mileage" hidden>
+    {% if not maps_key %}
+    <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Google Maps isn't configured yet — add <code>GOOGLE_MAPS_API_KEY</code> (and optionally <code>GOOGLE_MAPS_BROWSER_KEY</code>) to <code>.env</code> to enable the map and distance.</div>
+    {% endif %}
+    <form method="post" action="/capture/mileage" id="mileage-form">
+      <input type="hidden" name="waypoints" id="m-waypoints" value="[]">
+      <input type="hidden" name="route_index" id="m-route-index" value="0">
+      <div class="field-row">
+        <div><label class="label-tiny">From</label><input class="field" name="origin" id="m-from" placeholder="Start location" autocomplete="off" required></div>
+        <div><label class="label-tiny">To</label><input class="field" name="destination" id="m-to" placeholder="Destination" autocomplete="off" required></div>
+      </div>
+      <div id="m-stops"></div>
+      <div style="margin-top:8px;">
+        <button type="button" class="btn" style="font-size:11px;" onclick="addStop()"><i class="ti ti-plus"></i> Add stop</button>
+      </div>
+      <div class="field-row" style="margin-top:12px;">
+        <div><label class="label-tiny">Trip date</label><input class="field" type="date" name="trip_date" id="m-date"></div>
+        <div></div>
+      </div>
+      <div id="m-alts" class="route-alts" hidden></div>
+      <div id="m-map" style="position:relative;height:300px;border-radius:10px;border:1px solid var(--border);margin-top:12px;background:#eef1f4;overflow:hidden;">
+        <img id="m-map-img" alt="route preview" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;">
+      </div>
+      <div class="capture-bar" style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
+        <span class="bar-note" id="m-summary">Enter a route to compute distance.</span>
+        <button class="btn btn-accent" type="submit" id="m-submit" style="padding:10px 18px;" disabled><i class="ti ti-send"></i> Submit mileage claim</button>
+      </div>
+      <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Distance is recomputed on the server (the authoritative figure); reimbursed at RM {{ mileage_rate }}/km.</div>
+    </form>
+  </div>
+
+  <form method="post" action="/capture" enctype="multipart/form-data" id="capture-form">
+    <input type="hidden" name="items" id="f-items" value="[]">
+
+    <div class="field-row" style="margin-bottom:12px;">
+      <div><label class="label-tiny">Claim title (optional)</label>
+        <input class="field" name="title" value="{{ form.get('title', '') }}" placeholder="e.g. KL client trip — Mar"></div>
+      <div><label class="label-tiny">Claim type</label>
+        <select class="field" name="claim_type" id="f-claim-type" required>
+          {% for ct in claim_types %}
+          <option value="{{ ct }}" {{ 'selected' if form.get('claim_type', 'general') == ct else '' }}>{{ ct.replace('_', ' ') | capitalize }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="field-row" style="margin-bottom:12px;">
+      <div><label class="label-tiny">Event / trip (optional)</label>
+        <select class="field" name="event_id" id="f-event">
+          <option value="">— none —</option>
+          {% for ev in events %}<option value="{{ ev.id }}" {{ 'selected' if form.get('event_id') == (ev.id | string) else '' }}>{{ ev.title }}</option>{% endfor %}
+          <option value="__new__" {{ 'selected' if form.get('event_id') == '__new__' else '' }}>+ New trip…</option>
+        </select>
+      </div>
+      <div></div>
+    </div>
+
+    {# Standalone non-general claim → ask for the date range the approver checks
+       against (per-diem, late submission, duplicates). Hidden for General and when
+       an event is attached (the event supplies the dates). Toggled by the script. #}
+    <div class="field-row" style="margin-bottom:12px;" id="date-row" hidden>
+      <div><label class="label-tiny">Start date</label>
+        <input class="field" type="date" name="start_date" id="f-start" value="{{ form.get('start_date', '') }}"></div>
+      <div><label class="label-tiny">End date</label>
+        <input class="field" type="date" name="end_date" id="f-end" value="{{ form.get('end_date', '') }}"></div>
+    </div>
+
+    {# Inline "+ New trip": title + dates only; the manager sets the budget later
+       under Manage → Events. Shown only when "+ New trip…" is chosen. #}
+    <div id="newtrip-row" hidden style="margin-bottom:12px;padding:12px;border:1px dashed var(--border);border-radius:10px;">
+      <div class="label-tiny" style="margin-bottom:8px;"><i class="ti ti-map-pin"></i> New trip — staff create it here; budget is added later under Manage → Events.</div>
+      <div class="field-row">
+        <div><label class="label-tiny">Trip title</label>
+          <input class="field" name="new_event_title" id="f-nt-title" placeholder="e.g. KL — Sales Training"></div>
+        <div></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Trip start</label><input class="field" type="date" name="new_event_start" id="f-nt-start"></div>
+        <div><label class="label-tiny">Trip end</label><input class="field" type="date" name="new_event_end" id="f-nt-end"></div>
+      </div>
+    </div>
+
+    {# Optional details — kept out of the way so the capture screen stays simple.
+       Purpose (business justification, posts to ERP) + Remarks (internal). The
+       accounting posting date is set later by finance on the claim header. #}
+    <details class="more-opts" style="margin-bottom:12px;">
+      <summary><i class="ti ti-plus"></i> Add purpose &amp; remarks (optional)</summary>
+      <div style="margin-top:10px;">
+        <div style="margin-bottom:10px;"><label class="label-tiny">Purpose</label>
+          <input class="field" name="purpose" value="{{ form.get('purpose', '') }}" placeholder="Business justification — why this spend happened"></div>
+        <div><label class="label-tiny">Remarks</label>
+          <input class="field" name="remarks" value="{{ form.get('remarks', '') }}" placeholder="Any internal note — not posted to the ERP"></div>
+      </div>
+    </details>
+
+    <label class="dropzone" for="file" id="dropzone">
+      <div class="dropzone-empty" id="dz-empty">
+        <i class="ti ti-cloud-upload"></i>
+        <div class="dz-title">Drag receipts here or browse</div>
+        <div class="dz-hint">JPG · PNG · WebP — add as many as you like</div>
+      </div>
+      <div class="dropzone-compact" id="dz-compact" hidden>
+        <i class="ti ti-plus"></i> <span>Drop or browse to add more receipts</span>
+      </div>
+      <input type="file" id="file" name="files" accept="image/png,image/jpeg,image/webp" multiple required hidden>
     </label>
 
-    <label>Expense type
-      <select name="expense_type">
-        {% for et in expense_types %}<option value="{{ et }}">{{ et }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Quantity <input name="quantity" placeholder="e.g. 450"></label>
-    <label>Unit
-      <select name="unit">
-        <option value="">—</option>
-        {% for u in units %}<option value="{{ u }}">{{ u }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Total amount <input name="total_amount" placeholder="e.g. 2000"></label>
-    <label>Vendor <input name="vendor"></label>
-    <label>Doc no <input name="doc_no"></label>
-    <label>Doc date <input name="doc_date" placeholder="YYYY-MM-DD"></label>
+    <div id="receipt-list" class="receipt-list"></div>
 
-    <button type="submit" class="primary">Upload &amp; classify</button>
+    <div class="capture-bar" id="capture-bar" hidden>
+      <span class="bar-note" id="bar-note"></span>
+      <button class="btn btn-accent" type="submit" id="f-submit" style="padding:10px 18px;" disabled>
+        <i class="ti ti-send"></i><span id="submit-label">Submit for review</span>
+      </button>
+    </div>
   </form>
-</section>
+</div>
+
+<script>
+(function () {
+  var CATEGORIES = {{ categories_json | tojson }};
+  var CAT_BY_ID = {}; CATEGORIES.forEach(function (c) { CAT_BY_ID[c.id] = c; });
+
+  var byId = function (id) { return document.getElementById(id); };
+  var fileInput = byId("file"), dropzone = byId("dropzone"), empty = byId("dz-empty"), compact = byId("dz-compact");
+  var list = byId("receipt-list"), bar = byId("capture-bar"), barNote = byId("bar-note");
+  var submit = byId("f-submit"), submitLabel = byId("submit-label"), itemsInput = byId("f-items");
+
+  var entries = [];       // { id, file, url, status, ext, catId }
+  var seq = 0;
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  // Card title: the captured vendor once read, else the file name to identify it.
+  function cardTitle(e) {
+    return (e.ext && e.ext.vendor) ? e.ext.vendor : e.file.name;
+  }
+  // Right-hand amount, only once we've read a total.
+  function amountHtml(e) {
+    var a = e.status === "read" && e.ext && e.ext.total_amount;
+    return a ? '<div class="rc-amount">RM ' + esc(String(a)) + "</div>" : "";
+  }
+  // One status/category pill: progress while reading, else the resolved category
+  // (green) or a "no category" warning to fix on the verify screen.
+  function tagHtml(e) {
+    if (e.status === "reading") return '<span class="rc-chip reading"><span class="spinner"></span>reading</span>';
+    if (e.status === "manual") return '<span class="rc-chip warn"><i class="ti ti-alert-triangle"></i> verify manually</span>';
+    if (e.catId && CAT_BY_ID[e.catId]) return '<span class="rc-cat"><i class="ti ti-tag"></i>' + esc(CAT_BY_ID[e.catId].name) + "</span>";
+    return '<span class="rc-cat none"><i class="ti ti-alert-triangle"></i> no category</span>';
+  }
+
+  function render() {
+    list.innerHTML = "";
+    entries.forEach(function (e) {
+      var row = document.createElement("div");
+      row.className = "receipt-card";
+      row.innerHTML =
+        '<img class="rc-thumb" src="' + e.url + '" alt="">' +
+        '<div class="rc-body">' +
+          '<div class="rc-name" title="' + esc(e.file.name) + '">' + esc(cardTitle(e)) + "</div>" +
+          '<div class="rc-tags">' + tagHtml(e) + "</div>" +
+        "</div>" +
+        amountHtml(e) +
+        '<button type="button" class="rc-remove" title="Remove" data-id="' + e.id + '">&times;</button>';
+      list.appendChild(row);
+    });
+    list.querySelectorAll(".rc-remove").forEach(function (b) {
+      b.addEventListener("click", function () { removeEntry(+b.getAttribute("data-id")); });
+    });
+    syncForm();
+  }
+
+  function syncForm() {
+    var n = entries.length;
+    var has = n > 0;
+    bar.hidden = !has;
+    // Once receipts are added, collapse the big dropzone into a slim "add more"
+    // bar so it doesn't sit on the page as a large empty box.
+    empty.style.display = has ? "none" : "";
+    if (compact) compact.hidden = !has;
+    dropzone.classList.toggle("compact", has);
+    var reading = entries.some(function (e) { return e.status === "reading"; });
+    // Don't allow submit while any receipt is still being read — otherwise it
+    // would be saved blank (the server would re-OCR it, but the preview is the
+    // point of the verify step).
+    submit.disabled = n === 0 || reading;
+    submitLabel.textContent = "Submit claim (" + n + " line" + (n === 1 ? "" : "s") + ")";
+    barNote.textContent = reading ? "Reading receipts…" : (n + " line" + (n === 1 ? "" : "s") + " · you'll verify next");
+    // Rebuild the input's FileList (order == entries) and the items payload.
+    // Only entries that read successfully carry data; anything else is sent as
+    // null so the server reads the image itself instead of saving it blank.
+    var dt = new DataTransfer();
+    var items = entries.map(function (e) {
+      dt.items.add(e.file);
+      if (e.status !== "read" || !e.ext) return null;
+      var x = e.ext;
+      return {
+        category_id: e.catId || null,
+        expense_type: x.expense_type || "other",
+        payment_method: "out_of_pocket",
+        vendor: x.vendor || null, doc_no: x.doc_no || null, date: x.date || null,
+        total_amount: x.total_amount != null ? String(x.total_amount) : null,
+        quantity: x.quantity != null ? String(x.quantity) : null, unit: x.unit || null,
+        boxes: x.boxes || null   // carry OCR field positions through to the line
+      };
+    });
+    fileInput.files = dt.files;
+    itemsInput.value = JSON.stringify(items);
+  }
+
+  function removeEntry(id) {
+    entries = entries.filter(function (e) { return e.id !== id; });
+    render();
+  }
+
+  function addFiles(fileList) {
+    Array.prototype.forEach.call(fileList, function (f) {
+      if (f.type.indexOf("image/") !== 0) return;
+      var e = { id: ++seq, file: f, url: URL.createObjectURL(f), status: "reading", ext: null, catId: null };
+      entries.push(e);
+      extract(e);
+    });
+    render();
+  }
+
+  function extract(e) {
+    var fd = new FormData();
+    fd.append("file", e.file);
+    fetch("/capture/extract", { method: "POST", body: fd })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.ok) { e.ext = data.extraction; e.catId = data.suggested_category_id; e.status = "read"; }
+        else { e.status = "manual"; }
+        render();
+      })
+      .catch(function () { e.status = "manual"; render(); });
+  }
+
+  fileInput.addEventListener("change", function () { addFiles(fileInput.files); fileInput.value = ""; });
+  ["dragover", "dragenter"].forEach(function (ev) {
+    dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.add("drag"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.remove("drag"); });
+  });
+  dropzone.addEventListener("drop", function (e) { if (e.dataTransfer) addFiles(e.dataTransfer.files); });
+})();
+
+// Header: show the date range only when it's actually needed, and toggle the
+// inline "+ New trip" panel. Mirrors the server rule in ClaimService.start_claim:
+//   dates required  ⇔  no event attached AND claim type ≠ general.
+// 'required' is added/removed with visibility so a hidden field never blocks submit.
+(function () {
+  var typeSel = document.getElementById("f-claim-type");
+  var evSel = document.getElementById("f-event");
+  var dateRow = document.getElementById("date-row");
+  var newRow = document.getElementById("newtrip-row");
+  var fStart = document.getElementById("f-start"), fEnd = document.getElementById("f-end");
+  var ntTitle = document.getElementById("f-nt-title");
+  var ntStart = document.getElementById("f-nt-start"), ntEnd = document.getElementById("f-nt-end");
+
+  function setReq(el, on) {
+    if (!el) return;
+    if (on) el.setAttribute("required", "required"); else el.removeAttribute("required");
+  }
+  function sync() {
+    var ev = evSel.value;
+    var isNew = ev === "__new__";
+    var hasEvent = ev !== "" && !isNew;
+    var needDates = !isNew && !hasEvent && typeSel.value !== "general";
+
+    dateRow.hidden = !needDates;
+    setReq(fStart, needDates); setReq(fEnd, needDates);
+
+    newRow.hidden = !isNew;
+    setReq(ntTitle, isNew); setReq(ntStart, isNew); setReq(ntEnd, isNew);
+  }
+  typeSel.addEventListener("change", sync);
+  evSel.addEventListener("change", sync);
+  sync();
+})();
+
+// ---- Mileage mode ---------------------------------------------------------
+var _mapsBroken = false;   // set if Google Maps fails to authenticate
+// Google calls this globally if the Maps JS key fails to authenticate (API not
+// enabled / key restricted / billing off) — surface it instead of a blank map.
+window.gm_authFailure = function () {
+  _mapsBroken = true;
+  var map = document.getElementById("m-map");
+  if (map) map.innerHTML = '<div style="padding:18px;font-size:12px;color:#b91c1c;">' +
+    'Google Maps couldn\'t authenticate. Enable <b>Maps JavaScript API</b> + <b>Places API</b> + ' +
+    '<b>Routes API</b> on this key (and enable billing), then reload.</div>';
+  var note = document.getElementById("m-summary");
+  if (note) note.textContent = "Maps not authorised — type addresses manually; server still computes the route once the API is enabled.";
+  // Strip Google's broken autocomplete UI off the route inputs (it half-attaches
+  // before auth fails, leaving the From/To boxes broken AND untypeable). Clone-
+  // replace removes its listeners + injected nodes; a plain typeable input remains.
+  document.querySelectorAll("#mode-mileage input.field").forEach(function (inp) {
+    inp.parentNode.replaceChild(inp.cloneNode(true), inp);
+  });
+  document.querySelectorAll(".pac-container").forEach(function (e) { e.remove(); });
+  wireMileageInputs();   // re-wire the fresh clones so typing still recomputes
+};
+
+function setMode(m) {
+  document.getElementById("mode-mileage").hidden = (m !== "mileage");
+  document.getElementById("capture-form").hidden = (m !== "receipt");
+  document.getElementById("tab-receipt").className = "btn" + (m === "receipt" ? " btn-accent" : "");
+  document.getElementById("tab-mileage").className = "btn" + (m === "mileage" ? " btn-accent" : "");
+  if (m === "mileage" && window._map && window.google) {
+    google.maps.event.trigger(window._map, "resize");  // map was hidden when sized
+  }
+}
+
+function addStop() {
+  var div = document.createElement("div");
+  div.className = "field-row"; div.style.marginTop = "8px";
+  div.innerHTML =
+    '<div><label class="label-tiny">Via</label><input class="field stop-input" placeholder="Stop location" autocomplete="off"></div>' +
+    '<div style="display:flex;align-items:flex-end;padding-bottom:6px;"><button type="button" class="btn" style="font-size:11px;">Remove</button></div>';
+  var input = div.querySelector(".stop-input");
+  div.querySelector("button").onclick = function () { div.remove(); recompute(); };
+  document.getElementById("m-stops").appendChild(div);
+  attachAuto(input);
+  input.addEventListener("input", recompute);
+  input.addEventListener("change", recompute);
+}
+
+var _routeLine = null, _previewTimer = null;
+// Wire the route inputs so typing recomputes the distance via the SERVER (Routes
+// API) — independent of Google Maps JS. This must run even if the map/autocomplete
+// never load, so the claim works with just Routes API enabled.
+function wireMileageInputs() {
+  document.querySelectorAll("#mode-mileage input.field").forEach(function (el) {
+    if (el._wired) return;
+    el._wired = true;
+    el.addEventListener("input", recompute);
+    el.addEventListener("change", recompute);
+  });
+}
+function initMileage() {            // Google Maps callback — map + autocomplete only
+  if (_mapsBroken) return;
+  try {
+    window._map = new google.maps.Map(document.getElementById("m-map"),
+      { center: { lat: 3.139, lng: 101.6869 }, zoom: 11, disableDefaultUI: true });  // KL
+  } catch (e) { return; }
+  attachAuto(document.getElementById("m-from"));
+  attachAuto(document.getElementById("m-to"));
+}
+window.initMileage = initMileage;
+
+function attachAuto(input) {
+  // Places Autocomplete is a progressive ENHANCEMENT — only attach when Maps is
+  // healthy, and never let it throw (the input must always stay typeable).
+  if (_mapsBroken || !input || !window.google || !google.maps.places ||
+      !google.maps.places.Autocomplete) return;
+  try {
+    var ac = new google.maps.places.Autocomplete(input, { fields: ["formatted_address", "name"] });
+  } catch (e) { return; }
+  ac.addListener("place_changed", function () {
+    var p = ac.getPlace();
+    if (p) input.value = p.formatted_address || p.name || input.value;
+    recompute();
+  });
+}
+
+var _routeOpts = [], _recommendedKm = 0;   // alternatives for the current route
+var MRATE = parseFloat("{{ mileage_rate }}");
+function mEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+  });
+}
+// Overage vs Google's recommended (shortest) route, in %, or 0 if within tolerance.
+function overPct(km) {
+  if (!_recommendedKm || km - _recommendedKm <= 0.1) return 0;
+  return (km - _recommendedKm) / _recommendedKm * 100;
+}
+
+function recompute() {
+  var from = document.getElementById("m-from").value;
+  var to = document.getElementById("m-to").value;
+  var stops = Array.prototype.map.call(document.querySelectorAll(".stop-input"),
+    function (i) { return i.value; }).filter(Boolean);
+  document.getElementById("m-waypoints").value = JSON.stringify(stops);
+  var submit = document.getElementById("m-submit"), note = document.getElementById("m-summary");
+  if (!from || !to) {
+    submit.disabled = true; note.textContent = "Enter a route to compute distance.";
+    _routeOpts = []; renderAlts(); return;
+  }
+  // Debounce, then ask the server (Routes API) — same figure it will reimburse.
+  note.textContent = "Computing route…";
+  clearTimeout(_previewTimer);
+  _previewTimer = setTimeout(function () {
+    var body = new URLSearchParams();
+    body.set("origin", from); body.set("destination", to);
+    body.set("waypoints", JSON.stringify(stops));
+    fetch("/capture/mileage/preview", { method: "POST", body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) {
+          note.textContent = d.error || "No route found."; submit.disabled = true;
+          _routeOpts = []; renderAlts(); return;
+        }
+        _routeOpts = d.routes || [];
+        _recommendedKm = parseFloat(d.recommended_km);
+        // Editing the route invalidates any prior pick — reset to recommended.
+        selectRoute(0);
+        renderAlts();
+      })
+      .catch(function () { note.textContent = "Route lookup failed."; submit.disabled = true; });
+  }, 350);
+}
+
+// Apply the chosen alternative: price it, flag a longer-than-recommended route,
+// draw it, and record the index the server will authoritatively reimburse on.
+function selectRoute(i) {
+  if (!_routeOpts.length) return;
+  if (i < 0 || i >= _routeOpts.length) i = 0;
+  var r = _routeOpts[i];
+  document.getElementById("m-route-index").value = i;
+  var note = document.getElementById("m-summary"), submit = document.getElementById("m-submit");
+  var km = parseFloat(r.distance_km), pct = overPct(km);
+  var txt = km.toFixed(1) + " km · " + r.stops + " stops · RM " + (km * MRATE).toFixed(2);
+  if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over recommended";
+  note.textContent = txt;
+  submit.disabled = false;
+  drawRoute(r.polyline);
+  // Server-proxied static map — shows the route even without a browser key. Reveal
+  // only on successful load so a 404 (Maps Static API off) doesn't leave a broken
+  // image icon over the map area.
+  var mi = document.getElementById("m-map-img");
+  var from = document.getElementById("m-from").value, to = document.getElementById("m-to").value;
+  if (mi && r.polyline) {
+    mi.onload = function () { mi.style.display = "block"; };
+    mi.onerror = function () { mi.style.display = "none"; };
+    mi.style.display = "none";
+    mi.src = "/mileage/route.png?polyline=" + encodeURIComponent(r.polyline) +
+      "&origin=" + encodeURIComponent(from) + "&destination=" + encodeURIComponent(to);
+  }
+  var wrap = document.getElementById("m-alts");
+  if (wrap) wrap.querySelectorAll(".alt").forEach(function (el, idx) {
+    el.classList.toggle("sel", idx === i);
+    var radio = el.querySelector("input"); if (radio) radio.checked = (idx === i);
+  });
+}
+
+// Render the route picker — only when Google returned >1 option (direct trips; it
+// never returns alternatives once there's a stop). Recommended is always first.
+function renderAlts() {
+  var wrap = document.getElementById("m-alts");
+  if (!wrap) return;
+  if (_routeOpts.length < 2) { wrap.hidden = true; wrap.innerHTML = ""; return; }
+  var sel = parseInt(document.getElementById("m-route-index").value, 10) || 0;
+  wrap.hidden = false;
+  wrap.innerHTML = '<div class="label-tiny" style="margin-bottom:6px;">Choose the route you drove — we reimburse the one you pick</div>' +
+    _routeOpts.map(function (r, i) {
+      var km = parseFloat(r.distance_km), pct = overPct(km);
+      var label = i === 0 ? "Recommended" : (r.description || ("Alternative " + i));
+      var badge = pct ? '<span class="alt-flag">+' + pct.toFixed(0) + '%</span>'
+                      : (i === 0 ? '<span class="alt-best">shortest</span>' : '');
+      return '<label class="alt' + (i === sel ? ' sel' : '') + '" data-i="' + i + '">' +
+        '<input type="radio" name="m-alt"' + (i === sel ? ' checked' : '') + '>' +
+        '<span class="alt-main">' + mEsc(label) + '</span>' +
+        '<span class="alt-km">' + km.toFixed(1) + ' km · RM ' + (km * MRATE).toFixed(2) + ' ' + badge + '</span>' +
+        '</label>';
+    }).join("");
+  wrap.querySelectorAll(".alt").forEach(function (el) {
+    el.addEventListener("click", function () { selectRoute(+el.getAttribute("data-i")); });
+  });
+}
+
+function drawRoute(encoded) {
+  if (!window._map || !window.google || !google.maps.geometry || !encoded) return;
+  var path = google.maps.geometry.encoding.decodePath(encoded);
+  if (_routeLine) _routeLine.setMap(null);
+  _routeLine = new google.maps.Polyline(
+    { path: path, strokeColor: "#2563eb", strokeWeight: 4, map: window._map });
+  var bounds = new google.maps.LatLngBounds();
+  path.forEach(function (p) { bounds.extend(p); });
+  window._map.fitBounds(bounds);
+}
+
+// Wire the route inputs immediately (independent of Google Maps) so the distance
+// computes and Submit enables even when only the Routes API is enabled.
+wireMileageInputs();
+</script>
+{% if maps_key %}
+<script async defer
+  src="https://maps.googleapis.com/maps/api/js?key={{ maps_key }}&libraries=places,geometry&callback=initMileage"></script>
+{% endif %}
 {% endblock %}

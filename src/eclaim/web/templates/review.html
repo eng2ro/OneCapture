@@ -1,100 +1,841 @@
 {% extends "base.html" %}
-{% block title %}Review — OneCapture e-Claim{% endblock %}
+{% block title %}Review · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Reviewing a claim{% endblock %}
+{% set line_badge = {"pending":"info","approved":"success","queried":"warning","rejected":"danger"} %}
+{% set status_badge = {'submitted':'info','in_review':'warning','approved':'success','partially_approved':'warning','sent_back':'info','released':'success','rejected':'danger'} %}
 {% block content %}
+<div class="screen active" id="screen-review">
+
 {% if not claim %}
-  <section class="card"><h1>Claim not found</h1></section>
+  <div class="card"><div class="card-title">Claim not found</div></div>
 {% else %}
-{% if error %}<div class="error">{{ error }}</div>{% endif %}
-<section class="grid">
-  <div class="card">
-    <h2>Source document</h2>
-    <p class="muted mono">sha256: {{ claim.image_sha256[:24] }}…</p>
-    <img class="receipt" src="/claims/{{ claim.id }}/image" alt="receipt"
-         onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
-    <div class="image-placeholder" style="display:none">Receipt image unavailable<br><small>{{ claim.image_path }}</small></div>
+
+  {# -- Action bar: identity + status + verify-next ------------------------- #}
+  <div class="review-top">
+    <a class="btn" style="font-size:11px;" href="/claims"><i class="ti ti-chevron-left"></i>Inbox</a>
+    <div style="height:14px;width:1px;background:var(--border);"></div>
+    <span class="doc-title">{{ claim.title or 'Expense claim' }}</span>
+    <span class="doc-ref">{{ claim.claim_no or ('Claim #' ~ (claim.id | string | truncate(8, true, ''))) }}</span>
+    <span class="badge neutral" style="font-size:9px;">{{ (claim.claim_type or 'general').replace('_', ' ') }}</span>
+    <span class="badge {{ status_badge.get(claim.status,'info') }}">{{ claim.status.replace('_',' ') }}</span>
+    {% if next_review_id %}
+    <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:11px;color:var(--text-secondary);">{{ review_remaining }} more to verify</span>
+      <a class="btn btn-accent" style="font-size:11px;" href="/claims/{{ next_review_id }}/review">Verify next<i class="ti ti-chevron-right"></i></a>
+    </div>
+    {% elif claim.status == 'in_review' %}
+    <span style="margin-left:auto;font-size:11px;color:var(--text-secondary);">Last one to verify</span>
+    {% endif %}
   </div>
 
-  <div class="card">
-    <h2>Extracted &amp; classified</h2>
-    <span class="pill pill-{{ claim.status }}">{{ claim.status }}</span>
-    {% if claim.data_quality and claim.data_quality.startswith('Unmapped') %}
-      <span class="pill flag">{{ claim.data_quality }}</span>
-    {% endif %}
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+  {% if review_block_reason and claim.status == 'in_review' and not over_authority %}
+  <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-info-circle"></i>
+    No approval actions shown — {{ review_block_reason }}. This claim must be reviewed by a different user (separation of duties). You can still open a line to view/correct it.
+  </div>
+  {% endif %}
+  {% if over_authority %}
+  <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> This claim (RM {{ '%.2f' | format(claim.total_claimed) }}) is above your approval authority limit of RM {{ '%.2f' | format(authority_limit) }} — approval will be blocked.</div>
+  {% endif %}
+  {% if requires_coding and claim.status in ('approved','partially_approved') and not posting_ready %}
+  <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Not ready to post — every approved line needs a GL code and cost centre before release. Open a line to add its coding.</div>
+  {% endif %}
 
-    {% if can_edit %}
-    <form class="fields" method="post" action="/claims/{{ claim.id }}/edit">
-      <label>Vendor <input name="vendor" value="{{ claim.vendor or '' }}"></label>
-      <label>Doc no <input name="doc_no" value="{{ claim.doc_no or '' }}"></label>
-      <label>Date <input name="doc_date" value="{{ claim.doc_date or '' }}"></label>
-      <label>Currency <input name="currency" value="{{ claim.currency or '' }}"></label>
-      <label>Total <input name="total_amount" value="{{ claim.total_amount or '' }}"></label>
-      <label>Expense type <input name="expense_type" value="{{ claim.expense_type or '' }}"></label>
-      <label>Quantity <input name="quantity" value="{{ claim.quantity or '' }}"></label>
-      <label>Unit <input name="unit" value="{{ claim.unit or '' }}"></label>
-      <button type="submit">Save &amp; re-classify</button>
-    </form>
-
-    <form class="fields" method="post" action="/claims/{{ claim.id }}/category">
-      <label>Category
-        <select name="category_id">
-          {% for cat in categories %}
-            <option value="{{ cat.id }}" {{ 'selected' if category and cat.id == category.id else '' }}>
-              {{ cat.name }}{% if cat.factor_key %} → {{ cat.factor_key }}{% else %} (spend){% endif %}
-            </option>
-          {% endfor %}
-        </select>
-      </label>
-      <button type="submit">Assign category &amp; reclassify</button>
-    </form>
-    {% endif %}
-
-    <div class="carbon">
-      <h3>Carbon</h3>
-      <p>Category <strong>{{ category.name if category else '—' }}</strong></p>
-      <p>Scope <strong>{{ claim.scope }}</strong> · basis <strong>{{ claim.basis }}</strong>
-         · factor <strong>{{ claim.factor_key }}</strong> v{{ claim.factor_version }}</p>
-      <p class="tco2e">{{ claim.tco2e }} tCO2e</p>
-      <p class="dq {{ 'flag' if claim.data_quality and claim.data_quality.startswith('Unmapped') else '' }}">{{ claim.data_quality }}</p>
+  {# -- Document header (the grouping band) --------------------------------- #}
+  {# The fields that describe the whole claim, not a single line — what the
+     approver and the ERP read first. A dense meta strip keeps it compact;
+     posting date / purpose (posts to ERP) / remarks (internal) live here once. #}
+  <div class="card doc-header" style="margin-bottom:14px;">
+    <div class="card-header">
+      <div class="card-title"><i class="ti ti-file-description" style="font-size:13px;"></i> Claim header</div>
+      {% if can_edit %}<button type="button" class="btn" style="font-size:11px;padding:5px 10px;" onclick="openModal('header-modal')"><i class="ti ti-edit"></i> Edit</button>{% endif %}
     </div>
 
-    <div class="actions">
-      {% if can_review %}
-        <form method="post" action="/claims/{{ claim.id }}/approve"><button class="primary">Approve</button></form>
-        <form method="post" action="/claims/{{ claim.id }}/send-back">
-          <input name="reason" placeholder="Reason"><button type="submit">Send back</button>
-        </form>
-        <form method="post" action="/claims/{{ claim.id }}/reject">
-          <input name="reason" placeholder="Reason"><button type="submit" class="danger">Reject</button>
-        </form>
-      {% endif %}
-      {% if can_resubmit %}
-        <form method="post" action="/claims/{{ claim.id }}/resubmit"><button class="primary">Resubmit to review</button></form>
-      {% endif %}
-      {% if can_release %}
-        <form method="post" action="/claims/{{ claim.id }}/release"><button class="primary">Release</button></form>
-      {% endif %}
-      {% if claim.status == 'released' %}<p class="released-note">Released &amp; anchored — immutable.</p>{% endif %}
-      {% if claim.status == 'rejected' %}<p class="muted">Rejected — terminal.</p>{% endif %}
+    <div class="doc-facts">
+      <div>
+        <div class="fk">Claimant</div>
+        <div class="fv {{ '' if claimant else 'muted' }}">{{ claimant.name if claimant else 'Not set' }}</div>
+      </div>
+      <div>
+        <div class="fk">Total claimed</div>
+        <div class="fv amount">{{ claim.claim_currency or 'RM' }} {{ '%.2f' | format(claim.total_claimed) if claim.total_claimed is not none else '0.00' }}</div>
+      </div>
+      <div>
+        <div class="fk">Posting date</div>
+        <div class="fv {{ '' if claim.posting_date else 'muted' }}">{{ claim.posting_date or 'Not set' }}</div>
+      </div>
+      <div>
+        <div class="fk">Period</div>
+        {% if claim.start_date %}<div class="fv">{{ claim.start_date }}{% if claim.end_date %} – {{ claim.end_date }}{% endif %}</div>
+        {% elif claim.period %}<div class="fv">{{ claim.period }}</div>
+        {% else %}<div class="fv muted">Not set</div>{% endif %}
+      </div>
+      <div>
+        <div class="fk">Cost centre</div>
+        <div class="fv {{ '' if claim.department else 'muted' }}">{{ claim.department or 'Not set' }}</div>
+      </div>
+      <div>
+        <div class="fk">Project</div>
+        <div class="fv {{ '' if claim.project_code else 'muted' }}">{{ claim.project_code or 'Not set' }}</div>
+      </div>
+      <div>
+        <div class="fk">Currency</div>
+        <div class="fv">{{ claim.claim_currency or 'MYR' }}</div>
+      </div>
+    </div>
+
+    <div class="doc-prose2">
+      <div>
+        <div class="pk">Purpose · posts to ERP</div>
+        <div class="pv {{ '' if claim.purpose else 'muted' }}">{{ claim.purpose or 'No business justification given' }}</div>
+      </div>
+      <div>
+        <div class="pk">Remarks · internal</div>
+        <div class="pv {{ '' if claim.remarks else 'muted' }}">{{ claim.remarks or 'No remarks' }}</div>
+      </div>
     </div>
   </div>
-</section>
 
-{% if claimant %}
-<section class="card">
-  <h2>Claimant</h2>
-  <p>{{ claimant.name }} · employee {{ claimant.employee_ref or '—' }} · cost centre {{ claimant.cost_centre or '—' }}</p>
-</section>
-{% endif %}
+  {# -- Event context + budget + related claims ---------------------------- #}
+  {% if event %}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-header">
+      <div class="card-title"><i class="ti ti-map-pin" style="font-size:13px;"></i> {{ event.title }}</div>
+      <span class="badge info">{% if event.attendee_count %}{{ event.attendee_count }} pax · {% endif %}{{ event.event_type or 'event' }}</span>
+    </div>
+    {% if event.purpose %}<div style="font-size:12px;color:var(--text-secondary);margin:4px 0 8px;">{{ event.purpose }}</div>{% endif %}
+    <div style="font-size:11px;color:var(--text-tertiary);">
+      {% if event.start_date %}{{ event.start_date }}{% if event.end_date %} – {{ event.end_date }}{% endif %} · {% endif %}
+      {% if event.location %}{{ event.location }} · {% endif %}
+      {% if event.cost_centre %}Cost centre {{ event.cost_centre }}{% endif %}
+      {% if event.project_code %} · Project {{ event.project_code }}{% endif %}
+    </div>
+    {% if budget and budget.amount is not none %}
+    {% set pct = (budget.spent / budget.amount * 100) | round if budget.amount and budget.amount > 0 else 0 %}
+    <div style="margin-top:10px;">
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px;">
+        <span>Budget</span>
+        <span style="color:{{ 'var(--red-neg)' if budget.over else 'var(--text-secondary)' }};">
+          RM {{ '%.2f' | format(budget.spent) }} / {{ '%.2f' | format(budget.amount) }}
+          {% if budget.remaining is not none %}· RM {{ '%.2f' | format(budget.remaining) }} left{% endif %}
+        </span>
+      </div>
+      <div style="height:8px;border-radius:5px;background:var(--border);overflow:hidden;">
+        <div style="height:100%;width:{{ [pct, 100] | min }}%;background:{{ 'var(--red-neg)' if budget.over else 'var(--green-pos)' }};"></div>
+      </div>
+      {% if budget.over %}<div style="font-size:11px;color:var(--red-neg);margin-top:4px;"><i class="ti ti-alert-triangle"></i> Over budget — needs an override.</div>{% endif %}
+    </div>
+    {% endif %}
+    {% if related %}
+    <div class="hint-warn" style="margin-top:10px;font-size:11px;">
+      <i class="ti ti-link"></i> This is one of {{ related | length + 1 }} claims for this event (late bills / split across people are combined above).
+      {% for r in related %}<a href="/claims/{{ r.id }}/review" style="margin-left:6px;">{{ r.id | string | truncate(8, true, '') }}</a>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
 
-<section class="card">
-  <h2>Audit trail</h2>
-  <ol class="audit">
+  {# -- Lines: the heart of the screen. Click a line to verify it (modal). -- #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-header">
+      <div class="card-title">Lines <span style="font-weight:400;color:var(--text-tertiary);">({{ lines | length }})</span></div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span class="badge {{ 'success' if carbon_count else 'neutral' }}">
+          <i class="ti ti-leaf" style="font-size:11px;"></i>{{ carbon_count }} of {{ lines | length }} carbon-relevant
+        </span>
+        {% if can_edit %}<button type="button" class="btn" style="font-size:11px;padding:5px 10px;" onclick="openModal('mileage-modal')"><i class="ti ti-map-2"></i> Add mileage</button>{% endif %}
+      </div>
+    </div>
+
+    <div style="font-size:11px;color:var(--text-secondary);margin:4px 0 0;"><i class="ti ti-click"></i> Click any line to view its receipt and verify the captured details.</div>
+
+    <form method="post" action="/claims/{{ claim.id }}/decide" id="decide-form">
+    <table class="data" style="margin-top:8px;">
+      <thead>
+        <tr>
+          <th></th>
+          <th>#</th><th>Doc no</th><th>Category</th><th>Vendor</th><th>Date</th>
+          <th style="text-align:right;">Amount</th><th>Pay</th><th title="Carbon-relevant">CO₂</th><th title="GL code + cost centre present">Posting</th><th>Status</th>
+          {% if can_review %}<th>Decision</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for ln in lines %}
+        {% set cat = cat_by_id.get(ln.category_id) %}
+        <tr class="line-row" data-line="{{ ln.id }}" data-no="{{ ln.line_no }}"
+            data-vendor="{{ ln.vendor or 'Receipt' }}" style="cursor:pointer;">
+          <td style="text-align:center;"><i class="ti ti-eye" title="View &amp; verify" style="color:var(--text-tertiary);"></i></td>
+          <td>{{ ln.line_no }}</td>
+          <td style="font-family:'SF Mono',monospace;font-size:11px;">{{ ln.doc_no or '—' }}</td>
+          <td>
+            {{ cat.name if cat else (ln.expense_type or '—') }}
+            {% if ln.category_id is none %}<br><span class="badge danger" style="font-size:9px;">no category — assign</span>{% endif %}
+          </td>
+          <td>{{ ln.vendor or '—' }}</td>
+          <td>{{ ln.doc_date or '—' }}</td>
+          <td style="text-align:right;">{{ ln.total_amount if ln.total_amount is not none else '—' }}</td>
+          <td><span style="font-size:10px;">{{ ln.payment_method.replace('_',' ') }}</span></td>
+          <td style="text-align:center;">
+            {% if ln.carbon_relevant %}<i class="ti ti-leaf" style="color:var(--green-pos);" title="Carbon-relevant — forwarded to CarbonNext"></i>
+            {% else %}<span style="color:var(--text-tertiary);">—</span>{% endif %}
+          </td>
+          <td style="text-align:center;">
+            {% set cd = coding.get(ln.id) %}
+            {% if cd and cd.ready %}<i class="ti ti-circle-check" style="color:var(--green-pos);" title="Coded — GL {{ ln.gl_code }} · cost centre {{ cd.cost_centre }}"></i>
+            {% else %}<i class="ti ti-alert-circle" style="color:#d97706;" title="Needs GL code + cost centre before posting"></i>{% endif %}
+          </td>
+          <td><span class="badge {{ line_badge.get(ln.line_status,'info') }}">{{ ln.line_status }}</span></td>
+          {% if can_review %}
+          <td>
+            <select name="line_{{ ln.id }}" class="field" style="width:auto;min-width:96px;padding:3px 6px;font-size:11px;"
+                    onchange="this.closest('tr').querySelector('.rsn').style.display = (this.value=='approved'?'none':'block');">
+              <option value="approved" selected>Approve</option>
+              <option value="queried">Query</option>
+              <option value="rejected">Reject</option>
+            </select>
+            <input class="field rsn" name="reason_{{ ln.id }}" placeholder="Reason" style="display:none;margin-top:3px;padding:3px 6px;font-size:11px;">
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="posts-to" style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap;">
+      <div><div class="label">Claimed</div><strong>RM {{ '%.2f' | format(claim.total_claimed) if claim.total_claimed is not none else '0.00' }}</strong></div>
+      <div><div class="label">Approved</div><strong>RM {{ '%.2f' | format(claim.total_approved) if claim.total_approved is not none else '0.00' }}</strong></div>
+      <div><div class="label">Reimbursable (out-of-pocket)</div><strong>RM {{ '%.2f' | format(claim.total_reimbursable) if claim.total_reimbursable is not none else '0.00' }}</strong></div>
+    </div>
+
+    {% if can_review %}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:12px;">
+      <input class="field" name="note" placeholder="Approver note (optional)" style="flex:1;">
+      <button class="btn btn-accent" type="submit" style="padding:9px 16px;"><i class="ti ti-check"></i>Decide claim</button>
+    </div>
+    <div style="font-size:10px;color:var(--text-tertiary);margin-top:4px;">One action: approve, query or reject each line. Queried/rejected lines need a reason. Approve-all → claim approved; a query → sent back; a mix → partially approved.</div>
+    {% endif %}
+    </form>
+  </div>
+
+  {# -- Approval chain (audit trail) ---------------------------------------- #}
+  <div class="card" style="margin-bottom:14px;padding:14px 18px;">
+    <div class="card-title" style="margin-bottom:10px;">Approval chain</div>
     {% for e in events %}
-      <li><span class="evt">{{ e.event_type }}</span> by {{ e.actor }}
-          {% if e.detail and e.detail.reason %}— {{ e.detail.reason }}{% endif %}
-          <span class="mono">{{ e.hash[:16] }}…</span></li>
+    <div class="approval-row">
+      <div class="av">{{ e.actor[:2] | upper }}</div>
+      <div style="flex:1;">
+        <div class="name">{{ e.event_type }}{% if e.detail and e.detail.reason %} — {{ e.detail.reason }}{% endif %}{% if e.detail and e.detail.note %} — {{ e.detail.note }}{% endif %}</div>
+        <div class="when">{{ e.actor }}</div>
+      </div>
+      <div class="right-icon"><i class="ti ti-circle-check" style="color:var(--green-pos);"></i></div>
+    </div>
     {% endfor %}
-  </ol>
-</section>
+  </div>
+
+  {# -- Whole-claim actions ------------------------------------------------- #}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    {% if can_review %}
+      <form method="post" action="/claims/{{ claim.id }}/reject" style="flex:1;display:flex;gap:6px;">
+        <input class="field" name="reason" placeholder="Reason" style="flex:1;">
+        <button class="btn" type="submit"><i class="ti ti-x"></i>Reject all</button>
+      </form>
+      <form method="post" action="/claims/{{ claim.id }}/send-back" style="flex:1;display:flex;gap:6px;">
+        <input class="field" name="reason" placeholder="Reason" style="flex:1;">
+        <button class="btn" type="submit"><i class="ti ti-arrow-back-up"></i>Send back</button>
+      </form>
+      <form method="post" action="/claims/{{ claim.id }}/approve" style="flex:1;">
+        <button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;padding:9px 14px;"><i class="ti ti-check"></i>Approve all</button>
+      </form>
+    {% endif %}
+    {% if can_reopen %}
+      <form method="post" action="/claims/{{ claim.id }}/unapprove" style="flex:1;"><button class="btn" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-lock-open"></i>Unapprove &amp; amend</button></form>
+    {% endif %}
+    {% if can_resubmit %}
+      <form method="post" action="/claims/{{ claim.id }}/resubmit" style="flex:1;"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-send"></i>Resubmit to review</button></form>
+    {% endif %}
+    {% if can_release %}
+      <form method="post" action="/claims/{{ claim.id }}/release" style="flex:1;"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-check"></i>Release</button></form>
+    {% endif %}
+    {% if claim.status == 'released' %}<div class="badge success" style="padding:9px 14px;">Released &amp; anchored — immutable</div>{% endif %}
+    {% if claim.status == 'rejected' %}<div class="badge danger" style="padding:9px 14px;">Rejected — terminal</div>{% endif %}
+  </div>
+
+  {# ====================================================================== #}
+  {# MODALS — kept OUTSIDE every <form> so their own forms never nest.       #}
+  {# ====================================================================== #}
+
+  {# -- Line-detail / OCR-verify modal -------------------------------------- #}
+  <div class="modal" id="line-modal">
+    <div class="modal-backdrop" onclick="closeModal('line-modal')"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div class="mt">Verify line <span id="receipt-caption">1</span></div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <a class="btn" id="receipt-dl" style="padding:5px 9px;" href="/claims/{{ claim.id }}/image"><i class="ti ti-download" style="font-size:13px;"></i></a>
+          <button type="button" class="modal-x" onclick="closeModal('line-modal')" aria-label="Close">&times;</button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="verify-grid">
+          <!-- Receipt (or route map for a mileage line) -->
+          <div>
+            <div id="route-summary" style="font-size:12px;color:var(--text-secondary);margin:0 0 8px;" hidden></div>
+            <div id="box-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;"></div>
+            <div id="receipt-wrap" style="position:relative;line-height:0;">
+              <img id="receipt-img" src="/claims/{{ claim.id }}/image" alt="receipt"
+                   style="width:100%;border-radius:10px;border:1px solid var(--border);display:block;"
+                   onload="renderBoxes();"
+                   onerror="this.style.display='none';document.getElementById('receipt-fallback').style.display='block';">
+              <div id="box-layer" style="position:absolute;inset:0;pointer-events:none;"></div>
+            </div>
+            {# Mileage lines render their route here with the Maps JavaScript API
+               (the same one the capture page uses) — not the static-image API. #}
+            <div id="route-map" style="width:100%;height:360px;border-radius:10px;border:1px solid var(--border);display:none;background:#eef1f4;"></div>
+            <div id="receipt-fallback" class="doc-preview" style="display:none;margin-top:6px;">
+              <div class="section" style="text-align:center;font-size:10px;">Receipt image unavailable</div>
+            </div>
+          </div>
+
+          <!-- Per-line detail: editable form (open claim) or read-only view -->
+          <div>
+            {% if can_edit %}
+            {% for ln in lines %}
+            <div class="edit-panel" id="edit-{{ ln.id }}" style="{{ '' if loop.first else 'display:none;' }}">
+              <form method="post" action="/claims/{{ claim.id }}/category" style="margin-bottom:12px;">
+                <input type="hidden" name="line_id" value="{{ ln.id }}">
+                <label class="label-tiny">Category</label>
+                <div style="display:flex;gap:8px;">
+                  <select class="field" name="category_id" style="flex:1;">
+                    {% for cat in categories %}<option value="{{ cat.id }}" {{ 'selected' if ln.category_id == cat.id else '' }}>{{ cat.name }}{% if cat.carbon_relevant %} · carbon{% endif %}</option>{% endfor %}
+                  </select>
+                  <button class="btn btn-primary" type="submit">Assign</button>
+                </div>
+              </form>
+              <form method="post" action="/claims/{{ claim.id }}/edit">
+                <input type="hidden" name="line_id" value="{{ ln.id }}">
+                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;"><i class="ti ti-info-circle"></i> Correct anything the OCR got wrong, then <strong>Save line</strong> (button stays pinned below).</div>
+                <div class="field-row">
+                  <div><label class="label-tiny">Vendor</label><input class="field" name="vendor" value="{{ ln.vendor or '' }}"></div>
+                  <div><label class="label-tiny">Doc no</label><input class="field" name="doc_no" value="{{ ln.doc_no or '' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Doc date</label><input class="field" name="doc_date" value="{{ ln.doc_date or '' }}"></div>
+                  <div><label class="label-tiny">Total</label><input class="field" name="total_amount" value="{{ ln.total_amount or '' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Payment</label>
+                    <select class="field" name="payment_method">{% for p in payment_methods %}<option value="{{ p }}" {{ 'selected' if ln.payment_method == p else '' }}>{{ p.replace('_',' ') }}</option>{% endfor %}</select>
+                  </div>
+                  <div><label class="label-tiny">Business reason</label><input class="field" name="business_reason" value="{{ ln.business_reason or '' }}"></div>
+                </div>
+
+                <div class="card-title" style="margin:14px 0 8px;font-size:12px;">Accounting coding <span style="font-weight:400;color:var(--text-tertiary);font-size:10px;">— required to post</span></div>
+                <div class="field-row">
+                  <div><label class="label-tiny">GL account code</label><input class="field" name="gl_code" value="{{ ln.gl_code or '' }}" placeholder="e.g. 6100"></div>
+                  <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre_override" value="{{ ln.cost_centre_override or '' }}" placeholder="{{ coding.get(ln.id).cost_centre or 'e.g. SALES-02' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Department</label><input class="field" name="department" value="{{ ln.department or '' }}"></div>
+                  <div><label class="label-tiny">Project / job code</label><input class="field" name="project_code" value="{{ ln.project_code or '' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Posting date</label><input class="field" type="date" name="posting_date" value="{{ ln.posting_date if ln.posting_date else '' }}"></div>
+                  <div><label class="label-tiny">Supplier tax-reg no (SST/GST)</label><input class="field" name="supplier_tax_id" value="{{ ln.supplier_tax_id or '' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">GST/SST amount</label><input class="field" name="tax_amount" value="{{ ln.tax_amount or '' }}"></div>
+                  <div><label class="label-tiny">Tax code</label><input class="field" name="tax_code" value="{{ ln.tax_code or '' }}" placeholder="e.g. SR / ZR / ES"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div style="display:flex;align-items:flex-end;padding-bottom:6px;">
+                    <label style="display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;">
+                      <input type="checkbox" name="tax_inclusive" value="1" {{ 'checked' if ln.tax_inclusive or ln.tax_inclusive is none else '' }}> Tax-inclusive total
+                    </label>
+                  </div>
+                  <div><label class="label-tiny">FX rate (to MYR, if foreign)</label><input class="field" name="fx_rate" value="{{ ln.fx_rate or '' }}"></div>
+                </div>
+                {% if ln.net_amount is not none or ln.base_amount is not none %}
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:8px;">Net (ex-tax) RM {{ '%.2f' | format(ln.net_amount) if ln.net_amount is not none else '—' }} · Base (MYR) RM {{ '%.2f' | format(ln.base_amount) if ln.base_amount is not none else '—' }}</div>
+                {% endif %}
+                <div class="line-save-bar">
+                  <button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-check"></i> Save line</button>
+                </div>
+              </form>
+            </div>
+            {% endfor %}
+            {% else %}
+            {# Read-only detail — claim is decided/locked or the user can't edit. #}
+            {% for ln in lines %}
+            {% set cat = cat_by_id.get(ln.category_id) %}
+            <div class="edit-panel" id="edit-{{ ln.id }}" style="{{ '' if loop.first else 'display:none;' }}">
+              <div class="meta-strip" style="margin-top:0;flex-direction:column;align-items:stretch;">
+                <div class="m" style="border-right:0;padding:0 0 8px;"><span class="mk">Category</span><span class="mv">{{ cat.name if cat else (ln.expense_type or '—') }}</span></div>
+              </div>
+              <div class="field-row">
+                <div><div class="label-tiny">Vendor</div><div class="dv">{{ ln.vendor or '—' }}</div></div>
+                <div><div class="label-tiny">Doc no</div><div class="dv">{{ ln.doc_no or '—' }}</div></div>
+              </div>
+              <div class="field-row" style="margin-top:8px;">
+                <div><div class="label-tiny">Doc date</div><div class="dv">{{ ln.doc_date or '—' }}</div></div>
+                <div><div class="label-tiny">Total</div><div class="dv">{{ ln.currency or '' }} {{ ln.total_amount if ln.total_amount is not none else '—' }}</div></div>
+              </div>
+              <div class="field-row" style="margin-top:8px;">
+                <div><div class="label-tiny">Payment</div><div class="dv">{{ ln.payment_method.replace('_',' ') }}</div></div>
+                {% if not can_code %}<div><div class="label-tiny">GL · cost centre</div><div class="dv">{{ ln.gl_code or '—' }} · {{ coding.get(ln.id).cost_centre or '—' }}</div></div>{% else %}<div></div>{% endif %}
+              </div>
+              {% if ln.business_reason %}<div style="margin-top:8px;"><div class="label-tiny">Business reason</div><div class="dv">{{ ln.business_reason }}</div></div>{% endif %}
+
+              {# Post-approval, pre-release: the EXPENSE is locked (read-only above) but
+                 Finance can still set the accounting CODING so the claim can post. #}
+              {% if can_code %}
+              <form method="post" action="/claims/{{ claim.id }}/edit" style="margin-top:14px;">
+                <input type="hidden" name="line_id" value="{{ ln.id }}">
+                <div class="card-title" style="margin:0 0 8px;font-size:12px;">Accounting coding
+                  <span style="font-weight:400;color:var(--text-tertiary);font-size:10px;">— required to post · expense is locked after approval</span></div>
+                <div class="field-row">
+                  <div><label class="label-tiny">GL account code</label><input class="field" name="gl_code" value="{{ ln.gl_code or '' }}" placeholder="{{ (cat.gl_export_code if cat else '') or 'e.g. 6100' }}"></div>
+                  <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre_override" value="{{ ln.cost_centre_override or '' }}" placeholder="{{ coding.get(ln.id).cost_centre or 'e.g. SALES-02' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Department</label><input class="field" name="department" value="{{ ln.department or '' }}"></div>
+                  <div><label class="label-tiny">Project / job code</label><input class="field" name="project_code" value="{{ ln.project_code or '' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Posting date</label><input class="field" type="date" name="posting_date" value="{{ ln.posting_date if ln.posting_date else '' }}"></div>
+                  <div><label class="label-tiny">Supplier tax-reg no (SST/GST)</label><input class="field" name="supplier_tax_id" value="{{ ln.supplier_tax_id or '' }}"></div>
+                </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">GST/SST amount</label><input class="field" name="tax_amount" value="{{ ln.tax_amount or '' }}"></div>
+                  <div><label class="label-tiny">Tax code</label><input class="field" name="tax_code" value="{{ ln.tax_code or '' }}" placeholder="e.g. SR / ZR / ES"></div>
+                </div>
+                {% if ln.net_amount is not none or ln.base_amount is not none %}
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:8px;">Net (ex-tax) RM {{ '%.2f' | format(ln.net_amount) if ln.net_amount is not none else '—' }} · Base (MYR) RM {{ '%.2f' | format(ln.base_amount) if ln.base_amount is not none else '—' }}</div>
+                {% endif %}
+                <div class="line-save-bar">
+                  <button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-check"></i> Save coding</button>
+                </div>
+              </form>
+              {% endif %}
+
+              <div style="margin-top:8px;font-size:11px;color:var(--text-secondary);">
+                Status <span class="badge {{ line_badge.get(ln.line_status,'info') }}">{{ ln.line_status }}</span>
+                {% if ln.carbon_relevant %} · <i class="ti ti-leaf" style="color:var(--green-pos);"></i> carbon-relevant{% endif %}
+              </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if can_edit %}
+  {# -- Add-mileage modal --------------------------------------------------- #}
+  <div class="modal" id="mileage-modal">
+    <div class="modal-backdrop" onclick="closeModal('mileage-modal')"></div>
+    <div class="modal-card narrow">
+      <div class="modal-head">
+        <div class="mt"><i class="ti ti-map-2"></i> Add a mileage line</div>
+        <button type="button" class="modal-x" onclick="closeModal('mileage-modal')" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form method="post" action="/claims/{{ claim.id }}/mileage" id="add-mileage-form">
+          <input type="hidden" name="waypoints" id="am-waypoints" value="[]">
+          <div class="field-row">
+            <div><label class="label-tiny">From</label><input class="field am-place" name="origin" id="am-from" autocomplete="off" placeholder="Start location"></div>
+            <div><label class="label-tiny">To</label><input class="field am-place" name="destination" id="am-to" autocomplete="off" placeholder="Destination"></div>
+          </div>
+          <div id="am-stops"></div>
+          <div style="display:flex;gap:8px;align-items:flex-end;margin-top:8px;">
+            <button type="button" class="btn" style="font-size:11px;" onclick="amAddStop()"><i class="ti ti-plus"></i> Add stop</button>
+            <div><label class="label-tiny">Trip date</label><input class="field" type="date" name="trip_date" style="padding:6px 8px;"></div>
+            <button class="btn btn-accent" type="submit" style="margin-left:auto;"><i class="ti ti-plus"></i> Add mileage line</button>
+          </div>
+          <div id="am-dist" style="font-size:12px;color:var(--text-secondary);margin-top:10px;">Enter From and To to preview the route.</div>
+          <div id="am-map" style="width:100%;height:240px;border-radius:10px;border:1px solid var(--border);margin-top:8px;display:none;background:#eef1f4;"></div>
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:6px;">Distance is computed server-side and reimbursed per the client mileage rate.</div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {# -- Header-edit modal --------------------------------------------------- #}
+  <div class="modal" id="header-modal">
+    <div class="modal-backdrop" onclick="closeModal('header-modal')"></div>
+    <div class="modal-card narrow">
+      <div class="modal-head">
+        <div class="mt"><i class="ti ti-file-description"></i> Edit claim header</div>
+        <button type="button" class="modal-x" onclick="closeModal('header-modal')" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form method="post" action="/claims/{{ claim.id }}/header">
+          <div class="field-row">
+            <div><label class="label-tiny">Title</label><input class="field" name="title" value="{{ claim.title or '' }}" placeholder="e.g. KL client trip — Mar"></div>
+            <div><label class="label-tiny">Posting date</label><input class="field" type="date" name="posting_date" value="{{ claim.posting_date if claim.posting_date else '' }}"></div>
+          </div>
+          <div class="field-row" style="margin-top:8px;">
+            <div><label class="label-tiny">Cost centre / department</label><input class="field" name="department" value="{{ claim.department or '' }}" placeholder="e.g. SALES-02"></div>
+            <div><label class="label-tiny">Project / job code</label><input class="field" name="project_code" value="{{ claim.project_code or '' }}" placeholder="e.g. T-1187"></div>
+          </div>
+          <div class="field-row" style="margin-top:8px;">
+            <div><label class="label-tiny">Currency</label><input class="field" name="claim_currency" value="{{ claim.claim_currency or '' }}" placeholder="MYR"></div>
+            <div></div>
+          </div>
+          <div style="margin-top:8px;"><label class="label-tiny">Purpose (business justification — posts to ERP)</label>
+            <input class="field" name="purpose" value="{{ claim.purpose or '' }}" placeholder="Why this spend happened"></div>
+          <div style="margin-top:8px;"><label class="label-tiny">Remarks (internal note — not posted to the ERP)</label>
+            <input class="field" name="remarks" value="{{ claim.remarks or '' }}" placeholder="Any internal commentary"></div>
+          <button class="btn btn-accent" type="submit" style="margin-top:12px;"><i class="ti ti-check"></i> Save header</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+{% endif %}
+</div>
+
+<script>
+// Per-line OCR boxes: { line_id: { field: [x, y, w, h] (normalized 0..1) } }.
+var LINE_BOXES = {{ line_boxes | tojson }};
+var LINE_MILEAGE = {{ line_mileage | tojson }};   // { line_id: { origin, destination, ... } }
+var MAPS_KEY = {{ maps_key | tojson }};
+var _curLine = null;     // current line id shown in the viewer
+var _focus = null;       // focused field name, or null = show all
+var _reviewMap = null, _routeLine = null;   // Maps JS instance for the route view
+
+// Draw a mileage line's route with the Maps JAVASCRIPT API (the one enabled on the
+// key + used by the capture page) rather than the Static Maps image API. Returns
+// true if it rendered, false so the caller can fall back to the static image.
+function renderRouteMap(mil) {
+  var el = document.getElementById("route-map");
+  if (!el || _amMapsBroken || !window.google || !window.google.maps) return false;
+  try {
+    if (!_reviewMap) {
+      _reviewMap = new google.maps.Map(el, {
+        zoom: 11, center: { lat: 3.139, lng: 101.6869 }, disableDefaultUI: true,
+      });
+    }
+    if (_routeLine) { _routeLine.setMap(null); _routeLine = null; }
+    var geo = google.maps.geometry && google.maps.geometry.encoding;
+    var path = (mil.polyline && geo) ? geo.decodePath(mil.polyline) : [];
+    if (path.length) {
+      _routeLine = new google.maps.Polyline(
+        { path: path, strokeColor: "#2563eb", strokeWeight: 4, map: _reviewMap });
+    }
+    el.style.display = "block";
+    // The map may have been built while the modal was hidden → size it once shown.
+    setTimeout(function () {
+      google.maps.event.trigger(_reviewMap, "resize");
+      if (path.length) {
+        var b = new google.maps.LatLngBounds();
+        path.forEach(function (p) { b.extend(p); });
+        _reviewMap.fitBounds(b);
+      }
+    }, 60);
+    return true;
+  } catch (e) { return false; }
+}
+
+// ---- Modal open/close -----------------------------------------------------
+function openModal(id) {
+  var m = document.getElementById(id);
+  if (!m) return;
+  m.classList.add("open");
+  document.body.style.overflow = "hidden";
+  if (id === "line-modal") {
+    renderBoxes();   // image is now visible → size known
+    // Re-size the route map too (it was built while the modal was hidden).
+    if (_reviewMap && window.google) {
+      setTimeout(function () { google.maps.event.trigger(_reviewMap, "resize"); }, 60);
+    }
+  }
+}
+function closeModal(id) {
+  var m = document.getElementById(id);
+  if (m) m.classList.remove("open");
+  document.body.style.overflow = "";
+}
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") {
+    document.querySelectorAll(".modal.open").forEach(function (m) { m.classList.remove("open"); });
+    document.body.style.overflow = "";
+  }
+});
+
+var FIELD_LABELS = {
+  vendor: "Vendor", doc_no: "Doc no", date: "Date", total_amount: "Total",
+  quantity: "Qty", unit: "Unit", currency: "Currency", tax_amount: "Tax",
+};
+function _fieldLabel(f) { return FIELD_LABELS[f] || f.replace(/_/g, " "); }
+
+function renderChips() {
+  var strip = document.getElementById("box-chips");
+  if (!strip) return;
+  var boxes = LINE_BOXES[_curLine] || {};
+  var fields = Object.keys(boxes);
+  strip.innerHTML = "";
+  if (!fields.length) {
+    strip.innerHTML = '<span style="font-size:10px;color:var(--text-tertiary);">No field positions captured for this receipt.</span>';
+    return;
+  }
+  function chip(label, value) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.className = "badge " + (_focus === value ? "info" : "neutral");
+    b.style.cssText = "cursor:pointer;font-size:10px;border:none;";
+    b.onclick = function () { _focus = (_focus === value ? null : value); renderChips(); renderBoxes(); };
+    return b;
+  }
+  strip.appendChild(chip("Show all", null));
+  fields.forEach(function (f) { strip.appendChild(chip(_fieldLabel(f), f)); });
+}
+
+function renderBoxes() {
+  var img = document.getElementById("receipt-img");
+  var layer = document.getElementById("box-layer");
+  if (!img || !layer) return;
+  layer.innerHTML = "";
+  if (img.style.display === "none") return;
+  var W = img.clientWidth, H = img.clientHeight;
+  if (!W || !H) return;
+  var boxes = LINE_BOXES[_curLine] || {};
+  Object.keys(boxes).forEach(function (field) {
+    if (_focus && field !== _focus) return;
+    var b = boxes[field];                       // [x, y, w, h] normalized
+    var d = document.createElement("div");
+    d.style.cssText =
+      "position:absolute;border:2px solid #2563eb;background:rgba(37,99,235,0.12);" +
+      "border-radius:3px;left:" + (b[0] * W) + "px;top:" + (b[1] * H) + "px;" +
+      "width:" + (b[2] * W) + "px;height:" + (b[3] * H) + "px;";
+    var tag = document.createElement("span");
+    tag.textContent = _fieldLabel(field);
+    tag.style.cssText =
+      "position:absolute;top:-16px;left:-2px;font-size:9px;line-height:14px;" +
+      "padding:0 4px;background:#2563eb;color:#fff;border-radius:3px;white-space:nowrap;";
+    d.appendChild(tag);
+    layer.appendChild(d);
+  });
+}
+
+// Load a line into the modal viewer (receipt or route map) + its detail panel.
+function showLine(lineId, lineNo, row) {
+  _curLine = lineId;
+  _focus = null;
+  var img = document.getElementById("receipt-img");
+  var routeEl = document.getElementById("route-summary");
+  var fb = document.getElementById("receipt-fallback");
+  var fbMsg = fb ? fb.querySelector(".section") : null;
+  var wrap = document.getElementById("receipt-wrap");
+  var rmap = document.getElementById("route-map");
+  var chips = document.getElementById("box-chips");
+  var mil = LINE_MILEAGE[lineId];
+  if (fb) fb.style.display = "none";
+  if (chips) chips.style.display = mil ? "none" : "";
+  if (mil) {
+    // Mileage line: show the ROUTE, not a receipt. Prefer the Maps JavaScript API
+    // (enabled on the key); fall back to the server static-map image if Maps JS
+    // isn't loaded (e.g. no key on a view-only page).
+    var stops = [mil.origin].concat(mil.waypoints || []).concat([mil.destination]).join(" → ");
+    if (routeEl) {
+      routeEl.hidden = false;
+      var html = '<i class="ti ti-map-2"></i> ' + stops +
+        ' · <strong>' + mil.distance_km + ' km</strong> @ RM ' + mil.rate_per_km + '/km';
+      // Claimant picked a route longer than Google's recommended one — flag it so the
+      // approver can scrutinise the detour before approving (we still pay the chosen).
+      if (mil.over_recommended && mil.recommended_km) {
+        var ck = parseFloat(mil.distance_km), rk = parseFloat(mil.recommended_km);
+        var pct = rk ? ((ck - rk) / rk * 100).toFixed(0) : "";
+        html += '<span style="color:#b45309;font-weight:600;"> · ⚠ +' + pct +
+          '% over recommended (' + mil.recommended_km + ' km)</span>';
+      }
+      routeEl.innerHTML = html;
+    }
+    if (renderRouteMap(mil)) {
+      if (wrap) wrap.style.display = "none";      // hide the receipt image area
+    } else {
+      if (rmap) rmap.style.display = "none";
+      if (wrap) wrap.style.display = "";
+      if (fbMsg) fbMsg.textContent = "Route map unavailable — enable Maps JavaScript or Maps Static API on your key.";
+      if (img) { img.style.display = ""; img.src = "/claims/{{ claim.id }}/lines/" + lineId + "/route.png"; }
+    }
+  } else {
+    if (rmap) rmap.style.display = "none";
+    if (wrap) wrap.style.display = "";
+    if (routeEl) routeEl.hidden = true;
+    if (fbMsg) fbMsg.textContent = "Receipt image unavailable";
+    if (img) {
+      img.style.display = "";
+      img.src = "/claims/{{ claim.id }}/lines/" + lineId + "/image";
+    }
+  }
+  var cap = document.getElementById("receipt-caption");
+  if (cap) cap.textContent = lineNo + (row && row.dataset.vendor ? " · " + row.dataset.vendor : "");
+  var dl = document.getElementById("receipt-dl");
+  if (dl) dl.href = "/claims/{{ claim.id }}/lines/" + lineId + "/image";
+  document.querySelectorAll(".line-row").forEach(function (r) { r.classList.remove("active"); });
+  if (row) row.classList.add("active");
+  // Show this line's detail/edit panel, hide the others.
+  document.querySelectorAll(".edit-panel").forEach(function (p) { p.style.display = "none"; });
+  var panel = document.getElementById("edit-" + lineId);
+  if (panel) panel.style.display = "";
+  renderChips();
+  renderBoxes();   // also re-runs on img onload, once dimensions are known
+}
+
+// Open the verify modal for a clicked line (ignore clicks on the decision cell).
+function openLine(lineId, lineNo, row) {
+  showLine(lineId, lineNo, row);
+  openModal("line-modal");
+}
+document.querySelectorAll(".line-row").forEach(function (row) {
+  row.addEventListener("click", function (e) {
+    if (e.target.closest("select, input, button, a")) return;   // let controls work
+    openLine(row.dataset.line, row.dataset.no, row);
+  });
+});
+// Re-place boxes if the viewport resizes (rendered image dimensions change).
+window.addEventListener("resize", renderBoxes);
+
+// ---- Add-mileage form (modal) ---------------------------------------------
+function amAddStop() {
+  var wrap = document.getElementById("am-stops");
+  if (!wrap) return;
+  var div = document.createElement("div");
+  div.className = "field-row"; div.style.marginTop = "8px";
+  div.innerHTML =
+    '<div><label class="label-tiny">Via</label><input class="field am-place am-stop" autocomplete="off" placeholder="Stop location"></div>' +
+    '<div style="display:flex;align-items:flex-end;padding-bottom:6px;"><button type="button" class="btn" style="font-size:11px;">Remove</button></div>';
+  var input = div.querySelector("input");
+  div.querySelector("button").onclick = function () { div.remove(); amPreview(); };
+  input.addEventListener("input", amPreview);
+  wrap.appendChild(div);
+  if (window.google && google.maps.places) amAttach(input);
+}
+
+// Draw the add-mileage preview route on its own Maps JS map (same API as the
+// capture page / the verify viewer — not the static-image API).
+var _amMap = null, _amLine = null;
+function amDrawRoute(polyline) {
+  var el = document.getElementById("am-map");
+  if (!el) return;
+  if (_amMapsBroken || !window.google || !window.google.maps || !polyline) {
+    el.style.display = "none";
+    return;
+  }
+  try {
+    el.style.display = "block";
+    if (!_amMap) {
+      _amMap = new google.maps.Map(el, {
+        zoom: 11, center: { lat: 3.139, lng: 101.6869 }, disableDefaultUI: true,
+      });
+    }
+    if (_amLine) { _amLine.setMap(null); _amLine = null; }
+    var geo = google.maps.geometry && google.maps.geometry.encoding;
+    var path = geo ? geo.decodePath(polyline) : [];
+    if (path.length) {
+      _amLine = new google.maps.Polyline(
+        { path: path, strokeColor: "#2563eb", strokeWeight: 4, map: _amMap });
+      var b = new google.maps.LatLngBounds();
+      path.forEach(function (p) { b.extend(p); });
+      setTimeout(function () {
+        google.maps.event.trigger(_amMap, "resize");
+        _amMap.fitBounds(b);
+      }, 60);
+    }
+  } catch (e) { el.style.display = "none"; }
+}
+
+// Live route preview in the add-mileage modal: compute the distance server-side
+// (Routes API) and draw the route with the Maps JavaScript API.
+var _amTimer = null;
+function amPreview() {
+  var from = (document.getElementById("am-from") || {}).value || "";
+  var to = (document.getElementById("am-to") || {}).value || "";
+  var dist = document.getElementById("am-dist");
+  var map = document.getElementById("am-map");
+  if (!from || !to) {
+    if (dist) dist.textContent = "Enter From and To to preview the route.";
+    if (map) map.style.display = "none";
+    return;
+  }
+  var stops = Array.prototype.map.call(document.querySelectorAll(".am-stop"),
+    function (i) { return i.value; }).filter(Boolean);
+  if (dist) dist.textContent = "Computing route…";
+  clearTimeout(_amTimer);
+  _amTimer = setTimeout(function () {
+    var body = new URLSearchParams();
+    body.set("origin", from); body.set("destination", to);
+    body.set("waypoints", JSON.stringify(stops));
+    fetch("/capture/mileage/preview", { method: "POST", body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) { if (dist) dist.textContent = d.error || "No route found."; if (map) map.style.display = "none"; return; }
+        if (dist) dist.textContent = parseFloat(d.distance_km).toFixed(1) + " km · " + d.stops + " stops";
+        if (map) amDrawRoute(d.polyline);   // draw with the Maps JavaScript API
+      })
+      .catch(function () { if (dist) dist.textContent = "Route lookup failed."; });
+  }, 350);
+}
+(function () {
+  ["am-from", "am-to"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("input", amPreview);
+  });
+})();
+var _amMapsBroken = false;
+// If Maps fails to authenticate, keep the add-mileage inputs plain + typeable.
+window.gm_authFailure = function () {
+  _amMapsBroken = true;
+  document.querySelectorAll(".am-place").forEach(function (inp) {
+    inp.parentNode.replaceChild(inp.cloneNode(true), inp);
+  });
+  document.querySelectorAll(".pac-container").forEach(function (e) { e.remove(); });
+};
+function amAttach(input) {
+  // Progressive enhancement only — never block typing.
+  if (_amMapsBroken || !input || !window.google || !google.maps.places ||
+      !google.maps.places.Autocomplete) return;
+  try {
+    new google.maps.places.Autocomplete(input, { fields: ["formatted_address", "name"] })
+      .addListener("place_changed", function () { /* value fills natively */ });
+  } catch (e) { /* leave the plain input */ }
+}
+function initReviewMaps() {
+  if (_amMapsBroken) return;
+  document.querySelectorAll(".am-place").forEach(amAttach);
+  // Maps JS loads async (after the first line was preloaded). If the current line
+  // is a mileage line, draw its route now that the API is ready.
+  if (_curLine && LINE_MILEAGE[_curLine] && renderRouteMap(LINE_MILEAGE[_curLine])) {
+    var wrap = document.getElementById("receipt-wrap");
+    if (wrap) wrap.style.display = "none";
+    var fb = document.getElementById("receipt-fallback");
+    if (fb) fb.style.display = "none";
+  }
+}
+window.initReviewMaps = initReviewMaps;   // Maps JS callback
+(function () {
+  var f = document.getElementById("add-mileage-form");
+  if (f) f.addEventListener("submit", function () {
+    var stops = Array.prototype.map.call(document.querySelectorAll(".am-stop"),
+      function (i) { return i.value; }).filter(Boolean);
+    document.getElementById("am-waypoints").value = JSON.stringify(stops);
+  });
+})();
+
+// Preload the first line into the (closed) modal so the receipt + caption are
+// ready the instant it opens.
+(function () {
+  var first = document.querySelector(".line-row");
+  if (first) showLine(first.dataset.line, first.dataset.no, first);
+})();
+</script>
+{% if maps_key %}
+{# geometry: decode the route polyline for the viewer map. Loaded whenever a key
+   exists (not only when editable) so view-only users also see the route. #}
+<script async defer
+  src="https://maps.googleapis.com/maps/api/js?key={{ maps_key }}&libraries=places,geometry&callback=initReviewMaps"></script>
 {% endif %}
 {% endblock %}
