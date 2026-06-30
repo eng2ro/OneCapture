@@ -196,11 +196,11 @@ def test_nav_shell_renders_live_counts_and_scope(client, fake_ocr, db_session):
     name = db_session.get(Client, db_session.info["principal"]["client"]).name
     page = client.get("/claims").text
 
-    # Topbar scope reflects the real tenant client.
-    assert f"e-Claim · {name}" in page
+    # Rail shows the real tenant client (entity footer).
+    assert name in page
     # Live badges: 2 total, 1 awaiting review, 1 to approve — and none of the
     # mockup's static counts survive.
-    assert '<span class="nav-badge">2</span>' in page          # All claims total
-    assert '<span class="nav-badge">1</span>' in page          # Awaiting review
-    assert '<span class="nav-badge danger">1</span>' in page   # To approve
+    assert '<span class="oc-cnt">2</span>' in page             # All claims total
+    assert '<span class="oc-cnt warn">1</span>' in page        # Awaiting review
+    assert '<span class="oc-cnt alert">1</span>' in page       # To approve
     assert ">42<" not in page and ">23<" not in page

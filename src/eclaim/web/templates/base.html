@@ -5,120 +5,136 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}OneCapture e-Claim{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css?v=20260630c">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
+  <style>
+  /* ---- Editorial app shell (rail + top bar). Colours hardcoded so they never
+     override the per-page content tokens defined in style.css. ---- */
+  .oc-app{height:100vh;display:grid;grid-template-columns:244px 1fr;overflow:hidden;
+    font-family:'Public Sans',system-ui,-apple-system,'Segoe UI',sans-serif;color:#171715;font-size:13.5px;line-height:1.45;-webkit-font-smoothing:antialiased}
+  .oc-rail{background:#f7f8f6;border-right:1px solid #e1e1db;display:flex;flex-direction:column;overflow-y:auto}
+  .oc-rail-top{padding:18px 16px 14px;border-bottom:1px solid #edebe6;display:flex;align-items:center;gap:11px}
+  .oc-mark{width:30px;height:30px;border-radius:7px;background:#1f5d44;color:#fff;display:grid;place-items:center;flex:none;font-size:16px}
+  .oc-wm-name{font-family:'Source Serif 4',Georgia,serif;font-weight:600;font-size:17px;letter-spacing:-.015em;line-height:1}
+  .oc-wm-sub{font-size:9.5px;font-weight:700;letter-spacing:.2em;color:#6b6e66;margin-top:3px}
+  .oc-compose{margin:14px 14px 6px;height:40px;border-radius:5px;display:flex;align-items:center;justify-content:center;gap:9px;background:#1f5d44;color:#fff;font-weight:600;font-size:13.5px;text-decoration:none}
+  .oc-compose:hover{background:#184832}
+  .oc-nav{padding:8px 12px;display:flex;flex-direction:column;gap:1px;flex:1}
+  .oc-nav-h{padding:15px 8px 6px;font-size:10px;font-weight:700;letter-spacing:.14em;color:#9a9d94}
+  .oc-nav-i{height:36px;border-radius:5px;padding:0 10px;display:flex;align-items:center;gap:11px;color:#3f423c;font-weight:500;font-size:13.5px;text-decoration:none;position:relative;border:0;background:none;width:100%;text-align:left;cursor:pointer;font-family:inherit}
+  .oc-nav-i:hover{background:#efefea}
+  .oc-nav-i i{font-size:18px;color:#9a9d94;flex:none;width:18px}
+  .oc-nav-i .lab{flex:1}
+  .oc-nav-i.active{background:#e9f1ec;color:#184832;font-weight:600}
+  .oc-nav-i.active i{color:#1f5d44}
+  .oc-nav-i.active::before{content:"";position:absolute;left:-12px;top:7px;bottom:7px;width:3px;background:#1f5d44;border-radius:0 2px 2px 0}
+  .oc-cnt{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;min-width:22px;height:19px;padding:0 6px;border-radius:5px;display:grid;place-items:center;background:#e9e9e3;color:#6b6e66}
+  .oc-cnt.warn{background:#f7ece2;color:#9a4a1f}
+  .oc-cnt.alert{background:#f3ddd1;color:#7a3a17}
+  .oc-rail-foot{margin-top:auto;padding:12px;border-top:1px solid #edebe6}
+  .oc-entity{display:flex;align-items:center;gap:10px;padding:8px 9px;border:1px solid #e1e1db;border-radius:5px;background:#fff}
+  .oc-entity-logo{width:28px;height:28px;border-radius:5px;background:#e9f1ec;color:#1f5d44;display:grid;place-items:center;font-weight:700;font-size:12px;flex:none}
+  .oc-entity-n{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .oc-entity-s{font-size:10.5px;color:#6b6e66}
+  /* work area */
+  .oc-work{overflow-y:auto;background:#e8eae7;display:flex;flex-direction:column}
+  .oc-bar{position:sticky;top:0;z-index:30;height:58px;background:#fff;border-bottom:1px solid #e1e1db;display:flex;align-items:center;gap:14px;padding:0 22px}
+  .oc-crumb{display:flex;align-items:center;gap:8px;font-size:12.5px;color:#6b6e66;font-weight:500}
+  .oc-crumb b{color:#171715;font-weight:600}
+  .oc-crumb i{color:#9a9d94;font-size:14px}
+  .oc-search{margin-left:6px;flex:1;max-width:420px;height:36px;border:1px solid #e1e1db;border-radius:5px;background:#f7f8f6;display:flex;align-items:center;gap:9px;padding:0 11px;color:#9a9d94}
+  .oc-search:focus-within{border-color:#bcd6c8;box-shadow:0 0 0 3px #e9f1ec}
+  .oc-search input{border:none;background:none;outline:none;flex:1;font-family:inherit;font-size:13px;color:#171715}
+  .oc-bar-r{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .oc-ibtn{width:36px;height:36px;border-radius:5px;color:#6b6e66;display:grid;place-items:center;border:0;background:none;cursor:pointer;position:relative}
+  .oc-ibtn:hover{background:#f1f1ed;color:#171715}
+  .oc-ibtn i{font-size:18px}
+  .oc-vline{width:1px;height:24px;background:#e1e1db;margin:0 5px}
+  .oc-usr{display:flex;align-items:center;gap:10px;padding:4px 7px 4px 5px;border-radius:5px;border:0;background:none;cursor:pointer}
+  .oc-usr:hover{background:#f1f1ed}
+  .oc-usr-av{width:30px;height:30px;border-radius:5px;background:#e9f1ec;color:#184832;display:grid;place-items:center;font-weight:700;font-size:11.5px;flex:none}
+  .oc-usr-n{font-size:12.5px;font-weight:600;line-height:1.2;text-align:left}
+  .oc-usr-r{font-size:10.5px;color:#1f5d44;font-weight:600;text-align:left}
+  .oc-content{flex:1;padding:24px 26px 32px}
+  @media(max-width:1000px){
+    .oc-app{display:flex;flex-direction:column;height:auto;min-height:100vh;overflow:visible}
+    .oc-rail{flex-direction:row;flex-wrap:wrap;border-right:0;border-bottom:1px solid #e1e1db}
+    .oc-nav,.oc-rail-foot{display:none}
+    .oc-work{overflow:visible}
+  }
+  </style>
 </head>
 <body>
 
-<div class="app" id="app">
+<div class="oc-app">
 
-<aside class="sidebar" id="sidebar">
-  <div class="brand" style="gap:0;padding-left:14px;">
-    <div class="brand-name" style="margin-left:0;">
-      <div style="font-size:18px;font-weight:700;letter-spacing:-0.025em;line-height:1.05;color:#fdfffe;">One<span style="color:#5ce1e6;">Capture</span></div>
-      <div style="font-size:10px;color:rgba(255,255,255,0.5);letter-spacing:0.08em;font-weight:600;margin-top:2px;">E-CLAIM</div>
+  <aside class="oc-rail">
+    <div class="oc-rail-top">
+      <div class="oc-mark"><i class="ti ti-leaf"></i></div>
+      <div><div class="oc-wm-name">OneCapture</div><div class="oc-wm-sub">E-CLAIM</div></div>
     </div>
-    <span class="brand-collapse">«</span>
-  </div>
 
-  <div class="nav-section" style="flex:1; overflow-y:auto;">
-    <a class="btn btn-accent" href="/capture" style="width:calc(100% - 12px);margin:10px 6px;justify-content:center;padding:9px;"><i class="ti ti-plus"></i>New claim</a>
+    <a class="oc-compose" href="/capture"><i class="ti ti-plus"></i> New claim</a>
 
-    <div class="nav-label">Inbox</div>
-    <a class="nav-item {{ 'active' if request.url.path == '/claims' and not request.url.query else '' }}" href="/claims">
-      <i class="ti ti-inbox"></i>
-      <span class="label">All claims</span>
-      {% if nav_total %}<span class="nav-badge">{{ nav_total }}</span>{% endif %}
-    </a>
-    <a class="nav-item {{ 'active' if 'status=in_review' in request.url.query else '' }}" href="/claims?status=in_review">
-      <i class="ti ti-clock"></i>
-      <span class="label">Awaiting review</span>
-      {% if nav_counts.get('in_review') %}<span class="nav-badge">{{ nav_counts['in_review'] }}</span>{% endif %}
-    </a>
-    <a class="nav-item {{ 'active' if 'status=approved' in request.url.query else '' }}" href="/claims?status=approved">
-      <i class="ti ti-user-check"></i>
-      <span class="label">To approve</span>
-      {% if nav_counts.get('approved') %}<span class="nav-badge danger">{{ nav_counts['approved'] }}</span>{% endif %}
-    </a>
-    <a class="nav-item {{ 'active' if 'status=rejected' in request.url.query else '' }}" href="/claims?status=rejected">
-      <i class="ti ti-flag"></i>
-      <span class="label">Flagged</span>
-      {% if nav_counts.get('rejected') %}<span class="nav-badge danger">{{ nav_counts['rejected'] }}</span>{% endif %}
-    </a>
-    <a class="nav-item {{ 'active' if 'status=released' in request.url.query else '' }}" href="/claims?status=released">
-      <i class="ti ti-check"></i>
-      <span class="label">Released</span>
-      {% if nav_counts.get('released') %}<span class="nav-badge">{{ nav_counts['released'] }}</span>{% endif %}
-    </a>
+    <nav class="oc-nav">
+      <div class="oc-nav-h">INBOX</div>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/claims' and not request.url.query else '' }}" href="/claims">
+        <i class="ti ti-inbox"></i><span class="lab">All claims</span>{% if nav_total %}<span class="oc-cnt">{{ nav_total }}</span>{% endif %}</a>
+      <a class="oc-nav-i {{ 'active' if 'status=in_review' in request.url.query else '' }}" href="/claims?status=in_review">
+        <i class="ti ti-clock"></i><span class="lab">Awaiting review</span>{% if nav_counts.get('in_review') %}<span class="oc-cnt warn">{{ nav_counts['in_review'] }}</span>{% endif %}</a>
+      <a class="oc-nav-i {{ 'active' if 'status=approved' in request.url.query else '' }}" href="/claims?status=approved">
+        <i class="ti ti-user-check"></i><span class="lab">To approve</span>{% if nav_counts.get('approved') %}<span class="oc-cnt alert">{{ nav_counts['approved'] }}</span>{% endif %}</a>
+      <a class="oc-nav-i {{ 'active' if 'status=rejected' in request.url.query else '' }}" href="/claims?status=rejected">
+        <i class="ti ti-flag"></i><span class="lab">Flagged</span>{% if nav_counts.get('rejected') %}<span class="oc-cnt alert">{{ nav_counts['rejected'] }}</span>{% endif %}</a>
+      <a class="oc-nav-i {{ 'active' if 'status=released' in request.url.query else '' }}" href="/claims?status=released">
+        <i class="ti ti-check"></i><span class="lab">Released</span>{% if nav_counts.get('released') %}<span class="oc-cnt">{{ nav_counts['released'] }}</span>{% endif %}</a>
 
-    <div class="nav-label">Manage</div>
-    <a class="nav-item {{ 'active' if request.url.path == '/admin/events' else '' }}" href="/admin/events">
-      <i class="ti ti-map-pin"></i>
-      <span class="label">Events &amp; budgets</span>
-    </a>
-    <a class="nav-item {{ 'active' if request.url.path == '/admin/claimants' else '' }}" href="/admin/claimants">
-      <i class="ti ti-users"></i>
-      <span class="label">Claimants</span>
-    </a>
-    <a class="nav-item {{ 'active' if request.url.path == '/admin/categories' else '' }}" href="/admin/categories">
-      <i class="ti ti-list-check"></i>
-      <span class="label">Categories</span>
-    </a>
-    <a class="nav-item {{ 'active' if request.url.path == '/ledger' else '' }}" href="/ledger">
-      <i class="ti ti-shield-check"></i>
-      <span class="label">Audit trail</span>
-    </a>
+      <div class="oc-nav-h">MANAGE</div>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/events' else '' }}" href="/admin/events"><i class="ti ti-map-pin"></i><span class="lab">Events &amp; budgets</span></a>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/claimants' else '' }}" href="/admin/claimants"><i class="ti ti-users"></i><span class="lab">Claimants</span></a>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/categories' else '' }}" href="/admin/categories"><i class="ti ti-list-check"></i><span class="lab">Categories</span></a>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/ledger' else '' }}" href="/ledger"><i class="ti ti-shield-check"></i><span class="lab">Audit trail</span></a>
 
-    <div class="nav-label">Account</div>
-    <a class="nav-item" href="/">
-      <i class="ti ti-circles-relation"></i>
-      <span class="label">Back to Hub</span>
-    </a>
-    <form method="post" action="/logout" style="margin:0;">
-      <button class="nav-item" type="submit" style="width:100%;background:none;border:0;text-align:left;cursor:pointer;color:inherit;font:inherit;">
-        <i class="ti ti-logout"></i>
-        <span class="label">Sign out</span>
-      </button>
-    </form>
-  </div>
-</aside>
+      <div class="oc-nav-h">ACCOUNT</div>
+      <a class="oc-nav-i" href="/"><i class="ti ti-circles-relation"></i><span class="lab">Back to Hub</span></a>
+      <form method="post" action="/logout" style="margin:0;">
+        <button class="oc-nav-i" type="submit"><i class="ti ti-logout"></i><span class="lab">Sign out</span></button>
+      </form>
+    </nav>
 
-<div class="main" id="main">
-
-<header class="topbar" id="topbar">
-  <div class="topbar-greeting">
-    <div class="hi" id="greeting">e-Claim · {{ scope_name or 'All clients' }}</div>
-    <div class="sub" id="greeting-sub">{% block topbar_sub %}{{ nav_total }} claim{{ '' if nav_total == 1 else 's' }} · {{ nav_counts.get('in_review', 0) }} awaiting review{% endblock %}</div>
-  </div>
-  <form class="topbar-search" method="get" action="/claims" role="search">
-    <i class="ti ti-search"></i>
-    <input type="text" name="q" aria-label="Search claims"
-           placeholder="Search claims by title, vendor or ref..." />
-  </form>
-  <div class="topbar-actions">
-    <div class="topbar-scope">
-      <span class="dot"></span>
-      <span>{{ scope_name or 'All clients' }}</span>
-      <i class="ti ti-chevron-down"></i>
-    </div>
-    <button class="topbar-icon" aria-label="Help"><i class="ti ti-help"></i></button>
-    <button class="topbar-icon" aria-label="Notifications"><i class="ti ti-bell"></i><span class="dot"></span></button>
-    <div class="user-chip">
-      <div class="user-avatar">{{ (principal.email or 'U')[:2] | upper if principal else 'U' }}</div>
-      <div class="user-info">
-        <span class="name">{{ principal.email if principal else '—' }}</span>
-        <span class="role">{{ principal.base_role | capitalize if principal else '' }}</span>
+    <div class="oc-rail-foot">
+      <div class="oc-entity">
+        <div class="oc-entity-logo">{{ (scope_name or 'A')[:1] | upper }}</div>
+        <div style="min-width:0;flex:1;">
+          <div class="oc-entity-n">{{ scope_name or 'All clients' }}</div>
+          <div class="oc-entity-s">e-Claim workspace</div>
+        </div>
       </div>
-      <i class="ti ti-chevron-down" style="font-size:13px;color:var(--text-tertiary);"></i>
     </div>
-  </div>
-</header>
+  </aside>
 
-<div class="content">
+  <main class="oc-work">
+    <header class="oc-bar">
+      <div class="oc-crumb"><span>e-Claim</span><i class="ti ti-chevron-right"></i><b>{% block topbar_sub %}{{ nav_total }} claim{{ '' if nav_total == 1 else 's' }} · {{ nav_counts.get('in_review', 0) }} awaiting review{% endblock %}</b></div>
+      <form class="oc-search" method="get" action="/claims" role="search">
+        <i class="ti ti-search"></i>
+        <input type="text" name="q" aria-label="Search claims" placeholder="Search claims by title, vendor or ref…" />
+      </form>
+      <div class="oc-bar-r">
+        <button class="oc-ibtn" type="button" aria-label="Help"><i class="ti ti-help"></i></button>
+        <button class="oc-ibtn" type="button" aria-label="Notifications"><i class="ti ti-bell"></i></button>
+        <div class="oc-vline"></div>
+        <button class="oc-usr" type="button">
+          <div class="oc-usr-av">{{ (principal.email or 'U')[:2] | upper if principal else 'U' }}</div>
+          <div><div class="oc-usr-n">{{ principal.email if principal else '—' }}</div><div class="oc-usr-r">{{ principal.base_role | capitalize if principal else '' }}</div></div>
+          <i class="ti ti-chevron-down" style="font-size:14px;color:#9a9d94;"></i>
+        </button>
+      </div>
+    </header>
 
-{% block content %}{% endblock %}
-
-</div>
-
-</div>
+    <div class="oc-content">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
 
 </div>
 
