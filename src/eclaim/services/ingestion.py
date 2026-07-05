@@ -389,10 +389,18 @@ def build_claim(
     mileage_specs: list,
     split_docs: bool,
     on_progress: Callable[[int, int], None] | None = None,
+    ingestion_job_id: uuid.UUID | None = None,
+    commit: bool = True,
 ) -> IngestResult:
     """The full capture pipeline. Reads every receipt concurrently, then creates the
     claim + lines + submit in one atomic transaction. Assumes the tenant context is
-    already set on ``repos.session``. ``on_progress(done, total)`` is optional."""
+    already set on ``repos.session``. ``on_progress(done, total)`` is optional.
+
+    ``ingestion_job_id`` keys the built claim to its async job (UNIQUE), so a
+    re-claimed job can never build a duplicate (B3). ``commit=False`` leaves the
+    successful claim flushed-but-uncommitted so the caller (the worker) can flip
+    the job to ``done`` in the SAME transaction — one atomic commit for claim +
+    job completion, closing the crash window entirely."""
     from ..tenancy import set_tenant_context
 
     def _reset_ctx():
@@ -504,7 +512,11 @@ def build_claim(
 
         _service.submit(repos=repos, claim=claim, actor=_capture_actor(created_by_user_id, header),
                         line_count=added)
-        repos.session.commit()
+        if ingestion_job_id is not None:
+            claim.ingestion_job_id = ingestion_job_id
+        repos.session.flush()            # assign claim.id; make the job link durable-on-commit
+        if commit:
+            repos.session.commit()
         return IngestResult(claim_id=claim.id, added=added, errors=errors)
     except Exception:
         repos.session.rollback()

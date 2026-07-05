@@ -163,11 +163,17 @@ class Claim(Base):
         Index("ix_claim_client_created", "client_id", "created_at"),
         # Human-readable reference, unique across the deployment (migration 0016).
         UniqueConstraint("claim_no", name="uq_claim_no"),
+        # A claim built from an async ingestion job carries its job id, UNIQUE so a
+        # re-claimed/retried job can never create a second claim (migration 0020).
+        UniqueConstraint("ingestion_job_id", name="uq_claim_ingestion_job"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
     firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
     client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    # NULL for the inline/interactive path; set to the ingestion_job.id for a claim
+    # the background worker built, keying idempotent job completion (B3).
+    ingestion_job_id: Mapped[uuid.UUID | None] = mapped_column()
 
     # Separation-of-duties actors (nullable: pre-spine rows + unauthenticated
     # paths leave them null, which the SoD CHECK permits).

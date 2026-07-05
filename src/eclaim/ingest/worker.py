@@ -88,6 +88,17 @@ def _finish(session: Session, job_id, status: str, *, claim_id=None, error: str 
     session.commit()
 
 
+def _existing_claim_id(session: Session, job_id) -> uuid.UUID | None:
+    """The claim already built for this job, if any. A crash between the claim
+    commit and the job being marked done leaves the job re-claimable; on re-run we
+    find the existing claim here and re-mark the job done instead of rebuilding
+    (no duplicate claim, no re-billed OCR). Runs under the job's tenant context so
+    RLS scopes it."""
+    return session.execute(
+        text("SELECT id FROM claim WHERE ingestion_job_id = :j"), {"j": str(job_id)}
+    ).scalar()
+
+
 def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID | None:
     """Claim and run at most one job on ``session``. Returns the job id it handled,
     or None if the queue was empty. Never raises — a failing job is marked failed."""
@@ -113,6 +124,16 @@ def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID |
         set_tenant_context(session, firm_id, allowed)
 
     try:
+        set_tenant_context(session, firm_id, allowed)
+        # Idempotent completion (B3): if a prior run already built this job's claim
+        # but died before marking the job done, re-mark it done for that claim —
+        # never rebuild (no duplicate, no re-billed OCR, staging may already be gone).
+        prior = _existing_claim_id(session, job_id)
+        if prior is not None:
+            _finish(session, job_id, "done", claim_id=prior)
+            ingestion.cleanup_staging(providers.image_dir, job_id)
+            return job_id
+
         staged = ingestion.read_staged(providers.image_dir, job_id, claimed["payload"]["manifest"])
         set_tenant_context(session, firm_id, allowed)
         result = ingestion.build_claim(
@@ -122,6 +143,9 @@ def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID |
             header=claimed["payload"]["header"], staged=staged,
             item_list=claimed["payload"]["items"], mileage_specs=claimed["payload"]["mileage"],
             split_docs=claimed["payload"]["split_docs"], on_progress=_progress,
+            # Key the claim to this job and DON'T commit yet: _finish below flips the
+            # job to done in the SAME transaction, so claim + completion are atomic.
+            ingestion_job_id=job_id, commit=False,
         )
         set_tenant_context(session, firm_id, allowed)
         if result.header_error:
@@ -137,8 +161,15 @@ def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID |
         logger.exception("ingestion job %s crashed", job_id)
         session.rollback()
         set_tenant_context(session, firm_id, allowed)
-        # Marked failed (terminal, not reclaimed) so its staged files can go too.
-        _finish(session, job_id, "failed", error=f"ingestion failed: {type(exc).__name__}: {exc}")
+        # If a concurrent/previous run already committed this job's claim (e.g. a
+        # UNIQUE ingestion_job_id collision), reconcile to done — don't fail a job
+        # that actually has a valid claim. Otherwise mark failed (terminal, not
+        # reclaimed) so its staged files can go too.
+        prior = _existing_claim_id(session, job_id)
+        if prior is not None:
+            _finish(session, job_id, "done", claim_id=prior)
+        else:
+            _finish(session, job_id, "failed", error=f"ingestion failed: {type(exc).__name__}: {exc}")
         ingestion.cleanup_staging(providers.image_dir, job_id)
     return job_id
 

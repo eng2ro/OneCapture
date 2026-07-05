@@ -14,7 +14,7 @@ import uuid
 from decimal import Decimal
 
 from fpdf import FPDF
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from eclaim.db.models import Claim, ClaimLine, Client, IngestionJob
 from eclaim.ingest import worker
@@ -123,6 +123,49 @@ def test_progress_page_redirects_when_done(client, db_session, fake_ocr, fake_se
 
 def test_worker_returns_none_when_queue_empty(db_session, fake_ocr, fake_segmenter, tmp_path):
     assert worker.process_one(db_session, _providers(fake_ocr, fake_segmenter, tmp_path)) is None
+
+
+def test_built_claim_is_keyed_to_its_job(client, db_session, fake_ocr, fake_segmenter, tmp_path):
+    """B3: an async-built claim carries its ingestion_job_id (the idempotency key)."""
+    job_id = _enqueue_via_http(client, 4)
+    worker.process_one(db_session, _providers(fake_ocr, fake_segmenter, tmp_path))
+    db_session.expire_all()
+    claim_id = db_session.get(IngestionJob, job_id).claim_id
+    assert db_session.get(Claim, claim_id).ingestion_job_id == job_id
+
+
+def test_reclaimed_job_does_not_duplicate_claim(client, db_session, fake_ocr, fake_segmenter, tmp_path):
+    """B3: a job re-claimed AFTER its claim was built (worker crashed before marking
+    the job done) must recover the existing claim, never build a second one."""
+    _enable_split(db_session)
+    job_id = _enqueue_via_http(client, 4)
+    provs = _providers(fake_ocr, fake_segmenter, tmp_path)
+
+    assert worker.process_one(db_session, provs) == job_id
+    db_session.expire_all()
+    first_claim = db_session.get(IngestionJob, job_id).claim_id
+    assert first_claim is not None
+
+    # Simulate a crash between the claim commit and the job being marked done:
+    # job back to running, heartbeat stale, claim_id cleared → re-claimable.
+    db_session.execute(
+        text("UPDATE ingestion_job SET status='running', claim_id=NULL, "
+             "heartbeat_at = now() - interval '10 minutes' WHERE id = :i"),
+        {"i": str(job_id)},
+    )
+    db_session.commit()
+
+    # Re-run the worker: it must recover the existing claim, not rebuild.
+    assert worker.process_one(db_session, provs) == job_id
+    db_session.expire_all()
+
+    claims = db_session.execute(
+        select(Claim).where(Claim.ingestion_job_id == job_id)
+    ).scalars().all()
+    assert len(claims) == 1                    # NO duplicate claim
+    assert claims[0].id == first_claim         # same claim recovered
+    job = db_session.get(IngestionJob, job_id)
+    assert job.status == "done" and job.claim_id == first_claim
 
 
 def test_staged_files_are_cleaned_up_after_success(client, db_session, fake_ocr, fake_segmenter, tmp_path):
