@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import base64
+import logging
+import os
 import secrets
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse, Response
@@ -15,15 +18,33 @@ from erpsync.review.routes import web_router as erpsync_web_router
 from ..auth.routes import router as auth_router
 from ..config import get_settings
 from ..web.routes import WEB_DIR, router as web_router
-from .deps import NeedsLogin
+from .deps import NeedsLogin, WebForbidden
 from .routes import router as api_router
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Run the in-process ingestion worker for the app's lifetime. Disabled with
+    ``OC_DISABLE_INGEST_WORKER=1`` (set in tests, which drive ingestion directly)."""
+    worker = None
+    if os.environ.get("OC_DISABLE_INGEST_WORKER") != "1":
+        from ..ingest.worker import Worker
+
+        worker = Worker()
+        worker.start()
+    try:
+        yield
+    finally:
+        if worker is not None:
+            worker.stop()
+            logging.getLogger(__name__).info("ingestion worker stopped")
 
 
 def create_app() -> FastAPI:
     # Fail fast if a production deployment is misconfigured (default secret,
     # insecure cookie). No-op in dev, so local runs are unaffected.
     get_settings().assert_production_safe()
-    app = FastAPI(title="OneCapture", version="0.2.0")
+    app = FastAPI(title="OneCapture", version="0.2.0", lifespan=_lifespan)
     app.include_router(auth_router)
     app.include_router(api_router)
     app.include_router(web_router)
@@ -71,6 +92,18 @@ def create_app() -> FastAPI:
     @app.exception_handler(NeedsLogin)
     async def _redirect_to_login(request: Request, exc: NeedsLogin) -> RedirectResponse:
         return RedirectResponse("/login", status_code=303)
+
+    # A logged-in user who lacks firm scope reached an admin page: render a friendly
+    # in-shell 'no access' page (status 403) instead of the API's bare JSON, so the
+    # browser shows a readable message with a way back. The nav context processor is
+    # defensively wrapped, so the sidebar still renders around it.
+    @app.exception_handler(WebForbidden)
+    async def _forbidden(request: Request, exc: WebForbidden) -> Response:
+        from ..web.routes import templates
+
+        return templates.TemplateResponse(
+            request, "_forbidden.html", {"detail": str(exc) or None}, status_code=403
+        )
 
     return app
 

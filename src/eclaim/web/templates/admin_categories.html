@@ -74,7 +74,7 @@
       </thead>
       <tbody>
         {% for cat in categories %}
-        <tr>
+        <tr data-edit="/admin/categories?edit={{ cat.id }}" style="cursor:pointer;" title="Double-click to edit">
           <td><strong>{{ cat.name }}</strong><br><span style="font-size:10px;color:var(--text-tertiary);">{{ cat.expense_type }} · {{ client_names.get(cat.client_id, '') }}</span></td>
           <td style="font-family:'SF Mono',monospace;font-size:11px;">{{ cat.gl_export_code or '—' }}</td>
           <td style="text-align:right;">{{ cat.default_limit if cat.default_limit is not none else '—' }}</td>

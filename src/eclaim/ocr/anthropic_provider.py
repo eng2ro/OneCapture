@@ -38,6 +38,14 @@ you cannot produce boxes at all.
 Return ONLY the JSON object, no prose, no code fences."""
 
 
+# The SDK retries transient failures (429 rate-limit, 529 overloaded, 5xx, and
+# connection/timeout blips) with exponential backoff on its own. It does NOT retry a
+# 400 invalid_request (bad input or "credit balance too low"), which is correct —
+# retrying those never helps. A generous timeout guards a single hung read.
+_MAX_RETRIES = 4
+_TIMEOUT_SECONDS = 60.0
+
+
 def _strip_fences(text: str) -> str:
     t = text.strip()
     if t.startswith("```"):
@@ -78,7 +86,9 @@ class AnthropicVisionProvider(OcrProvider):
             # contract) rather than escaping — callers degrade to manual entry.
             from anthropic import Anthropic
 
-            client = Anthropic(api_key=self._api_key)
+            client = Anthropic(
+                api_key=self._api_key, max_retries=_MAX_RETRIES, timeout=_TIMEOUT_SECONDS
+            )
             message = client.messages.create(
                 model=self._model,
                 max_tokens=1024,

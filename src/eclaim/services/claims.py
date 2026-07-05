@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import re
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -35,8 +36,52 @@ from ..repositories import (
 )
 from .audit import record_event
 from .classify import carbon_relevant_for
+from .documents import normalize_image
 
 SOURCE_TYPE = "eclaim"
+
+
+def _audit_value(v):
+    """Coerce a field value to a JSON-safe scalar for an audit ``detail`` (JSONB).
+    Decimal/date/datetime become their string form (exact, human-readable); other
+    primitives pass through unchanged. Keeps the before/after record serialisable
+    without losing precision on money or dates."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    return str(v)
+
+
+# Receipt date formats seen on real (mostly Malaysian) receipts, day-first. strptime
+# matches %b/%B case-insensitively, so "APR"/"Apr"/"apr" all parse. Tried in order;
+# the first that consumes the whole (time-stripped) string wins.
+_RECEIPT_DATE_FORMATS = (
+    "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y", "%d.%m.%Y", "%d.%m.%y",
+    "%Y-%m-%d", "%Y/%m/%d",
+    "%d%b%Y", "%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d-%b-%y", "%d %b %y",
+    "%b %d %Y", "%B %d %Y", "%b %d, %Y",
+)
+
+
+def parse_receipt_date(value: str | None) -> dt.date | None:
+    """Best-effort parse of an OCR receipt date string into a real ``date`` — used to
+    DEFAULT the posting date at capture so a reviewer isn't retyping the receipt date.
+
+    Tolerant of the many printed formats (``02APR2026 04:50PM``, ``23/04/26``,
+    ``26 SEP 2025``, ``26 Feb 2026``, ISO). A trailing clock time is stripped first.
+    Day-first (DD/MM), matching local receipts. Returns ``None`` when nothing parses
+    cleanly — the field stays blank for manual entry rather than guessing a wrong date
+    (a wrong posting date is worse than an empty one)."""
+    if not value:
+        return None
+    text = value.strip()
+    # Drop a trailing clock time ("... 04:50PM", "... 16:30", "...16:30:00").
+    text = re.split(r"\s+\d{1,2}:\d{2}", text, maxsplit=1)[0].strip()
+    for fmt in _RECEIPT_DATE_FORMATS:
+        try:
+            return dt.datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 # Claim-level purpose/type (migration 0010). 'general' is the everyday one-off
 # claim; the rest describe a multi-day reason. A non-general STANDALONE claim (no
@@ -257,15 +302,31 @@ class ClaimService:
         image_dir: Path,
         category_id: uuid.UUID | None = None,
         payment_method: str = "out_of_pocket",
+        page_images: list[bytes] | None = None,
     ) -> ClaimLine:
         """Store image → OCR → append one line, re-rolling the header totals.
         Category: explicit ``category_id`` (the capture form) wins; else merchant /
         OCR auto-match, else unmapped (a reviewer assigns one). No carbon maths —
         the line just snapshots its category's ``carbon_relevant`` flag (what gets
         forwarded to CarbonNext on release). OCR failure raises before anything is
-        persisted — no partial line."""
+        persisted — no partial line.
+
+        ``page_images`` (Phase-4 auto-segmentation): the constituent page images when
+        several pages of one invoice are grouped into this line. ``image_bytes`` is
+        then the stitched composite (OCR reads the whole invoice); the pages are
+        stored and recorded in ``pages`` so the reviewer can still split them."""
+        # Transcode an iPhone HEIC/HEIF straight-to-service upload to JPEG so OCR and
+        # the stored image work (the batch path already normalises before prefetch;
+        # this is a no-op there and the guard for the direct API upload path).
+        image_bytes, media_type = normalize_image(image_bytes, media_type)
         extraction: Extraction = ocr.extract(image_bytes, media_type)
         image_path, image_sha = self._store_image(image_dir, image_bytes, media_type)
+        pages = None
+        if page_images:
+            pages = []
+            for pg in page_images:
+                p_path, p_sha = self._store_image(image_dir, pg, "image/png")
+                pages.append({"sha": p_sha, "path": p_path})
         if category_id is not None:
             category = repos.categories.get_by_id(category_id)
             if category is None or category.client_id != claim.client_id:
@@ -283,6 +344,10 @@ class ClaimService:
             vendor=extraction.vendor,
             doc_no=extraction.doc_no,
             doc_date=extraction.date,
+            # Default the accounting posting date to the receipt's own date so the
+            # claim is postable straight from capture; a reviewer can still override.
+            # Left NULL if the OCR date is unparseable (better blank than wrong).
+            posting_date=parse_receipt_date(extraction.date),
             currency=extraction.currency,
             total_amount=extraction.total_amount,
             expense_type=extraction.expense_type,
@@ -294,6 +359,7 @@ class ClaimService:
             ocr_boxes=extraction.boxes,
             image_path=image_path,
             image_sha256=image_sha,
+            pages=pages,
             payment_method=payment_method,
             reimbursable=(payment_method == "out_of_pocket"),
         )
@@ -552,6 +618,11 @@ class ClaimService:
             "total_amount", "expense_type", "quantity", "unit",
             "business_reason", "payment_method",
         } | self.CODING_FIELDS
+        # Snapshot the current value of each field being changed BEFORE applying,
+        # so the audit event records old→new (e.g. amount 500 -> 5000), not just
+        # which field was touched — the difference between an answerable and an
+        # unanswerable "who changed this" during a dispute.
+        before = {k: getattr(line, k, None) for k in fields if k in editable}
         for key, value in fields.items():
             if key in editable:
                 setattr(line, key, value)
@@ -576,6 +647,11 @@ class ClaimService:
         line.category_id = category.id if category else None
         line.carbon_relevant = carbon_relevant_for(category)
         self._recompute_totals(claim, repos.claims.lines(claim_id))
+        changes = {
+            k: {"from": _audit_value(old), "to": _audit_value(getattr(line, k, None))}
+            for k, old in before.items()
+            if old != getattr(line, k, None)
+        }
         record_event(
             repos.audit,
             firm_id=claim.firm_id,
@@ -586,6 +662,7 @@ class ClaimService:
             actor=actor,
             detail={
                 "fields": sorted(fields),
+                "changes": changes,
                 "line_id": str(line.id),
                 "category_id": str(category_id) if category_id else None,
             },
@@ -618,13 +695,17 @@ class ClaimService:
         if claim.status not in ("in_review", "submitted", "sent_back"):
             raise IllegalTransition(f"cannot edit a claim in status {claim.status!r}")
         touched: list[str] = []
+        changes: dict[str, dict] = {}
         for key, value in fields.items():
             if key not in self.HEADER_FIELDS:
                 continue
+            old = getattr(claim, key, None)
             if isinstance(value, str):
                 value = value.strip() or None
             setattr(claim, key, value)
             touched.append(key)
+            if old != value:
+                changes[key] = {"from": _audit_value(old), "to": _audit_value(value)}
         if touched:
             record_event(
                 repos.audit,
@@ -634,8 +715,189 @@ class ClaimService:
                 entity_id=claim.id,
                 event_type="edited",
                 actor=actor,
-                detail={"header_fields": sorted(touched)},
+                detail={"header_fields": sorted(touched), "changes": changes},
             )
+        return claim
+
+    # -- merge / split (correct PDF auto-segmentation) --------------------- #
+    # Both are gated by the per-client ``allow_document_split`` policy AND only while
+    # the claim is editable, and both record an audit event. They are inverse
+    # operations over a line's constituent PAGES: merge folds several lines' pages
+    # into one line; split expands a multi-page line back into one line per page.
+
+    @staticmethod
+    def _allow_document_split(repos: "Repos", claim: Claim) -> bool:
+        client = repos.session.get(Client, claim.client_id)
+        return bool(client and (client.modules or {}).get("allow_document_split"))
+
+    @staticmethod
+    def _line_pages(line: ClaimLine) -> list[dict]:
+        """The line's constituent page images: its ``pages`` list if it was merged,
+        else the single stored image (or empty for a mileage/imageless line)."""
+        if line.pages:
+            return [dict(p) for p in line.pages]
+        if line.image_path:
+            return [{"sha": line.image_sha256, "path": line.image_path}]
+        return []
+
+    @staticmethod
+    def _renumber(repos: "Repos", ordered: list[ClaimLine]) -> None:
+        """Reassign line_no = 1..n in the given order. Two-phase (temp negatives
+        first) so the per-claim uniqueness constraint never trips mid-update."""
+        for i, ln in enumerate(ordered):
+            ln.line_no = -(i + 1)
+        repos.session.flush()
+        for i, ln in enumerate(ordered):
+            ln.line_no = i + 1
+        repos.session.flush()
+
+    def _guard_split_merge(self, repos: "Repos", claim: Claim, principal) -> None:
+        self._require_writer(claim, principal)
+        if claim.status not in ("in_review", "submitted", "sent_back"):
+            raise IllegalTransition(
+                f"cannot merge/split lines on a claim in status {claim.status!r} — "
+                f"send it back to change the lines"
+            )
+        if not self._allow_document_split(repos, claim):
+            raise IllegalTransition("document merge/split is not enabled for this client")
+
+    def merge_lines(
+        self,
+        *,
+        repos: "Repos",
+        claim_id: uuid.UUID,
+        line_ids: list,
+        actor: str,
+        image_dir: Path,
+        principal: "Principal | None" = None,
+    ) -> Claim:
+        """Merge several lines that are really pages of ONE invoice into a single
+        line. The survivor (lowest line_no) absorbs the others' page images, stitched
+        into one composite for display; its fields are kept as-is (NOT summed — pages
+        of one invoice — the reviewer re-verifies the total). Deleted lines' pages are
+        retained on the survivor's ``pages`` so it can be split again."""
+        from .documents import stitch_pages
+
+        claim = self.get(repos, claim_id)
+        self._guard_split_merge(repos, claim, principal)
+        ids = {uuid.UUID(str(i)) for i in line_ids}
+        if len(ids) < 2:
+            raise ClaimError("select at least two lines to merge")
+        selected = [ln for ln in repos.claims.lines(claim_id) if ln.id in ids]
+        if len(selected) != len(ids):
+            raise ClaimError("some selected lines were not found on this claim")
+        if any(ln.mileage for ln in selected):
+            raise ClaimError("mileage lines cannot be merged")
+        selected.sort(key=lambda ln: ln.line_no)
+        primary = selected[0]
+
+        pages: list[dict] = []
+        for ln in selected:
+            pages.extend(self._line_pages(ln))
+        if len(pages) < 2:
+            raise ClaimError("nothing to merge — the selected lines have no images")
+        composite = stitch_pages([Path(p["path"]).read_bytes() for p in pages])
+        path, sha = self._store_image(image_dir, composite, "image/jpeg")
+        primary.image_path = path
+        primary.image_sha256 = sha
+        primary.pages = pages
+        primary.ocr_boxes = None   # per-image boxes no longer map onto the composite
+
+        merged_nos = [ln.line_no for ln in selected]
+        for ln in selected[1:]:
+            repos.claims.delete_line(ln)
+        remaining = repos.claims.lines(claim_id)
+        self._renumber(repos, remaining)
+        self._recompute_totals(claim, repos.claims.lines(claim_id))
+        record_event(
+            repos.audit,
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            entity_type="claim",
+            entity_id=claim.id,
+            event_type="lines_merged",
+            actor=actor,
+            detail={"kept_line_id": str(primary.id), "merged_line_nos": merged_nos,
+                    "page_count": len(pages)},
+        )
+        return claim
+
+    def split_line(
+        self,
+        *,
+        repos: "Repos",
+        claim_id: uuid.UUID,
+        line_id: uuid.UUID,
+        actor: str,
+        principal: "Principal | None" = None,
+    ) -> Claim:
+        """Split a multi-page line back into one line per page. The first page stays
+        on the original line; each remaining page becomes a new line copying the
+        original's fields (status reset to pending — the reviewer verifies each).
+        Only a line with ≥2 pages is splittable (a single scanned image holding two
+        invoices would need region-cropping — out of scope)."""
+        claim = self.get(repos, claim_id)
+        self._guard_split_merge(repos, claim, principal)
+        line = repos.claims.line(uuid.UUID(str(line_id)))
+        if line is None or line.claim_id != claim.id:
+            raise ClaimError("line not found for this claim")
+        pages = self._line_pages(line)
+        if len(pages) < 2:
+            raise ClaimError("only a multi-page line can be split into pages")
+
+        first, rest = pages[0], pages[1:]
+        line.image_path = first["path"]
+        line.image_sha256 = first["sha"]
+        line.pages = None
+        line.ocr_boxes = None
+
+        new_lines: list[ClaimLine] = []
+        for offset, pg in enumerate(rest, 1):
+            new = ClaimLine(
+                firm_id=line.firm_id,
+                client_id=line.client_id,
+                claim_id=claim.id,
+                line_no=-(1000 + offset),   # temp unique; _renumber fixes the order
+                vendor=line.vendor,
+                doc_no=line.doc_no,
+                doc_date=line.doc_date,
+                currency=line.currency,
+                total_amount=line.total_amount,
+                expense_type=line.expense_type,
+                quantity=line.quantity,
+                unit=line.unit,
+                category_id=line.category_id,
+                carbon_relevant=line.carbon_relevant,
+                image_path=pg["path"],
+                image_sha256=pg["sha"],
+                pages=None,
+                payment_method=line.payment_method,
+                reimbursable=line.reimbursable,
+                line_status="pending",
+            )
+            repos.claims.add_line(new)
+            new_lines.append(new)
+
+        # Keep the split-off pages adjacent to the original line, then renumber 1..n.
+        ordered: list[ClaimLine] = []
+        for ln in sorted(repos.claims.lines(claim_id), key=lambda x: x.line_no):
+            if ln in new_lines:
+                continue
+            ordered.append(ln)
+            if ln.id == line.id:
+                ordered.extend(new_lines)
+        self._renumber(repos, ordered)
+        self._recompute_totals(claim, repos.claims.lines(claim_id))
+        record_event(
+            repos.audit,
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            entity_type="claim",
+            entity_id=claim.id,
+            event_type="line_split",
+            actor=actor,
+            detail={"source_line_id": str(line.id), "into_pages": len(pages)},
+        )
         return claim
 
     def approve(

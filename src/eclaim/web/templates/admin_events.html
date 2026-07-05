@@ -68,7 +68,7 @@
       <tbody>
         {% for ev in events %}
         {% set r = rollup.get(ev.id, {}) %}
-        <tr>
+        <tr data-edit="/admin/events?edit={{ ev.id }}" style="cursor:pointer;" title="Double-click to edit">
           <td><strong>{{ ev.title }}</strong><br><span style="font-size:10px;color:var(--text-tertiary);">{% if ev.attendee_count %}{{ ev.attendee_count }} pax · {% endif %}{{ client_names.get(ev.client_id, '') }}</span></td>
           <td>{{ ev.event_type or '—' }}</td>
           <td style="font-size:11px;">{% if ev.start_date %}{{ ev.start_date }}{% if ev.end_date %} – {{ ev.end_date }}{% endif %}{% else %}—{% endif %}</td>

@@ -81,6 +81,21 @@
 .capx .posts-to strong{font-family:var(--serif);font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
 .capx .posts-to>div:last-child strong{color:var(--pine-2)}
 @media(max-width:1080px){.capx .doc-facts{grid-template-columns:repeat(2,1fr)}}
+/* line-modal prev/next navigator */
+.capx .line-nav{display:inline-flex;align-items:center;gap:8px}
+.capx .line-nav .nav-btn{height:30px;padding:0 11px;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--rule);border-radius:var(--r);background:var(--paper);color:var(--ink-2);cursor:pointer;font-size:12px;font-weight:600;font-family:var(--sans)}
+.capx .line-nav .nav-btn:hover:not(:disabled){background:var(--rail);border-color:var(--rule-strong)}
+.capx .line-nav .nav-btn:disabled{opacity:.4;cursor:not-allowed}
+.capx .line-nav .nav-btn .ti{font-size:14px}
+.capx .line-nav .nav-pos{font-size:11px;font-weight:600;color:var(--graphite);font-variant-numeric:tabular-nums;white-space:nowrap;min-width:42px;text-align:center}
+/* Double-clicking the receipt (thumbnail or zoomed) must not paint the browser's
+   blue text-selection highlight over the image. The zoom toggles fit<->2x on click,
+   so a rapid second click starts a native selection — disable selection + native
+   image drag on the receipt and lightbox so the image never turns blue. */
+.capx #receipt-wrap, .capx #receipt-img,
+.capx #img-zoom, .capx #iz-scroll, .capx #iz-img{
+  user-select:none;-webkit-user-select:none;-ms-user-select:none;-webkit-user-drag:none;
+}
 </style>
 <div class="capx" id="screen-review">
 
@@ -218,11 +233,12 @@
     <div class="card-header">
       <div class="card-title">Lines <span style="font-weight:400;color:var(--text-tertiary);">({{ lines | length }})</span></div>
       <div style="display:flex;gap:8px;align-items:center;">
+        {% if allow_split %}<button type="button" class="btn" id="merge-btn" onclick="submitMerge()" disabled style="font-size:11px;padding:5px 10px;"><i class="ti ti-arrows-join"></i> Merge selected (<span id="merge-n">0</span>)</button>{% endif %}
         {% if can_edit %}<button type="button" class="btn" style="font-size:11px;padding:5px 10px;" onclick="openModal('mileage-modal')"><i class="ti ti-map-2"></i> Add mileage</button>{% endif %}
       </div>
     </div>
 
-    <div style="font-size:11px;color:var(--text-secondary);margin:4px 0 0;"><i class="ti ti-click"></i> Click any line to view its receipt and verify the captured details.</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin:4px 0 0;"><i class="ti ti-click"></i> Click any line to view its receipt and verify the captured details.{% if allow_split %} Tick two or more lines to <b>merge</b> pages of one invoice; a multi-page line can be <b>split</b> back into pages.{% endif %}</div>
 
     <form method="post" action="/claims/{{ claim.id }}/decide" id="decide-form">
     <table class="data" style="margin-top:8px;">
@@ -239,12 +255,16 @@
         {% set cat = cat_by_id.get(ln.category_id) %}
         <tr class="line-row" data-line="{{ ln.id }}" data-no="{{ ln.line_no }}"
             data-vendor="{{ ln.vendor or 'Receipt' }}" style="cursor:pointer;">
-          <td style="text-align:center;"><i class="ti ti-eye" title="View &amp; verify" style="color:var(--text-tertiary);"></i></td>
+          <td style="text-align:center;white-space:nowrap;">
+            {% if allow_split and not ln.mileage %}<input type="checkbox" class="merge-chk" value="{{ ln.id }}" title="Select to merge" onclick="event.stopPropagation();">{% endif %}
+            <i class="ti ti-eye" title="View &amp; verify" style="color:var(--text-tertiary);"></i>
+          </td>
           <td>{{ ln.line_no }}</td>
           <td style="font-family:'SF Mono',monospace;font-size:11px;">{{ ln.doc_no or '—' }}</td>
           <td>
             {{ cat.name if cat else (ln.expense_type or '—') }}
             {% if ln.category_id is none %}<br><span class="badge danger" style="font-size:9px;">no category — assign</span>{% endif %}
+            {% if line_pages.get(ln.id | string) %}<br><span class="badge neutral" style="font-size:9px;"><i class="ti ti-files"></i> {{ line_pages[ln.id | string] }} pages</span>{% if allow_split %} <button type="button" class="btn" style="font-size:9px;padding:1px 6px;height:auto;" onclick="event.stopPropagation();submitSplit('{{ ln.id }}')"><i class="ti ti-scissors"></i> Split</button>{% endif %}{% endif %}
           </td>
           <td>{{ ln.vendor or '—' }}</td>
           <td>{{ ln.doc_date or '—' }}</td>
@@ -252,7 +272,7 @@
           <td><span style="font-size:10px;">{{ ln.payment_method.replace('_',' ') }}</span></td>
           <td style="text-align:center;">
             {% set cd = coding.get(ln.id) %}
-            {% if cd and cd.ready %}<i class="ti ti-circle-check" style="color:var(--green-pos);" title="Coded — GL {{ ln.gl_code }} · cost centre {{ cd.cost_centre }}"></i>
+            {% if cd and cd.ready %}<i class="ti ti-circle-check" style="color:var(--green-pos);" title="Coded — GL {{ cd.gl }} · cost centre {{ cd.cost_centre }}"></i>
             {% else %}<i class="ti ti-alert-circle" style="color:#d97706;" title="Needs GL code + cost centre before posting"></i>{% endif %}
           </td>
           <td><span class="badge {{ line_badge.get(ln.line_status,'info') }}">{{ ln.line_status }}</span></td>
@@ -287,6 +307,15 @@
     {% endif %}
     </form>
   </div>
+
+  {# Merge/split post to their own forms (kept OUTSIDE the decide form above so
+     forms never nest). JS fills them from the row checkboxes / Split buttons. #}
+  {% if allow_split %}
+  <form id="merge-form" method="post" action="/claims/{{ claim.id }}/lines/merge" hidden></form>
+  <form id="split-form" method="post" action="/claims/{{ claim.id }}/lines/split" hidden>
+    <input type="hidden" name="line_id" id="split-line-id">
+  </form>
+  {% endif %}
 
   {# -- Approval chain (audit trail) ---------------------------------------- #}
   <div class="card" style="margin-bottom:14px;padding:14px 18px;">
@@ -340,9 +369,18 @@
     <div class="modal-backdrop" onclick="closeModal('line-modal')"></div>
     <div class="modal-card">
       <div class="modal-head">
-        <div class="mt">Verify line <span id="receipt-caption">1</span></div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <a class="btn" id="receipt-dl" style="padding:5px 9px;" href="/claims/{{ claim.id }}/image"><i class="ti ti-download" style="font-size:13px;"></i></a>
+        {# Title truncates on the left so a long vendor name never shifts the nav.
+           Prev/pos/Next are pinned to the right cluster (fixed location). #}
+        <div style="display:flex;align-items:center;gap:14px;min-width:0;flex:1;">
+          <div class="mt" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Verify line <span id="receipt-caption">1</span></div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex:none;">
+          <div class="line-nav" id="line-nav">
+            <button type="button" class="nav-btn" id="line-prev" title="Previous line (left arrow)"><i class="ti ti-chevron-left"></i> Prev</button>
+            <span class="nav-pos" id="line-pos">1 of 1</span>
+            <button type="button" class="nav-btn" id="line-next" title="Next line (right arrow)">Next <i class="ti ti-chevron-right"></i></button>
+          </div>
+          <a class="btn" id="receipt-dl" download title="Download receipt" style="padding:5px 9px;" href="/claims/{{ claim.id }}/image"><i class="ti ti-download" style="font-size:13px;"></i></a>
           <button type="button" class="modal-x" onclick="closeModal('line-modal')" aria-label="Close">&times;</button>
         </div>
       </div>
@@ -353,9 +391,10 @@
             <div id="route-summary" style="font-size:12px;color:var(--text-secondary);margin:0 0 8px;" hidden></div>
             <div id="box-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px;"></div>
             <div id="receipt-wrap" style="position:relative;line-height:0;">
-              <img id="receipt-img" src="/claims/{{ claim.id }}/image" alt="receipt"
-                   style="width:100%;border-radius:10px;border:1px solid var(--border);display:block;"
+              <img id="receipt-img" src="/claims/{{ claim.id }}/image" alt="receipt" title="Click to enlarge / zoom"
+                   style="width:100%;border-radius:10px;border:1px solid var(--border);display:block;cursor:zoom-in;"
                    onload="renderBoxes();"
+                   onclick="openZoom();"
                    onerror="this.style.display='none';document.getElementById('receipt-fallback').style.display='block';">
               <div id="box-layer" style="position:absolute;inset:0;pointer-events:none;"></div>
             </div>
@@ -402,8 +441,11 @@
 
                 <div class="card-title" style="margin:14px 0 8px;font-size:12px;">Accounting coding <span style="font-weight:400;color:var(--text-tertiary);font-size:10px;">— required to post</span></div>
                 <div class="field-row">
-                  <div><label class="label-tiny">GL account code</label><input class="field" name="gl_code" value="{{ ln.gl_code or '' }}" placeholder="e.g. 6100"></div>
-                  <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre_override" value="{{ ln.cost_centre_override or '' }}" placeholder="{{ coding.get(ln.id).cost_centre or 'e.g. SALES-02' }}"></div>
+                  {% set cd = coding.get(ln.id) %}
+                  {% set lcat = cat_by_id.get(ln.category_id) %}
+                  <div><label class="label-tiny">GL account code</label><input class="field" name="gl_code" value="{{ ln.gl_code or cd.gl or '' }}" placeholder="e.g. 6100">
+                    {% if not ln.gl_code and cd.gl %}<div style="font-size:10px;color:var(--text-tertiary);margin-top:3px;"><i class="ti ti-arrow-badge-down"></i> From category{% if lcat %} · {{ lcat.name }}{% endif %}</div>{% endif %}</div>
+                  <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre_override" value="{{ ln.cost_centre_override or '' }}" placeholder="{{ cd.cost_centre or 'e.g. SALES-02' }}"></div>
                 </div>
                 <div class="field-row" style="margin-top:8px;">
                   <div><label class="label-tiny">Department</label><input class="field" name="department" value="{{ ln.department or '' }}"></div>
@@ -452,7 +494,7 @@
               </div>
               <div class="field-row" style="margin-top:8px;">
                 <div><div class="label-tiny">Payment</div><div class="dv">{{ ln.payment_method.replace('_',' ') }}</div></div>
-                {% if not can_code %}<div><div class="label-tiny">GL · cost centre</div><div class="dv">{{ ln.gl_code or '—' }} · {{ coding.get(ln.id).cost_centre or '—' }}</div></div>{% else %}<div></div>{% endif %}
+                {% if not can_code %}<div><div class="label-tiny">GL · cost centre</div><div class="dv">{{ coding.get(ln.id).gl or '—' }} · {{ coding.get(ln.id).cost_centre or '—' }}</div></div>{% else %}<div></div>{% endif %}
               </div>
               {% if ln.business_reason %}<div style="margin-top:8px;"><div class="label-tiny">Business reason</div><div class="dv">{{ ln.business_reason }}</div></div>{% endif %}
 
@@ -464,8 +506,10 @@
                 <div class="card-title" style="margin:0 0 8px;font-size:12px;">Accounting coding
                   <span style="font-weight:400;color:var(--text-tertiary);font-size:10px;">— required to post · expense is locked after approval</span></div>
                 <div class="field-row">
-                  <div><label class="label-tiny">GL account code</label><input class="field" name="gl_code" value="{{ ln.gl_code or '' }}" placeholder="{{ (cat.gl_export_code if cat else '') or 'e.g. 6100' }}"></div>
-                  <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre_override" value="{{ ln.cost_centre_override or '' }}" placeholder="{{ coding.get(ln.id).cost_centre or 'e.g. SALES-02' }}"></div>
+                  {% set cd = coding.get(ln.id) %}
+                  <div><label class="label-tiny">GL account code</label><input class="field" name="gl_code" value="{{ ln.gl_code or cd.gl or '' }}" placeholder="e.g. 6100">
+                    {% if not ln.gl_code and cd.gl %}<div style="font-size:10px;color:var(--text-tertiary);margin-top:3px;"><i class="ti ti-arrow-badge-down"></i> From category{% if cat %} · {{ cat.name }}{% endif %}</div>{% endif %}</div>
+                  <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre_override" value="{{ ln.cost_centre_override or '' }}" placeholder="{{ cd.cost_centre or 'e.g. SALES-02' }}"></div>
                 </div>
                 <div class="field-row" style="margin-top:8px;">
                   <div><label class="label-tiny">Department</label><input class="field" name="department" value="{{ ln.department or '' }}"></div>
@@ -497,6 +541,21 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  {# -- Receipt zoom lightbox: click the receipt to enlarge / zoom / pan ----- #}
+  <div id="img-zoom" style="position:fixed;inset:0;z-index:2000;display:none;background:rgba(18,20,16,.92);">
+    <div style="position:absolute;top:14px;right:16px;display:flex;gap:8px;z-index:2;">
+      <button type="button" class="btn" id="iz-out" title="Zoom out (−)" style="padding:6px 10px;"><i class="ti ti-minus"></i></button>
+      <span id="iz-pct" style="min-width:48px;text-align:center;align-self:center;font-size:12px;color:#fff;font-variant-numeric:tabular-nums;">100%</span>
+      <button type="button" class="btn" id="iz-in" title="Zoom in (+)" style="padding:6px 10px;"><i class="ti ti-plus"></i></button>
+      <button type="button" class="btn" id="iz-reset" title="Fit to screen (0)" style="padding:6px 10px;"><i class="ti ti-aspect-ratio"></i> Fit</button>
+      <a class="btn" id="iz-dl" download href="#" title="Download original" style="padding:6px 10px;"><i class="ti ti-download"></i></a>
+      <button type="button" class="btn" id="iz-close" title="Close (Esc)" style="padding:6px 10px;"><i class="ti ti-x"></i></button>
+    </div>
+    <div id="iz-scroll" style="position:absolute;inset:0;overflow:auto;text-align:center;padding:56px 24px 24px;cursor:zoom-in;">
+      <img id="iz-img" src="" alt="receipt enlarged" style="display:inline-block;height:auto;box-shadow:0 20px 60px rgba(0,0,0,.55);border-radius:6px;vertical-align:middle;">
     </div>
   </div>
 
@@ -630,11 +689,107 @@ function closeModal(id) {
   document.body.style.overflow = "";
 }
 document.addEventListener("keydown", function (e) {
+  var zoomOpen = _zoomOpen();
   if (e.key === "Escape") {
+    if (zoomOpen) { closeZoom(); return; }   // close the lightbox before the modal
     document.querySelectorAll(".modal.open").forEach(function (m) { m.classList.remove("open"); });
     document.body.style.overflow = "";
-  }
+  } else if (zoomOpen && (e.key === "+" || e.key === "=")) { _izSetZoom(_izZoom * 1.25); }
+  else if (zoomOpen && (e.key === "-" || e.key === "_")) { _izSetZoom(_izZoom / 1.25); }
+  else if (zoomOpen && e.key === "0") { _izFit(); }
 });
+
+// ---- Receipt zoom lightbox (click the receipt to enlarge / zoom / pan) -----
+var _izZoom = 1, _izBaseW = 0;
+function _zoomOpen() { var b = document.getElementById("img-zoom"); return b && b.style.display === "block"; }
+function _izApply() {
+  var img = document.getElementById("iz-img");
+  if (!img || !_izBaseW) return;
+  img.style.width = Math.round(_izBaseW * _izZoom) + "px";
+  var pct = document.getElementById("iz-pct");
+  if (pct) pct.textContent = Math.round(_izZoom * 100) + "%";
+  var sc = document.getElementById("iz-scroll");
+  // Grab cursor when zoomed in (the image can be dragged to pan); zoom-in at fit.
+  if (sc) sc.style.cursor = _izZoom > 1 ? "grab" : "zoom-in";
+}
+function _izFit() {
+  var img = document.getElementById("iz-img");
+  if (!img || !img.naturalWidth) return;
+  // Fit the natural image inside the viewport (don't upscale past 100% at "fit").
+  var fit = Math.min((window.innerWidth - 60) / img.naturalWidth,
+                     (window.innerHeight - 96) / img.naturalHeight, 1);
+  _izBaseW = img.naturalWidth * fit;
+  _izZoom = 1;
+  _izApply();
+}
+function _izSetZoom(z) { _izZoom = Math.max(0.2, Math.min(z, 8)); _izApply(); }
+function openZoom() {
+  var src = document.getElementById("receipt-img");
+  if (!src || src.style.display === "none" || !src.src) return;   // nothing / mileage route hidden
+  var img = document.getElementById("iz-img"), dl = document.getElementById("iz-dl");
+  if (dl) dl.href = src.src;
+  document.getElementById("img-zoom").style.display = "block";
+  document.body.style.overflow = "hidden";
+  img.onload = function () { _izFit(); };
+  img.src = src.src;
+  if (img.complete && img.naturalWidth) _izFit();   // already cached → fit now
+}
+function closeZoom() {
+  var b = document.getElementById("img-zoom");
+  if (b) b.style.display = "none";
+  document.body.style.overflow = "";
+}
+(function () {
+  var byId = function (id) { return document.getElementById(id); };
+  var scroll = byId("iz-scroll");
+  if (!scroll) return;
+  byId("iz-in").addEventListener("click", function (e) { e.stopPropagation(); _izSetZoom(_izZoom * 1.25); });
+  byId("iz-out").addEventListener("click", function (e) { e.stopPropagation(); _izSetZoom(_izZoom / 1.25); });
+  byId("iz-reset").addEventListener("click", function (e) { e.stopPropagation(); _izFit(); });
+  byId("iz-close").addEventListener("click", closeZoom);
+  // Grab-to-pan: drag the zoomed image to move it (works alongside the scrollbar
+  // and wheel). A drag past a few px sets _moved, which suppresses the click below
+  // so panning never toggles zoom or closes the lightbox.
+  var _panning = false, _moved = false, _sx = 0, _sy = 0, _sl = 0, _st = 0;
+  scroll.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    _panning = true; _moved = false;
+    _sx = e.clientX; _sy = e.clientY; _sl = scroll.scrollLeft; _st = scroll.scrollTop;
+    scroll.style.cursor = "grabbing";
+    e.preventDefault();   // no native image drag / text selection
+  });
+  window.addEventListener("mousemove", function (e) {
+    if (!_panning) return;
+    var dx = e.clientX - _sx, dy = e.clientY - _sy;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) _moved = true;
+    scroll.scrollLeft = _sl - dx;
+    scroll.scrollTop = _st - dy;
+  });
+  window.addEventListener("mouseup", function () {
+    if (!_panning) return;
+    _panning = false;
+    _izApply();   // restore grab / zoom-in cursor
+  });
+  // Capture-phase guard: a click that ended a real drag is swallowed here before
+  // the toggle/close handler below can see it.
+  scroll.addEventListener("click", function (e) {
+    if (_moved) { _moved = false; e.stopImmediatePropagation(); e.preventDefault(); }
+  }, true);
+  // Click the image toggles fit <-> 2x; click the surrounding area closes.
+  scroll.addEventListener("click", function (e) {
+    if (e.target && e.target.id === "iz-img") _izSetZoom(_izZoom > 1 ? 1 : 2);
+    else closeZoom();
+  });
+  // Wheel zooms while the lightbox is open.
+  scroll.addEventListener("wheel", function (e) {
+    if (!_zoomOpen()) return;
+    e.preventDefault();
+    _izSetZoom(_izZoom * (e.deltaY < 0 ? 1.12 : 0.89));
+  }, { passive: false });
+  window.addEventListener("resize", function () {
+    if (_zoomOpen()) { var z = _izZoom; _izFit(); _izSetZoom(z); }
+  });
+})();
 
 var FIELD_LABELS = {
   vendor: "Vendor", doc_no: "Doc no", date: "Date", total_amount: "Total",
@@ -755,6 +910,12 @@ function showLine(lineId, lineNo, row) {
   if (panel) panel.style.display = "";
   renderChips();
   renderBoxes();   // also re-runs on img onload, once dimensions are known
+  // Track position so the Prev/Next navigator knows where we are, and refresh it.
+  _curIdx = -1;
+  for (var _i = 0; _i < LINE_SEQ.length; _i++) {
+    if (LINE_SEQ[_i].id === String(lineId)) { _curIdx = _i; break; }
+  }
+  updateLineNav();
 }
 
 // Open the verify modal for a clicked line (ignore clicks on the decision cell).
@@ -768,6 +929,85 @@ document.querySelectorAll(".line-row").forEach(function (row) {
     openLine(row.dataset.line, row.dataset.no, row);
   });
 });
+
+// ---- Prev / Next line navigator -------------------------------------------
+// Page through the claim's lines inside the open modal — verify item-by-item
+// without closing and re-opening. The lines are already all in the DOM, so this
+// just reuses showLine() to swap which one the viewer shows.
+var LINE_SEQ = Array.prototype.map.call(document.querySelectorAll(".line-row"), function (r) {
+  return { id: r.dataset.line, no: r.dataset.no, row: r };
+});
+var _curIdx = -1;
+function updateLineNav() {
+  var nav = document.getElementById("line-nav");
+  var pos = document.getElementById("line-pos");
+  var prev = document.getElementById("line-prev");
+  var next = document.getElementById("line-next");
+  var n = LINE_SEQ.length;
+  if (nav) nav.style.display = n > 1 ? "" : "none";   // no navigator for a single-line claim
+  if (pos) pos.textContent = (_curIdx + 1) + " of " + n;
+  if (prev) prev.disabled = _curIdx <= 0;
+  if (next) next.disabled = _curIdx >= n - 1;
+}
+function gotoLine(i) {
+  if (i < 0 || i >= LINE_SEQ.length) return;
+  var s = LINE_SEQ[i];
+  showLine(s.id, s.no, s.row);
+  if (s.row && s.row.scrollIntoView) s.row.scrollIntoView({ block: "nearest" });   // keep the table row in view behind the modal
+}
+(function () {
+  var prev = document.getElementById("line-prev");
+  var next = document.getElementById("line-next");
+  if (prev) prev.addEventListener("click", function () { gotoLine(_curIdx - 1); });
+  if (next) next.addEventListener("click", function () { gotoLine(_curIdx + 1); });
+  // Left/right arrows page through lines while the modal is open — but never while
+  // the user is typing in a field (so arrow keys still move the text cursor).
+  document.addEventListener("keydown", function (e) {
+    var modal = document.getElementById("line-modal");
+    if (!modal || !modal.classList.contains("open")) return;
+    var t = (e.target && e.target.tagName) || "";
+    if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
+    if (e.key === "ArrowRight") { e.preventDefault(); gotoLine(_curIdx + 1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); gotoLine(_curIdx - 1); }
+  });
+})();
+
+// ---- Merge / split (flag-gated in the UI; the service enforces the policy) --
+function _mergeChecked() {
+  return Array.prototype.slice.call(document.querySelectorAll(".merge-chk"))
+    .filter(function (c) { return c.checked; });
+}
+function _syncMergeBtn() {
+  var btn = document.getElementById("merge-btn");
+  if (!btn) return;
+  var n = _mergeChecked().length;
+  var span = document.getElementById("merge-n");
+  if (span) span.textContent = n;
+  btn.disabled = n < 2;   // merge needs at least two lines
+}
+document.querySelectorAll(".merge-chk").forEach(function (c) {
+  c.addEventListener("change", _syncMergeBtn);
+});
+function submitMerge() {
+  var checked = _mergeChecked();
+  if (checked.length < 2) return;
+  var form = document.getElementById("merge-form");
+  if (!form) return;
+  checked.forEach(function (c) {
+    var inp = document.createElement("input");
+    inp.type = "hidden"; inp.name = "line_ids"; inp.value = c.value;
+    form.appendChild(inp);
+  });
+  form.submit();
+}
+function submitSplit(lineId) {
+  var form = document.getElementById("split-form");
+  var field = document.getElementById("split-line-id");
+  if (!form || !field) return;
+  field.value = lineId;
+  form.submit();
+}
+
 // Re-place boxes if the viewport resizes (rendered image dimensions change).
 window.addEventListener("resize", renderBoxes);
 

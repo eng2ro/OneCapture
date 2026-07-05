@@ -10,9 +10,11 @@ the page chose to draw.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import uuid
+import zipfile
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -25,6 +27,7 @@ from fastapi.responses import (
     JSONResponse,
     RedirectResponse,
     Response,
+    StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -35,9 +38,12 @@ from ..api import deps
 from ..auth.principal import Principal, list_visible_clients
 from ..auth.provider import AuthError, DevAuthProvider
 from ..config import get_settings
-from ..db.models import Category, Claimant, Event
+from ..db.models import Category, Claimant, Client, Event, IngestionJob
 from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
+from ..ocr.segment import PageSegmenter
 from ..repositories import ClaimRepository, LedgerRepository
+from ..services import ingestion
+from ..services.documents import normalize_image
 from ..services.claims import CLAIM_TYPES, ClaimError, ClaimService, Repos
 from ..services.sod import can_approve
 from ..tenancy import set_tenant_context
@@ -77,8 +83,14 @@ def _nav_context(request: Request) -> dict:
         ctx["scope_name"] = _scope_name(list_visible_clients(db, principal))
     except Exception:  # nav chrome must never break a page render
         return ctx
+    ctx["nav_total"] = sum(counts.values())   # total claims — sum BEFORE deriving group keys
+    # Derived badge totals for the grouped sidebar filters (mirror STATUS_GROUPS).
+    counts = dict(counts)
+    counts["attention"] = counts.get("sent_back", 0) + counts.get("partially_approved", 0)
+    counts["released_all"] = (
+        counts.get("released", 0) + counts.get("exported", 0) + counts.get("paid", 0)
+    )
     ctx["nav_counts"] = counts
-    ctx["nav_total"] = sum(counts.values())
     return ctx
 
 
@@ -93,28 +105,36 @@ CLAIM_STATUSES = [
     "submitted", "in_review", "approved", "partially_approved",
     "sent_back", "released", "rejected", "exported", "paid",
 ]
+
+# Sidebar filter groups: one menu item can span several lifecycle statuses.
+#   attention → claims bounced back to the claimant to fix (queried / partially approved)
+#   released  → anything that has left for accounting (released and everything after)
+# A key not listed here is treated as a single exact status.
+STATUS_GROUPS = {
+    "attention": ["sent_back", "partially_approved"],
+    "released": ["released", "exported", "paid"],
+}
 PAYMENT_METHODS = ["out_of_pocket", "corporate_card", "company_paid"]
 EVENT_TYPES = ["training", "travel", "client_meeting", "conference", "team", "project", "other"]
 EXPENSE_TYPES = get_args(ExpenseType)          # the fixed OCR expense vocabulary
 UNITS = get_args(Unit)
-SUPPORTED_MEDIA = {"image/jpeg", "image/png", "image/webp"}
+# HEIC/HEIF (iPhone) accepted and transcoded to JPEG before OCR (documents.normalize_image).
+SUPPORTED_MEDIA = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
 
 def _actor(principal: Principal) -> str:
     return principal.email or str(principal.user_id)
 
 
-class _FormOcr:
-    """A manual-entry OcrProvider: returns the Extraction built from the capture
-    form. Lets the cookie web path reuse ClaimService.upload unchanged (same
-    classify/category/audit/image-store path) instead of forking it — the vision
-    model is simply not invoked for a hand-keyed claim."""
-
-    def __init__(self, extraction: Extraction) -> None:
-        self._extraction = extraction
-
-    def extract(self, image_bytes: bytes, media_type: str) -> Extraction:
-        return self._extraction
+def _opt_uuid(value: str | None) -> uuid.UUID | None:
+    """Parse an optional id from a query string. A blank or malformed ``?edit=``
+    means 'no record selected' (show the list) — never a 422. Typing the param as
+    ``uuid.UUID | None`` would 422 on an empty string, which breaks the edit links
+    if one ever renders without an id."""
+    try:
+        return uuid.UUID(value) if value and value.strip() else None
+    except ValueError:
+        return None
 
 
 @router.get("/")
@@ -149,32 +169,6 @@ def _category_json(categories: list[Category]) -> list[dict]:
 def _events_for(repos: Repos) -> list:
     """Active events the staff member can attach a claim to (capture/review)."""
     return repos.events.list_for_clients([deps.default_client_id(repos.session)])
-
-
-def _create_inline_event(
-    repos: Repos, principal: Principal, client_id: uuid.UUID, *,
-    title: str, start: str, end: str,
-) -> uuid.UUID:
-    """Mint a lightweight trip from the Submit page so a staffer who is first to
-    file for a trip isn't blocked by 'no event exists yet'. Title + date range only
-    — the budget and cost centre stay the manager's to fill later under Manage →
-    Events. Returns the new event id."""
-    title = title.strip()
-    sd, ed = _parse_date(start), _parse_date(end)
-    if not title:
-        raise ClaimError("a new trip needs a title")
-    if sd is None or ed is None:
-        raise ClaimError("a new trip needs a start and end date")
-    if ed < sd:
-        raise ClaimError("the end date is before the start date")
-    ev = repos.events.add(
-        Event(
-            firm_id=principal.firm_id, client_id=client_id, title=title,
-            event_type="travel", start_date=sd, end_date=ed,
-            organiser_user_id=principal.user_id, status="active",
-        )
-    )
-    return ev.id
 
 
 def _render_capture(
@@ -235,8 +229,10 @@ async def capture_extract(
         )
     image_bytes = await file.read()
     try:
+        # iPhone HEIC → JPEG before OCR (the vision API doesn't read HEIC).
+        image_bytes, media_type = normalize_image(image_bytes, media_type, name=file.filename or "")
         extraction = ocr.extract(image_bytes, media_type)
-    except OcrError as exc:
+    except (OcrError, ValueError) as exc:
         configured = bool(get_settings().anthropic_api_key)
         reason = (
             "Couldn't read this receipt automatically — please enter the details."
@@ -254,39 +250,6 @@ async def capture_extract(
             "suggested_category_id": str(suggested.id) if suggested else None,
         }
     )
-
-
-def _item_has_data(item) -> bool:
-    """True only if a per-file ``items`` entry actually carries read data. A file
-    the page hadn't finished reading when the batch was submitted serializes as a
-    field-less/all-null entry — we must NOT treat that as 'verified empty' (that
-    was the bug: such receipts were saved blank instead of being read). When this
-    is False the server OCRs the image itself."""
-    if not isinstance(item, dict):
-        return False
-    if item.get("category_id") or (item.get("expense_type") or "other") != "other":
-        return True
-    return any(item.get(k) for k in ("vendor", "doc_no", "date", "total_amount", "quantity", "unit"))
-
-
-def _extraction_from_item(item: dict) -> Extraction:
-    """Build an Extraction from one per-file ``items`` entry (the verified /
-    auto-captured fields the capture page already read client-side)."""
-    return Extraction(
-        vendor=item.get("vendor") or None,
-        doc_no=item.get("doc_no") or None,
-        date=item.get("date") or None,
-        total_amount=Decimal(item["total_amount"]) if item.get("total_amount") else None,
-        expense_type=item.get("expense_type") or "other",
-        quantity=Decimal(item["quantity"]) if item.get("quantity") else None,
-        unit=item.get("unit") or None,
-        boxes=item.get("boxes") or None,   # OCR field positions read client-side
-    )
-
-
-# Sentinel the Submit page posts in ``event_id`` to mean "create a new trip from
-# the inline fields" rather than attach an existing event.
-NEW_EVENT = "__new__"
 
 
 @router.post("/capture")
@@ -310,20 +273,14 @@ async def web_capture(
     principal: Principal = Depends(deps.get_session_principal),
     image_dir: Path = Depends(deps.get_image_dir),
     ocr: OcrProvider = Depends(deps.get_ocr),
+    segmenter: PageSegmenter = Depends(deps.get_segmenter),
 ):
     """Capture one claim from a batch of receipts: ONE ``in_review`` claim whose
-    LINES are the dropped receipts (auto-captured, category suggested where
-    unambiguous, unmapped otherwise). Fields the page read client-side arrive in
-    ``items`` (aligned to ``files`` by order); a file with no item is OCR'd
-    server-side. A bad receipt is skipped (its own savepoint), the rest still
-    land. The whole claim then goes to its review screen for line-by-line verify.
-
-    The claim header carries a compulsory ``claim_type`` and, for a non-general
-    standalone claim, a date range — validated in :meth:`ClaimService.start_claim`.
-    A staffer can also create a trip inline (``event_id == '__new__'``): we mint the
-    Event (title + dates only; the manager fills budget later) and attach to it."""
-    from ..maps import MapError
-
+    LINES are the dropped receipts. A small upload is read inline (instant); a large
+    multi-invoice upload — which is dozens of slow vision reads — is staged and
+    handed to the background ingestion worker, and the browser goes to a progress
+    page instead of hanging on the request. Both paths share
+    :func:`ingestion.build_claim`, so the resulting claim is identical."""
     try:
         item_list = json.loads(items) if items.strip() else []
     except json.JSONDecodeError:
@@ -334,126 +291,142 @@ async def web_capture(
         mileage_specs = []
     if not isinstance(mileage_specs, list):
         mileage_specs = []
+
     client_id = deps.default_client_id(repos.session)
-    # Echo the header fields back if validation fails (receipts get re-dropped).
+    _client = repos.session.get(Client, client_id)
+    split_docs = bool(_client and (_client.modules or {}).get("allow_document_split"))
+
+    # Slurp the uploads into memory once (skip empty file parts — an empty selection
+    # posts a part with no filename, e.g. a mileage-only claim).
+    staged: list[dict] = []
+    for f in files:
+        if not (f.filename or "").strip():
+            continue
+        staged.append({
+            "name": f.filename,
+            "media_type": f.content_type or "application/octet-stream",
+            "bytes": await f.read(),
+        })
+
+    header = {
+        "title": title, "purpose": purpose, "remarks": remarks,
+        "posting_date": posting_date, "claim_type": claim_type,
+        "start_date": start_date, "end_date": end_date, "event_id": event_id,
+        "new_event_title": new_event_title, "new_event_start": new_event_start,
+        "new_event_end": new_event_end, "actor": _actor(principal),
+    }
+    # Echoed back into the form if inline validation fails (receipts get re-dropped).
     form = {
         "title": title, "claim_type": claim_type, "purpose": purpose,
         "remarks": remarks, "posting_date": posting_date,
         "start_date": start_date, "end_date": end_date, "event_id": event_id,
     }
 
-    try:
-        if event_id == NEW_EVENT:
-            ev_uuid = _create_inline_event(
-                repos, principal, client_id,
-                title=new_event_title, start=new_event_start, end=new_event_end,
-            )
-            # The claim inherits the trip's dates; type defaults to travel when the
-            # staffer didn't pick a more specific one for a brand-new trip.
-            sd, ed = _parse_date(new_event_start), _parse_date(new_event_end)
-            # A brand-new trip is never 'general'; honour a specific pick, else travel.
-            ctype = claim_type if claim_type in CLAIM_TYPES and claim_type != "general" else "travel"
-        else:
-            ev_uuid = uuid.UUID(event_id) if event_id.strip() else None
-            sd, ed = _parse_date(start_date), _parse_date(end_date)
-            ctype = claim_type
-        claim = _service.start_claim(
-            repos=repos,
-            firm_id=principal.firm_id,
-            client_id=client_id,
-            title=title.strip() or None,
-            purpose=purpose.strip() or None,
-            remarks=remarks.strip() or None,
-            posting_date=_parse_date(posting_date) if posting_date.strip() else None,
-            claim_type=ctype,
-            start_date=sd,
-            end_date=ed,
-            event_id=ev_uuid,
-            # Record the keying firm user so SoD blocks them approving it.
+    # Large batches read too slowly to do in the request — stage + enqueue for the
+    # background worker and send the browser to the progress page.
+    if ingestion.estimate_units(staged) > ingestion.INLINE_MAX_UNITS:
+        job_id = uuid.uuid4()
+        manifest = ingestion.stage_files(image_dir, job_id, staged)
+        ingestion.enqueue_job(
+            repos, job_id=job_id, firm_id=principal.firm_id, client_id=client_id,
             created_by_user_id=principal.user_id,
+            allowed_client_ids=principal.allowed_client_ids,
+            header=header, item_list=item_list, mileage_specs=mileage_specs,
+            split_docs=split_docs, manifest=manifest,
+            total_estimate=ingestion.estimate_units(staged),
         )
-    except (ClaimError, ValueError) as exc:
-        repos.session.rollback()
+        return RedirectResponse(f"/ingest/{job_id}", status_code=303)
+
+    # Small upload: build the claim inline for an instant result.
+    providers = ingestion.Providers(
+        ocr=ocr, segmenter=segmenter, image_dir=image_dir,
+        mileage_rate=deps.get_mileage_rate(), directions=deps.get_directions(),
+    )
+    result = ingestion.build_claim(
+        repos, providers, firm_id=principal.firm_id, client_id=client_id,
+        created_by_user_id=principal.user_id,
+        allowed_client_ids=principal.allowed_client_ids,
+        header=header, staged=staged, item_list=item_list,
+        mileage_specs=mileage_specs, split_docs=split_docs,
+    )
+    if result.header_error:
         return _render_capture(
-            request, _capture_categories(repos), _events_for(repos), str(exc), form
+            request, _capture_categories(repos), _events_for(repos), result.header_error, form
         )
-    added = 0
-    errors: list[str] = []
-    for i, f in enumerate(files):
-        # The file input always posts; an empty selection arrives as a part with no
-        # filename — skip it so a mileage-only claim isn't flagged as a bad receipt.
-        if not (f.filename or "").strip():
-            continue
-        name = f.filename or f"receipt {i + 1}"
-        media_type = f.content_type or "application/octet-stream"
-        if media_type not in SUPPORTED_MEDIA:
-            errors.append(f"{name}: unsupported file type")
-            continue
-        image_bytes = await f.read()
-        item = item_list[i] if i < len(item_list) else None
-        try:
-            with repos.session.begin_nested():
-                if _item_has_data(item):
-                    provider: OcrProvider = _FormOcr(_extraction_from_item(item))
-                    cat_uuid = (
-                        uuid.UUID(item["category_id"]) if item.get("category_id") else None
-                    )
-                    pay = (item.get("payment_method") or "out_of_pocket")
-                else:
-                    provider, cat_uuid, pay = ocr, None, "out_of_pocket"
-                _service.add_line(
-                    repos=repos,
-                    claim=claim,
-                    image_bytes=image_bytes,
-                    media_type=media_type,
-                    ocr=provider,
-                    image_dir=image_dir,
-                    category_id=cat_uuid,
-                    payment_method=pay,
-                )
-            added += 1
-        except (ValidationError, InvalidOperation, OcrError, ClaimError, ValueError) as exc:
-            errors.append(f"{name}: {exc}")
-
-    # Mileage trips added on the capture page → mileage lines on the SAME claim. The
-    # server recomputes each authoritative distance (never trusts a client km) and
-    # records the chosen route + recommended km (longer-than-recommended is flagged).
-    for spec in mileage_specs:
-        if not isinstance(spec, dict):
-            continue
-        origin = str(spec.get("origin") or "").strip()
-        destination = str(spec.get("destination") or "").strip()
-        sdate = str(spec.get("trip_date") or "").strip()
-        if not origin or not destination:
-            errors.append("mileage: a trip is missing From/To")
-            continue
-        if not sdate:
-            errors.append(f"mileage {origin} → {destination}: a trip date is required")
-            continue
-        wps = [w for w in (spec.get("waypoints") or []) if isinstance(w, str) and w.strip()]
-        try:
-            ridx = int(spec.get("route_index") or 0)
-        except (TypeError, ValueError):
-            ridx = 0
-        try:
-            with repos.session.begin_nested():
-                route, shortest_km = _resolve_route(origin, destination, wps, ridx)
-                _service.add_mileage_line(
-                    repos=repos, claim=claim, origin=origin, destination=destination,
-                    waypoints=wps, route=route, date=sdate or None,
-                    rate=deps.get_mileage_rate(), shortest_km=shortest_km,
-                )
-            added += 1
-        except (MapError, ClaimError, ValueError) as exc:
-            errors.append(f"mileage {origin} → {destination}: {exc}")
-
-    if added == 0:
-        repos.session.rollback()  # no lines → don't leave an empty claim header
-        msg = "Could not add any line. " + " · ".join(errors)
+    if result.added == 0:
+        msg = "Could not add any line. " + ingestion.summarize_errors(result.errors)
         return _render_capture(request, _capture_categories(repos), _events_for(repos), msg)
+    return RedirectResponse(f"/claims/{result.claim_id}/review", status_code=303)
 
-    _service.submit(repos=repos, claim=claim, actor=_actor(principal), line_count=added)
-    return RedirectResponse(f"/claims/{claim.id}/review", status_code=303)
+
+# --------------------------------------------------------------------------- #
+# Async ingestion progress (a large upload is built by the background worker)
+# --------------------------------------------------------------------------- #
+@router.get("/ingest/{job_id}", response_class=HTMLResponse, response_model=None)
+def ingest_progress(
+    request: Request,
+    job_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse | RedirectResponse:
+    """Progress page for an async capture. Redirects to the review screen once the
+    worker has built the claim; RLS scopes the job to the caller's firm/client."""
+    job = repos.session.get(IngestionJob, job_id)
+    if job is None:
+        return RedirectResponse("/capture", status_code=303)
+    if job.status == "done" and job.claim_id:
+        return RedirectResponse(f"/claims/{job.claim_id}/review", status_code=303)
+    return templates.TemplateResponse(request, "ingesting.html", {"job": job})
+
+
+@router.get("/ingest/{job_id}/status")
+def ingest_status(
+    job_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> dict:
+    """JSON the progress page polls: state, read count, and where to go when done."""
+    return _job_status_dict(repos.session.get(IngestionJob, job_id))
+
+
+def _job_status_dict(job: IngestionJob | None) -> dict:
+    if job is None:
+        return {"state": "unknown"}
+    return {
+        "state": job.status, "done": job.done_units, "total": job.total_units,
+        "error": job.error,
+        "redirect": f"/claims/{job.claim_id}/review" if job.status == "done" and job.claim_id else None,
+    }
+
+
+@router.get("/ingest/{job_id}/events")
+def ingest_events(
+    job_id: uuid.UUID,
+    principal: Principal = Depends(deps.get_session_principal),
+) -> StreamingResponse:
+    """Server-Sent Events stream of a job's progress — the progress page prefers this
+    to polling. Uses its own short-lived session (re-scoped each read) so a fresh
+    Postgres snapshot picks up the worker's committed updates; caps at ~10 min."""
+    from ..db.session import get_sessionmaker
+
+    def _events():
+        import json as _json
+        import time
+
+        session = get_sessionmaker()()
+        try:
+            for _ in range(600):
+                session.rollback()   # end any txn → next read is a fresh snapshot
+                set_tenant_context(session, principal.firm_id, principal.allowed_client_ids)
+                payload = _job_status_dict(session.get(IngestionJob, job_id))
+                yield f"data: {_json.dumps(payload)}\n\n"
+                if payload.get("redirect") or payload["state"] in ("failed", "unknown"):
+                    break
+                time.sleep(1.0)
+        finally:
+            session.close()
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
 
 
 def _parse_int(value: str, default: int = 0) -> int:
@@ -571,6 +544,9 @@ def web_capture_mileage(
         )
     except (ClaimError, ValueError) as exc:
         repos.session.rollback()
+        # rollback clears the SET LOCAL RLS context; re-establish it so the
+        # re-render's client-scoped queries can see rows again (else 500).
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
         return _render_capture(request, _capture_categories(repos), _events_for(repos),
                                str(exc), form)
     _service.submit(repos=repos, claim=claim, actor=_actor(principal), line_count=1)
@@ -630,6 +606,20 @@ def web_logout() -> RedirectResponse:
 CLAIMS_PAGE_SIZE = 25
 
 
+def _active_ingestion_jobs(repos: Repos) -> list[IngestionJob]:
+    """In-flight async captures (queued/running) for the caller's clients — shown as
+    a 'processing' banner on the inbox. RLS scopes these to the request's tenant."""
+    from sqlalchemy import select
+
+    return list(
+        repos.session.execute(
+            select(IngestionJob)
+            .where(IngestionJob.status.in_(("queued", "running")))
+            .order_by(IngestionJob.created_at.desc())
+        ).scalars().all()
+    )
+
+
 @router.get("/claims", response_class=HTMLResponse)
 def claims_inbox(
     request: Request,
@@ -643,7 +633,9 @@ def claims_inbox(
     optionally searched by ``q`` (title / vendor / ref), paginated, and scoped to
     the principal's visible clients."""
     q = (q or "").strip()
-    all_claims = repos.claims.list_for_clients(principal.allowed_client_ids, status)
+    # A menu item may be a group (e.g. "attention") spanning several statuses.
+    status_filter = STATUS_GROUPS.get(status, status)
+    all_claims = repos.claims.list_for_clients(principal.allowed_client_ids, status_filter)
     client_names = {c.id: c.name for c in list_visible_clients(repos.session, principal)}
     summary = repos.claims.inbox_summary(principal.allowed_client_ids)
     total = summary["total"]
@@ -699,6 +691,7 @@ def claims_inbox(
             "page": page,
             "total_pages": total_pages,
             "total_results": total_results,
+            "active_jobs": _active_ingestion_jobs(repos),
         },
     )
 
@@ -762,11 +755,20 @@ def _render_review(
     line_boxes = {str(ln.id): (ln.ocr_boxes or {}) for ln in lines}
     # Mileage lines show a route map instead of a receipt.
     line_mileage = {str(ln.id): ln.mileage for ln in lines if ln.mileage}
+    # Merge/split (per-client policy): page count per multi-page line drives the
+    # "N pages" badge + the Split action; the flag gates the controls (server enforces
+    # it too). Only meaningful while the claim is still editable.
+    line_pages = {str(ln.id): len(ln.pages) for ln in lines if ln.pages}
+    allow_split = can_edit and _service._allow_document_split(repos, claim)
     maps_key = get_settings().google_maps_browser_key or get_settings().google_maps_api_key
     # Posting readiness per line (GL + resolvable cost centre) — the audit gate.
     requires_coding = _service._requires_coding(repos, claim)
     coding = {
         ln.id: {
+            # Effective GL/cost centre a line posts to: its own override, else the
+            # value inherited from the chosen category / claimant / event. The review
+            # UI shows these so a line coded purely by its category isn't shown blank.
+            "gl": _service._resolved_gl(repos, ln),
             "cost_centre": _service._resolved_cost_centre(repos, ln, claim),
             "ready": _service._posting_ready(repos, ln, claim),
         }
@@ -810,6 +812,8 @@ def _render_review(
             "payment_methods": PAYMENT_METHODS,
             "line_boxes": line_boxes,
             "line_mileage": line_mileage,
+            "line_pages": line_pages,
+            "allow_split": allow_split,
             "maps_key": maps_key,
             "coding": coding,
             "requires_coding": requires_coding,
@@ -849,13 +853,21 @@ def review_page(
     return _render_review(request, repos, principal, claim_id)
 
 
+def _receipt_download_name(line) -> str:
+    """A friendly filename for the receipt download: ``receipt-<line>.<ext>``.
+    Sending a filename makes the same endpoint serve inline in an <img> (browsers
+    ignore Content-Disposition on image subresources) yet SAVE a file when opened
+    via the download link."""
+    return f"receipt-{line.id}{Path(line.image_path).suffix or '.jpg'}"
+
+
 @router.get("/claims/{claim_id}/image")
 def claim_image(claim_id: uuid.UUID, repos: Repos = Depends(deps.get_web_repos)):
     """Serve the claim's first line image (back-compat; RLS-scoped → 404)."""
     line = repos.claims.first_line(claim_id)
     if line is None or not line.image_path or not os.path.exists(line.image_path):
         raise HTTPException(status_code=404, detail="image not available")
-    return FileResponse(line.image_path)
+    return FileResponse(line.image_path, filename=_receipt_download_name(line))
 
 
 @router.get("/claims/{claim_id}/lines/{line_id}/image")
@@ -873,7 +885,7 @@ def claim_line_image(
         or not os.path.exists(line.image_path)
     ):
         raise HTTPException(status_code=404, detail="image not available")
-    return FileResponse(line.image_path)
+    return FileResponse(line.image_path, filename=_receipt_download_name(line))
 
 
 def _route_markers(mil: dict) -> list[str]:
@@ -1013,6 +1025,44 @@ def web_edit(
         request, repos, principal, claim_id,
         lambda: _service.edit(
             repos=repos, claim_id=claim_id, fields=fields, line_id=lid,
+            actor=_actor(principal), principal=principal,
+        ),
+    )
+
+
+@router.post("/claims/{claim_id}/lines/merge")
+def web_merge_lines(
+    request: Request,
+    claim_id: uuid.UUID,
+    line_ids: list[str] = Form(default=[]),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+    image_dir: Path = Depends(deps.get_image_dir),
+):
+    """Merge the selected lines into one (pages of one invoice). Flag-gated + audited
+    in the service; the UI only offers it when allow_document_split is on."""
+    return _action(
+        request, repos, principal, claim_id,
+        lambda: _service.merge_lines(
+            repos=repos, claim_id=claim_id, line_ids=line_ids,
+            actor=_actor(principal), image_dir=image_dir, principal=principal,
+        ),
+    )
+
+
+@router.post("/claims/{claim_id}/lines/split")
+def web_split_line(
+    request: Request,
+    claim_id: uuid.UUID,
+    line_id: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Split a multi-page line back into one line per page. Flag-gated + audited."""
+    return _action(
+        request, repos, principal, claim_id,
+        lambda: _service.split_line(
+            repos=repos, claim_id=claim_id, line_id=uuid.UUID(line_id),
             actor=_actor(principal), principal=principal,
         ),
     )
@@ -1283,11 +1333,12 @@ def _render_categories(request, repos, principal, *, editing=None, error=None) -
 @router.get("/admin/categories", response_class=HTMLResponse)
 def admin_categories(
     request: Request,
-    edit: uuid.UUID | None = None,
+    edit: str = "",
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.require_firm_scope),
 ) -> HTMLResponse:
-    editing = repos.categories.get_by_id(edit) if edit else None
+    eid = _opt_uuid(edit)
+    editing = repos.categories.get_by_id(eid) if eid else None
     return _render_categories(request, repos, principal, editing=editing)
 
 
@@ -1362,11 +1413,12 @@ def _render_claimants(request, repos, principal, *, editing=None, error=None) ->
 @router.get("/admin/claimants", response_class=HTMLResponse)
 def admin_claimants(
     request: Request,
-    edit: uuid.UUID | None = None,
+    edit: str = "",
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.require_firm_scope),
 ) -> HTMLResponse:
-    editing = repos.claimants.get_by_id(edit) if edit else None
+    eid = _opt_uuid(edit)
+    editing = repos.claimants.get_by_id(eid) if eid else None
     return _render_claimants(request, repos, principal, editing=editing)
 
 
@@ -1459,11 +1511,12 @@ def _render_events(request, repos, principal, *, editing=None, error=None) -> HT
 @router.get("/admin/events", response_class=HTMLResponse)
 def admin_events(
     request: Request,
-    edit: uuid.UUID | None = None,
+    edit: str = "",
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.require_firm_scope),
 ) -> HTMLResponse:
-    editing = repos.events.get(edit) if edit else None
+    eid = _opt_uuid(edit)
+    editing = repos.events.get(eid) if eid else None
     return _render_events(request, repos, principal, editing=editing)
 
 

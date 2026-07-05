@@ -117,6 +117,40 @@
 .capx .cap-bar-actions{margin-left:auto;display:flex;gap:10px}
 .capx .capture-bar .btn{height:44px;padding:0 18px}
 @media(max-width:1080px){.cap-stepper{display:none}.capx .field-row{grid-template-columns:1fr}}
+/* photo-capture buttons */
+.capx .cap-cam-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+.capx .cap-cam-btn{flex:1;min-width:190px;height:56px;border:1px solid var(--rule);border-radius:var(--r);background:var(--paper);display:flex;align-items:center;justify-content:center;gap:11px;cursor:pointer;font-family:var(--sans)}
+.capx .cap-cam-btn:hover{border-color:var(--pine-line);background:var(--pine-tint)}
+.capx .cap-cam-btn .ti{font-size:22px;color:var(--pine);flex:none}
+.capx .cap-cam-btn .cb-txt{font-size:13.5px;font-weight:600;color:var(--ink);text-align:left;line-height:1.2}
+.capx .cap-cam-btn small{display:block;font-weight:500;font-size:11px;color:var(--faint)}
+/* full-screen camera */
+.cam-overlay{position:fixed;inset:0;z-index:9999;background:#0c0d0b;display:flex;flex-direction:column;color:#fff;font-family:var(--sans)}
+.cam-overlay[hidden]{display:none!important}
+.cam-head{display:flex;align-items:center;gap:10px;padding:14px 16px}
+.cam-head .cam-mode{font-family:var(--serif);font-size:16px;font-weight:600}
+.cam-head .cam-x{margin-left:auto;width:34px;height:34px;border:none;background:rgba(255,255,255,.12);color:#fff;border-radius:50%;font-size:22px;line-height:1;cursor:pointer}
+.cam-stage{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000}
+.cam-stage video,.cam-stage .cam-shot{max-width:100%;max-height:100%;object-fit:contain}
+.cam-stage video[hidden],.cam-stage .cam-shot[hidden]{display:none}
+.cam-guide{position:absolute;top:0;left:0;right:0;pointer-events:none;opacity:.45;border-bottom:2px dashed rgba(255,255,255,.9)}
+.cam-guide img{display:block;width:100%}
+.cam-guide-tag{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(31,93,68,.92);color:#fff;font-size:11px;font-weight:600;padding:3px 11px;border-radius:20px;opacity:1;z-index:1}
+.cam-count{position:absolute;top:14px;right:16px;background:rgba(31,93,68,.92);font-size:12px;font-weight:700;padding:4px 11px;border-radius:20px}
+.cam-msg{padding:9px 16px;text-align:center;font-size:12.5px;color:#cfd3cc;min-height:20px}
+.cam-msg.err{color:#fca5a5}
+.cam-strip{display:flex;gap:8px;padding:0 16px 6px;overflow-x:auto}
+.cam-strip:empty{display:none}
+.cam-strip .cs-thumb{flex:none;width:44px;height:58px;border-radius:5px;object-fit:cover;border:1px solid rgba(255,255,255,.28)}
+.cam-bar{display:flex;align-items:center;justify-content:center;gap:28px;padding:14px 16px calc(16px + env(safe-area-inset-bottom))}
+.cam-btn-txt{min-width:76px;background:none;border:none;color:#fff;font-size:14px;font-weight:600;cursor:pointer;padding:10px}
+.cam-btn-txt[hidden]{display:none}
+.cam-btn-txt:disabled{opacity:.4;cursor:default}
+.cam-btn-txt.done{color:#7fd8ac}
+.cam-shutter{width:72px;height:72px;border-radius:50%;border:4px solid #fff;background:rgba(255,255,255,.22);cursor:pointer;flex:none;transition:transform .08s}
+.cam-shutter[hidden]{display:none}
+.cam-shutter:active{transform:scale(.93)}
+.cam-shutter:disabled{opacity:.4}
 </style>
 
 <div class="capx" id="screen-submit">
@@ -217,15 +251,29 @@
           <div class="dropzone-empty" id="dz-empty">
             <i class="ti ti-cloud-upload"></i>
             <div class="dz-title">Drag receipts here, or browse</div>
-            <div class="dz-hint">JPG · PNG · WebP — add as many as you like (optional)</div>
+            <div class="dz-hint">JPG · PNG · WebP · PDF · or a ZIP of receipts — add as many as you like (optional)</div>
             <span class="dz-browse"><i class="ti ti-folder"></i> Browse files</span>
             <div class="dz-ocr"><i class="ti ti-scan"></i> OneCapture reads the vendor, date &amp; amount automatically</div>
           </div>
           <div class="dropzone-compact" id="dz-compact" hidden>
             <i class="ti ti-plus"></i> <span>Drop or browse to add more receipts</span>
           </div>
-          <input type="file" id="file" name="files" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <input type="file" id="file" name="files" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif,.zip,application/zip,.pdf,application/pdf" multiple hidden>
         </label>
+
+        {# Photo capture — snap one receipt, or a long receipt top-to-bottom. #}
+        <div class="cap-cam-actions">
+          <button type="button" class="cap-cam-btn" id="btn-photo">
+            <i class="ti ti-camera"></i><span class="cb-txt">Take a photo<small>Snap one receipt</small></span>
+          </button>
+          <button type="button" class="cap-cam-btn" id="btn-long">
+            <i class="ti ti-file-stack"></i><span class="cb-txt">Long receipt<small>Snap top-to-bottom — we join it</small></span>
+          </button>
+        </div>
+        {# Native-camera fallbacks (used only when the in-page camera is blocked). #}
+        <input type="file" id="cam-file" accept="image/*" capture="environment" hidden>
+        <input type="file" id="cam-file-multi" accept="image/*" multiple hidden>
+
         <div id="receipt-list" class="receipt-list"></div>
       </section>
 
@@ -285,6 +333,31 @@
       </div>
     </div>
   </form>
+
+  {# ---- Full-screen photo capture (single shot + long-receipt multi-shot) ---- #}
+  <div class="cam-overlay" id="cam" hidden role="dialog" aria-modal="true" aria-label="Photo capture">
+    <div class="cam-head">
+      <span class="cam-mode" id="cam-mode">Take a photo</span>
+      <button type="button" class="cam-x" id="cam-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="cam-stage">
+      <video id="cam-video" playsinline muted autoplay></video>
+      <img class="cam-shot" id="cam-shot" alt="captured photo" hidden>
+      <div class="cam-guide" id="cam-guide" hidden>
+        <span class="cam-guide-tag">line up the overlap</span>
+        <img id="cam-guide-img" alt="">
+      </div>
+      <span class="cam-count" id="cam-count" hidden>0 shots</span>
+      <canvas id="cam-canvas" hidden></canvas>
+    </div>
+    <div class="cam-strip" id="cam-strip"></div>
+    <div class="cam-msg" id="cam-msg"></div>
+    <div class="cam-bar">
+      <button type="button" class="cam-btn-txt" id="cam-cancel">Cancel</button>
+      <button type="button" class="cam-shutter" id="cam-shutter" aria-label="Capture"></button>
+      <button type="button" class="cam-btn-txt done" id="cam-done" hidden>Done</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -318,6 +391,10 @@
   // One status/category pill: progress while reading, else the resolved category
   // (green) or a "no category" warning to fix on the verify screen.
   function tagHtml(e) {
+    if (e.status === "archive")
+      return e.kind === "pdf"
+        ? '<span class="rc-chip"><i class="ti ti-file-text"></i> PDF · read on upload</span>'
+        : '<span class="rc-chip"><i class="ti ti-file-zip"></i> archive · expands into lines on upload</span>';
     if (e.status === "reading") return '<span class="rc-chip reading"><span class="spinner"></span>reading</span>';
     if (e.status === "manual") return '<span class="rc-chip warn"><i class="ti ti-alert-triangle"></i> verify manually</span>';
     if (e.catId && CAT_BY_ID[e.catId]) return '<span class="rc-cat"><i class="ti ti-tag"></i>' + esc(CAT_BY_ID[e.catId].name) + "</span>";
@@ -329,8 +406,12 @@
     entries.forEach(function (e) {
       var row = document.createElement("div");
       row.className = "receipt-card";
+      var thumb = (e.archive || e.heic)
+        ? '<div class="rc-thumb" style="display:flex;align-items:center;justify-content:center;"><i class="ti ' +
+          (e.kind === "pdf" ? "ti-file-text" : e.kind === "zip" ? "ti-file-zip" : "ti-photo") + '" style="font-size:18px;color:var(--graphite);"></i></div>'
+        : '<img class="rc-thumb" src="' + e.url + '" alt="">';
       row.innerHTML =
-        '<img class="rc-thumb" src="' + e.url + '" alt="">' +
+        thumb +
         '<div class="rc-body">' +
           '<div class="rc-name" title="' + esc(e.file.name) + '">' + esc(cardTitle(e)) + "</div>" +
           '<div class="rc-tags">' + tagHtml(e) + "</div>" +
@@ -396,10 +477,27 @@
 
   function addFiles(fileList) {
     Array.prototype.forEach.call(fileList, function (f) {
-      if (f.type.indexOf("image/") !== 0) return;
-      var e = { id: ++seq, file: f, url: URL.createObjectURL(f), status: "reading", ext: null, catId: null };
+      // iPhone HEIC/HEIF: some browsers report an empty f.type, so detect by name too.
+      // It IS a readable image (the server transcodes it to JPEG + OCRs it) but the
+      // browser can't render a HEIC thumbnail, so we show a photo icon instead.
+      var isHeic = /\.(heic|heif)$/i.test(f.name) || f.type === "image/heic" || f.type === "image/heif";
+      var isImg = f.type.indexOf("image/") === 0 || isHeic;
+      var isZip = /\.zip$/i.test(f.name) ||
+        f.type === "application/zip" || f.type === "application/x-zip-compressed";
+      var isPdf = /\.pdf$/i.test(f.name) || f.type === "application/pdf";
+      if (!isImg && !isZip && !isPdf) return;
+      // A ZIP or PDF can't be read/previewed in the browser: the server expands a ZIP
+      // into one line per image, and renders a PDF (one line per page, or the whole
+      // document as one line, per the client's policy). Show it as a document card and
+      // send it with a null item so the server reads it.
+      var e = {
+        id: ++seq, file: f, url: (isImg && !isHeic) ? URL.createObjectURL(f) : null,
+        status: isImg ? "reading" : "archive", ext: null, catId: null,
+        archive: (isZip || isPdf), heic: isHeic,
+        kind: isZip ? "zip" : (isPdf ? "pdf" : (isHeic ? "heic" : "img")),
+      };
       entries.push(e);
-      extract(e);
+      if (isImg) extract(e);
     });
     render();
   }
@@ -417,7 +515,17 @@
       .catch(function () { e.status = "manual"; render(); });
   }
 
-  fileInput.addEventListener("change", function () { addFiles(fileInput.files); fileInput.value = ""; });
+  fileInput.addEventListener("change", function () {
+    // Snapshot the picked files, THEN clear the input so the same file can be
+    // re-selected later. The clear must happen BEFORE addFiles(), because addFiles
+    // -> syncForm rebuilds fileInput.files from `entries` and that write has to be
+    // the LAST one. (Clearing after addFiles wiped the just-attached file, so a PDF
+    // or ZIP — which fires no async extract() to re-attach it — submitted as
+    // files=[] and the claim came back empty.)
+    var picked = Array.prototype.slice.call(fileInput.files);
+    fileInput.value = "";
+    addFiles(picked);
+  });
   ["dragover", "dragenter"].forEach(function (ev) {
     dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.add("drag"); });
   });
@@ -425,6 +533,10 @@
     dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.remove("drag"); });
   });
   dropzone.addEventListener("drop", function (e) { if (e.dataTransfer) addFiles(e.dataTransfer.files); });
+
+  // Let the camera module (below) push captured/stitched photos into the same
+  // receipt list — one File per receipt, read by OCR exactly like a dropped file.
+  window._addReceiptFiles = function (fileArray) { addFiles(fileArray); };
 })();
 
 // Header: show the date range only when it's actually needed, and toggle the
@@ -797,6 +909,203 @@ wireMileageInputs();
 
 // Initial submit-bar state (no lines yet).
 window.updateSubmitBar();
+
+// ---- Photo capture: single shot + long-receipt multi-shot -------------------
+// Live in-page camera (getUserMedia) that works on a laptop webcam or a phone's
+// rear camera. Single mode adds a Retake/Use confirm; long mode collects several
+// shots and stitches them top-to-bottom into ONE tall image = one receipt line,
+// OCR'd once — no server change (the receipt list treats it like any dropped file).
+// If the live camera is blocked (e.g. a phone on plain http, or denied permission)
+// we fall back to the device's native camera app.
+(function () {
+  var byId = function (id) { return document.getElementById(id); };
+  var overlay = byId("cam");
+  if (!overlay) return;
+  var video = byId("cam-video"), shotImg = byId("cam-shot"), strip = byId("cam-strip"), msg = byId("cam-msg");
+  var shutter = byId("cam-shutter"), doneBtn = byId("cam-done"), cancelBtn = byId("cam-cancel");
+  var closeBtn = byId("cam-close"), modeLabel = byId("cam-mode"), countBadge = byId("cam-count");
+  var guide = byId("cam-guide"), guideImg = byId("cam-guide-img");
+  var camFile = byId("cam-file"), camFileMulti = byId("cam-file-multi");
+
+  var supportsLive = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  var stream = null, mode = "single", state = "live", shots = [], previewCanvas = null, fileSeq = 0;
+
+  function setMsg(t, err) { msg.textContent = t || ""; msg.classList.toggle("err", !!err); }
+  function liveMsg() {
+    setMsg(mode === "long"
+      ? "Snap the receipt top-to-bottom — line each shot up with the dashed guide, then tap Done."
+      : "Fill the frame with the receipt, then tap the shutter.");
+  }
+
+  function open(m) {
+    mode = m; shots = []; previewCanvas = null;
+    if (!supportsLive) { openNative(m); return; }
+    overlay.hidden = false;
+    document.body.style.overflow = "hidden";
+    modeLabel.textContent = m === "long" ? "Long receipt" : "Take a photo";
+    renderStrip();
+    goLive();
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false })
+      .then(function (s) { stream = s; video.srcObject = s; video.play().catch(function () {}); })
+      .catch(function () { close(); openNative(m); });   // denied / no camera → OS camera
+  }
+
+  function close() {
+    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    video.srcObject = null;
+    overlay.hidden = true;
+    document.body.style.overflow = "";
+    shots = []; previewCanvas = null;
+  }
+
+  // Live-viewfinder state: shutter armed, Done only in long mode (once a shot exists).
+  function goLive() {
+    state = "live";
+    shotImg.hidden = true; video.hidden = false; shutter.hidden = false;
+    cancelBtn.textContent = "Cancel";
+    countBadge.hidden = mode !== "long" || shots.length === 0;
+    if (mode === "long") { doneBtn.hidden = false; doneBtn.disabled = shots.length === 0; doneBtn.textContent = shots.length ? "Done · join " + shots.length : "Done"; }
+    else { doneBtn.hidden = true; }
+    guide.hidden = !(mode === "long" && shots.length);
+    liveMsg();
+  }
+
+  // Single-shot preview: confirm before it joins the claim.
+  function showPreview(c) {
+    state = "preview"; previewCanvas = c;
+    shotImg.src = c.toDataURL("image/jpeg", 0.85);
+    shotImg.hidden = false; video.hidden = true; shutter.hidden = true; guide.hidden = true;
+    cancelBtn.textContent = "Retake";
+    doneBtn.hidden = false; doneBtn.disabled = false; doneBtn.textContent = "Use photo";
+    setMsg("Clear and readable? Use it — or retake.");
+  }
+
+  // Grab the current video frame at full sensor resolution.
+  function grab() {
+    var w = video.videoWidth, h = video.videoHeight;
+    if (!w || !h) { setMsg("Camera still warming up — try again in a second.", true); return null; }
+    var c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    c.getContext("2d").drawImage(video, 0, 0, w, h);
+    return c;
+  }
+
+  shutter.addEventListener("click", function () {
+    var c = grab(); if (!c) return;
+    if (mode === "single") { showPreview(c); return; }
+    shots.push(c);
+    countBadge.hidden = false; countBadge.textContent = shots.length + (shots.length === 1 ? " shot" : " shots");
+    doneBtn.disabled = false; doneBtn.textContent = "Done · join " + shots.length;
+    renderStrip(); showGuide(c);
+    setMsg("Part " + shots.length + " captured — slide down, overlap the dashed guide, snap the next part.");
+  });
+
+  doneBtn.addEventListener("click", function () {
+    if (state === "preview" && previewCanvas) { finish([previewCanvas]); }
+    else if (mode === "long" && shots.length) { finish(shots); }
+  });
+  cancelBtn.addEventListener("click", function () {
+    if (state === "preview") { goLive(); } else { close(); }
+  });
+  closeBtn.addEventListener("click", close);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !overlay.hidden) close(); });
+
+  // Pin the bottom slice of the last shot to the top of the viewfinder so the next
+  // shot overlaps cleanly — the friendly cue for capturing a long receipt in parts.
+  function showGuide(c) {
+    var stripH = Math.max(1, Math.round(c.height * 0.22));
+    var g = document.createElement("canvas");
+    g.width = c.width; g.height = stripH;
+    g.getContext("2d").drawImage(c, 0, c.height - stripH, c.width, stripH, 0, 0, c.width, stripH);
+    guideImg.src = g.toDataURL("image/jpeg", 0.6);
+    guide.hidden = false;
+  }
+
+  function renderStrip() {
+    strip.innerHTML = "";
+    shots.forEach(function (c) {
+      var img = document.createElement("img");
+      img.className = "cs-thumb"; img.src = c.toDataURL("image/jpeg", 0.5);
+      strip.appendChild(img);
+    });
+  }
+
+  // Combine to ONE image (stitched vertically when there are several), wrap as a
+  // File, and hand it to the receipt list — one receipt = one line, read once.
+  function finish(canvases) {
+    var out = canvases.length === 1 ? canvases[0] : stitch(canvases);
+    out.toBlob(function (blob) {
+      if (!blob) { setMsg("Couldn't save the photo — please try again.", true); return; }
+      var name = (mode === "long" ? "long-receipt-" : "photo-") + (++fileSeq) + "-" + Date.now() + ".jpg";
+      var file = new File([blob], name, { type: "image/jpeg" });
+      if (window._addReceiptFiles) window._addReceiptFiles([file]);
+      close();
+    }, "image/jpeg", 0.92);
+  }
+
+  // Stack canvases top-to-bottom, normalised to the widest one's width.
+  function stitch(canvases) {
+    var w = canvases.reduce(function (m, c) { return Math.max(m, c.width); }, 0);
+    var h = canvases.reduce(function (s, c) { return s + Math.round(c.height * (w / c.width)); }, 0);
+    var out = document.createElement("canvas");
+    out.width = w; out.height = h;
+    var ctx = out.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+    var y = 0;
+    canvases.forEach(function (c) {
+      var hh = Math.round(c.height * (w / c.width));
+      ctx.drawImage(c, 0, 0, c.width, c.height, 0, y, w, hh);
+      y += hh;
+    });
+    return out;
+  }
+
+  // ---- Native OS-camera fallback (no getUserMedia / permission denied) --------
+  function openNative(m) {
+    if (m === "long") { camFileMulti.value = ""; camFileMulti.click(); }
+    else { camFile.value = ""; camFile.click(); }
+  }
+  camFile.addEventListener("change", function () {
+    if (camFile.files && camFile.files.length && window._addReceiptFiles)
+      window._addReceiptFiles(Array.prototype.slice.call(camFile.files));
+    camFile.value = "";
+  });
+  camFileMulti.addEventListener("change", function () {
+    var fs = Array.prototype.slice.call(camFileMulti.files || []);
+    camFileMulti.value = "";
+    if (!fs.length) return;
+    if (fs.length === 1) { if (window._addReceiptFiles) window._addReceiptFiles(fs); return; }
+    mode = "long";
+    loadImages(fs, function (canvases) {
+      if (!canvases.length) return;
+      var out = stitch(canvases);
+      out.toBlob(function (blob) {
+        if (!blob) return;
+        var file = new File([blob], "long-receipt-" + (++fileSeq) + "-" + Date.now() + ".jpg", { type: "image/jpeg" });
+        if (window._addReceiptFiles) window._addReceiptFiles([file]);
+      }, "image/jpeg", 0.92);
+    });
+  });
+  function loadImages(files, cb) {
+    var canvases = [], pending = files.length;
+    files.forEach(function (f, i) {
+      var img = new Image();
+      img.onload = function () {
+        var c = document.createElement("canvas");
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext("2d").drawImage(img, 0, 0);
+        canvases[i] = c;
+        URL.revokeObjectURL(img.src);
+        if (--pending === 0) cb(canvases.filter(Boolean));
+      };
+      img.onerror = function () { URL.revokeObjectURL(img.src); if (--pending === 0) cb(canvases.filter(Boolean)); };
+      img.src = URL.createObjectURL(f);
+    });
+  }
+
+  byId("btn-photo").addEventListener("click", function () { open("single"); });
+  byId("btn-long").addEventListener("click", function () { open("long"); });
+})();
 </script>
 {% if maps_key %}
 <script async defer

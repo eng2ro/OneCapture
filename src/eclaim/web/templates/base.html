@@ -81,18 +81,22 @@
         <i class="ti ti-inbox"></i><span class="lab">All claims</span>{% if nav_total %}<span class="oc-cnt">{{ nav_total }}</span>{% endif %}</a>
       <a class="oc-nav-i {{ 'active' if 'status=in_review' in request.url.query else '' }}" href="/claims?status=in_review">
         <i class="ti ti-clock"></i><span class="lab">Awaiting review</span>{% if nav_counts.get('in_review') %}<span class="oc-cnt warn">{{ nav_counts['in_review'] }}</span>{% endif %}</a>
+      <a class="oc-nav-i {{ 'active' if 'status=attention' in request.url.query else '' }}" href="/claims?status=attention">
+        <i class="ti ti-alert-triangle"></i><span class="lab">Needs attention</span>{% if nav_counts.get('attention') %}<span class="oc-cnt alert">{{ nav_counts['attention'] }}</span>{% endif %}</a>
       <a class="oc-nav-i {{ 'active' if 'status=approved' in request.url.query else '' }}" href="/claims?status=approved">
-        <i class="ti ti-user-check"></i><span class="lab">To approve</span>{% if nav_counts.get('approved') %}<span class="oc-cnt alert">{{ nav_counts['approved'] }}</span>{% endif %}</a>
+        <i class="ti ti-send"></i><span class="lab">To release</span>{% if nav_counts.get('approved') %}<span class="oc-cnt alert">{{ nav_counts['approved'] }}</span>{% endif %}</a>
       <a class="oc-nav-i {{ 'active' if 'status=rejected' in request.url.query else '' }}" href="/claims?status=rejected">
-        <i class="ti ti-flag"></i><span class="lab">Flagged</span>{% if nav_counts.get('rejected') %}<span class="oc-cnt alert">{{ nav_counts['rejected'] }}</span>{% endif %}</a>
+        <i class="ti ti-x"></i><span class="lab">Rejected</span>{% if nav_counts.get('rejected') %}<span class="oc-cnt alert">{{ nav_counts['rejected'] }}</span>{% endif %}</a>
       <a class="oc-nav-i {{ 'active' if 'status=released' in request.url.query else '' }}" href="/claims?status=released">
-        <i class="ti ti-check"></i><span class="lab">Released</span>{% if nav_counts.get('released') %}<span class="oc-cnt">{{ nav_counts['released'] }}</span>{% endif %}</a>
+        <i class="ti ti-check"></i><span class="lab">Released</span>{% if nav_counts.get('released_all') %}<span class="oc-cnt">{{ nav_counts['released_all'] }}</span>{% endif %}</a>
 
       <div class="oc-nav-h">MANAGE</div>
+      {% if is_firm_scoped %}
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/events' else '' }}" href="/admin/events"><i class="ti ti-map-pin"></i><span class="lab">Events &amp; budgets</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/claimants' else '' }}" href="/admin/claimants"><i class="ti ti-users"></i><span class="lab">Claimants</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/categories' else '' }}" href="/admin/categories"><i class="ti ti-list-check"></i><span class="lab">Categories</span></a>
-      <a class="oc-nav-i {{ 'active' if request.url.path == '/ledger' else '' }}" href="/ledger"><i class="ti ti-shield-check"></i><span class="lab">Audit trail</span></a>
+      {% endif %}
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/ledger' else '' }}" href="/ledger"><i class="ti ti-leaf"></i><span class="lab">CarbonNext handoff</span></a>
 
       <div class="oc-nav-h">ACCOUNT</div>
       <a class="oc-nav-i" href="/"><i class="ti ti-circles-relation"></i><span class="lab">Back to Hub</span></a>
@@ -137,6 +141,18 @@
   </main>
 
 </div>
+
+<script>
+/* Manage grids (categories / claimants / events): double-click a row to open it
+   in the edit form at the top of the page. Rows carry data-edit="…?edit=<id>";
+   the pencil icon still works as a single-click affordance. */
+document.addEventListener('dblclick', function (e) {
+  var row = e.target.closest('tr[data-edit]');
+  if (row && row.getAttribute('data-edit')) {
+    window.location.href = row.getAttribute('data-edit');
+  }
+});
+</script>
 
 </body>
 </html>

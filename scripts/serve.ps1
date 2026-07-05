@@ -46,17 +46,44 @@ $mig = Start-Process -FilePath $Py -ArgumentList '-m','alembic','upgrade','head'
 if ($mig.ExitCode -ne 0) { Note "alembic upgrade FAILED (exit $($mig.ExitCode)) - see $MigLog.err; starting uvicorn anyway." }
 else { Note "alembic upgrade head OK." }
 
-Note "Starting uvicorn on http://127.0.0.1:$Port"
-# No --reload: the reloader spawns a child process that outlives task control and is flaky under Task Scheduler.
-# Use Start-Process with file redirection. Piping uvicorn's stderr through the PowerShell
-# pipeline (or *>>) makes PS 5.1 wrap each normal log line as a NativeCommandError and, with
-# ErrorActionPreference=Stop, kill the server. Start-Process redirects at the OS level instead.
+# Supervise loop: keep uvicorn alive. Previously the launcher started uvicorn ONCE,
+# logged its exit and returned 0 - so Task Scheduler saw the task "succeed" and never
+# restarted until the next logon (the observed symptom: server dead all night, and
+# its exits logged an EMPTY code = terminated externally, not a Python crash). Now we
+# relaunch on every exit, with an exponential backoff so a genuine crash-loop (e.g. a
+# bad migration) can't spin the CPU. A run that stayed up a while resets the backoff.
+# No --reload: the reloader spawns a child that outlives task control and is flaky here.
+# Start-Process redirects output at the OS level - piping uvicorn's stderr through the PS
+# pipeline (or *>>) makes PS 5.1 wrap each log line as NativeCommandError and, with
+# ErrorActionPreference=Stop, kill the server.
 $OutLog = Join-Path $LogDir 'uvicorn.out.log'
 $ErrLog = Join-Path $LogDir 'uvicorn.err.log'   # uvicorn logs here by default
-$proc = Start-Process -FilePath $Py `
-    -ArgumentList '-m','uvicorn','eclaim.api.app:app','--host','127.0.0.1','--port',"$Port" `
-    -WorkingDirectory $Repo -NoNewWindow -PassThru `
-    -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog
-Note "uvicorn started, PID $($proc.Id)"
-$proc.WaitForExit()
-Note "uvicorn process exited with code $($proc.ExitCode)"
+$backoff = 2
+$HEALTHY_SECS = 60      # a run this long is "healthy" -> reset backoff
+$MAX_BACKOFF  = 60
+
+while ($true) {
+    Note "Starting uvicorn on http://127.0.0.1:$Port"
+    $startedAt = Get-Date
+    $proc = Start-Process -FilePath $Py `
+        -ArgumentList '-m','uvicorn','eclaim.api.app:app','--host','127.0.0.1','--port',"$Port" `
+        -WorkingDirectory $Repo -NoNewWindow -PassThru `
+        -RedirectStandardOutput $OutLog -RedirectStandardError $ErrLog
+    Note "uvicorn started, PID $($proc.Id)"
+    $proc.WaitForExit()
+    # $proc.ExitCode can be empty when the process was killed externally; guard the read.
+    $code = try { $proc.ExitCode } catch { $null }
+    $ranFor = [int]((Get-Date) - $startedAt).TotalSeconds
+    Note "uvicorn exited (code '$code') after ${ranFor}s"
+
+    # If another launcher (fast re-logon) has taken over the port, defer to it and stop.
+    if (Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue) {
+        Note "Port $Port already served by another instance - supervisor exiting."
+        exit 0
+    }
+
+    if ($ranFor -ge $HEALTHY_SECS) { $backoff = 2 }                               # healthy -> reset
+    else { $backoff = [Math]::Min($backoff * 2, $MAX_BACKOFF) }                   # crash-loop -> back off
+    Note "Restarting uvicorn in ${backoff}s"
+    Start-Sleep -Seconds $backoff
+}

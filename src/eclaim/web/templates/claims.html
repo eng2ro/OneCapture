@@ -2,7 +2,7 @@
 {% block title %}Claims · OneCapture e-Claim{% endblock %}
 {% block topbar_sub %}{{ claims | length }} claims in view{% endblock %}
 {% set badge = {"submitted":"info","in_review":"warning","approved":"success","partially_approved":"warning","sent_back":"info","released":"success","rejected":"danger","exported":"success","paid":"success"} %}
-{% set label = {"submitted":"Submitted","in_review":"In review","approved":"Approved","partially_approved":"Partially approved","sent_back":"Sent back","released":"Released","rejected":"Rejected","exported":"Exported","paid":"Paid"} %}
+{% set label = {"submitted":"Submitted","in_review":"In review","approved":"Approved","partially_approved":"Partially approved","sent_back":"Sent back","released":"Released","rejected":"Rejected","exported":"Exported","paid":"Paid","attention":"Needs attention"} %}
 {% block content %}
 <style>
 @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap");
@@ -44,7 +44,7 @@
   <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;gap:14px;flex-wrap:wrap;">
     <div>
       <h1 class="page-title">All claims</h1>
-      <p class="page-sub">{{ claims | length }} claims{% if current_status %} · {{ current_status.replace('_',' ') }}{% endif %}</p>
+      <p class="page-sub">{{ claims | length }} claims{% if current_status %} · {{ label.get(current_status, current_status.replace('_',' ')) }}{% endif %}</p>
     </div>
     <a class="btn" href="/api/claims/export?status={{ current_status or 'released' }}"
        title="Download a CSV for the accounting/ERP system"><i class="ti ti-download"></i>Export CSV</a>
@@ -53,7 +53,7 @@
   <div class="kpi-mini-grid">
     <div class="kpi-mini"><div class="l">Total claims</div><div class="v">{{ summary.total }}</div><div class="d">RM {{ '%.2f' | format(summary.total_amount) }}</div></div>
     <div class="kpi-mini"><div class="l">Awaiting review</div><div class="v">{{ nav_counts.get('in_review', 0) }}</div><div class="d">in the review queue</div></div>
-    <div class="kpi-mini"><div class="l">To approve</div><div class="v" style="color:var(--rust-2);">{{ nav_counts.get('approved', 0) }}</div><div class="d">ready to release</div></div>
+    <div class="kpi-mini"><div class="l">To release</div><div class="v" style="color:var(--rust-2);">{{ nav_counts.get('approved', 0) }}</div><div class="d">approved · ready to release</div></div>
   </div>
 
   <div class="toolbar">
@@ -68,6 +68,27 @@
       {% if q %}<a class="btn" href="/claims{% if current_status %}?status={{ current_status }}{% endif %}">Clear</a>{% endif %}
     </form>
   </div>
+
+  {% if active_jobs %}
+  <div class="ing-banner" style="margin:0 0 14px;border:1px solid #bcd6c8;background:#e9f1ec;border-radius:8px;padding:12px 15px;">
+    <div style="font-weight:700;font-size:12.5px;color:#184832;display:flex;align-items:center;gap:8px;">
+      <i class="ti ti-loader-2" style="animation:ingspin .9s linear infinite;"></i>
+      {{ active_jobs | length }} upload{{ 's' if active_jobs | length != 1 else '' }} still being read
+    </div>
+    <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+      {% for j in active_jobs %}
+      <a href="/ingest/{{ j.id }}" style="display:flex;justify-content:space-between;align-items:center;
+         text-decoration:none;color:#3f423c;font-size:12.5px;background:#fff;border:1px solid #d7e5dc;
+         border-radius:6px;padding:8px 11px;">
+        <span>Processing upload <span style="font-family:'JetBrains Mono',monospace;color:#6b6e66;">{{ j.id | string | truncate(8, True, '') }}</span></span>
+        <span style="font-family:'JetBrains Mono',monospace;color:#1f5d44;">
+          {% if j.total_units %}{{ j.done_units }} / {{ j.total_units }} read{% else %}queued…{% endif %} →</span>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  <style>@keyframes ingspin{to{transform:rotate(360deg)}}</style>
+  {% endif %}
 
   <div class="card">
     <table class="data">

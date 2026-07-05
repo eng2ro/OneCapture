@@ -24,6 +24,7 @@ from ..db.models import Client
 from ..db.session import get_sessionmaker
 from ..ocr.anthropic_provider import AnthropicVisionProvider
 from ..ocr.base import OcrProvider
+from ..ocr.segment import AnthropicPageSegmenter, PageSegmenter
 from ..services.claims import Repos
 from ..tenancy import set_firm_context, set_tenant_context
 
@@ -82,6 +83,13 @@ class NeedsLogin(Exception):
     rather than getting an error."""
 
 
+class WebForbidden(Exception):
+    """A logged-in web user reached a page their role may not use (the firm-scope
+    admin area). The app renders a friendly in-shell 'no access' page (vs the API's
+    bare 403 JSON), so a browser gets a readable message instead of a raw error.
+    The string value is the human-facing reason."""
+
+
 def get_session_principal(
     request: Request, db: Session = Depends(get_db)
 ) -> Principal:
@@ -118,15 +126,24 @@ def get_web_repos(
 def require_firm_scope(
     principal: Principal = Depends(get_session_principal),
 ) -> Principal:
-    """Admin web routes are firm-scope only (partner/manager). Approver/viewer get
-    403; a cookie-less request still redirects to /login via get_session_principal."""
+    """Admin web routes are firm-scope only (partner/manager). Approver/viewer are
+    sent to a friendly 'no access' page via WebForbidden; a cookie-less request
+    still redirects to /login via get_session_principal."""
     if not principal.is_firm_scoped:
-        raise HTTPException(status_code=403, detail="firm-scope role required")
+        raise WebForbidden(
+            "The Manage tools (events, claimants and categories) are open to "
+            "partners and managers. Ask one of them if you need a change here."
+        )
     return principal
 
 
 def get_ocr() -> OcrProvider:
     return AnthropicVisionProvider()
+
+
+def get_segmenter() -> PageSegmenter:
+    """LLM page-segmenter for multi-invoice PDFs (Phase 4). Tests override this."""
+    return AnthropicPageSegmenter()
 
 
 def get_directions():

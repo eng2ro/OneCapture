@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Reading receipts · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Reading receipts{% endblock %}
+{% block content %}
+<style>
+.ingx{max-width:640px;margin:40px auto;font-family:'Public Sans',system-ui,sans-serif;color:#171715}
+.ingx .card{border:1px solid #e1e1db;border-radius:10px;background:#fff;padding:34px 32px;text-align:center}
+.ingx h1{font-family:'Source Serif 4',Georgia,serif;font-size:23px;margin:0 0 8px}
+.ingx p{color:#6b6e66;font-size:14px;margin:0 0 22px}
+.ingx .bar{height:10px;border-radius:6px;background:#f1f1ed;overflow:hidden;border:1px solid #e1e1db}
+.ingx .bar > i{display:block;height:100%;width:0;background:#1f5d44;transition:width .4s ease}
+.ingx .count{margin-top:12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;color:#3f423c}
+.ingx .spin{width:15px;height:15px;border:2px solid #bcd6c8;border-top-color:#1f5d44;border-radius:50%;
+  display:inline-block;vertical-align:-2px;margin-right:8px;animation:ingspin .8s linear infinite}
+@keyframes ingspin{to{transform:rotate(360deg)}}
+.ingx .err{margin-top:18px;color:#9a4a1f;background:#f7ece2;border:1px solid #e8cdb8;border-radius:6px;
+  padding:12px 14px;font-size:13px;text-align:left;display:none}
+.ingx .actions{margin-top:20px;display:none}
+.ingx .btn{height:38px;padding:0 16px;border-radius:5px;border:1px solid #cfcfc8;background:#fff;
+  font-size:13px;font-weight:600;color:#3f423c;text-decoration:none;display:inline-flex;align-items:center}
+</style>
+
+<div class="ingx" data-job="{{ job.id }}">
+  <div class="card">
+    <h1><span class="spin" id="ing-spin"></span>Reading your receipts…</h1>
+    <p>We're reading each receipt with OCR. This can take a minute for a big batch —
+       you can leave this page open; we'll take you to the review screen when it's ready.</p>
+    <div class="bar"><i id="ing-bar"></i></div>
+    <div class="count" id="ing-count">Starting…</div>
+    <div class="err" id="ing-err"></div>
+    <div class="actions" id="ing-actions">
+      <a class="btn" href="/capture">← Back to capture</a>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var root = document.querySelector(".ingx");
+  var job = root.getAttribute("data-job");
+  var bar = document.getElementById("ing-bar");
+  var count = document.getElementById("ing-count");
+  var err = document.getElementById("ing-err");
+  var spin = document.getElementById("ing-spin");
+  var actions = document.getElementById("ing-actions");
+  var done_ = false;
+
+  function stop() { if (spin) spin.style.display = "none"; }
+
+  // Shared UI update for both the SSE stream and the polling fallback.
+  function render(d) {
+    if (done_) return true;
+    if (d.redirect) { done_ = true; window.location.href = d.redirect; return true; }
+    if (d.state === "failed") {
+      done_ = true; stop();
+      err.textContent = d.error || "Ingestion failed.";
+      err.style.display = "block";
+      count.textContent = "Failed";
+      actions.style.display = "block";
+      return true;
+    }
+    if (d.state === "unknown") { count.textContent = "Waiting…"; return false; }
+    var total = d.total || 0, doneN = d.done || 0;
+    var pct = total > 0 ? Math.round((doneN / total) * 100) : 5;
+    bar.style.width = Math.max(pct, 5) + "%";
+    count.textContent = total > 0
+      ? ("Read " + doneN + " of " + total + " receipts")
+      : "Preparing…";
+    return false;
+  }
+
+  function poll() {
+    if (done_) return;
+    fetch("/ingest/" + job + "/status", { headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (!render(d)) setTimeout(poll, 1500); })
+      .catch(function () { setTimeout(poll, 2500); });
+  }
+
+  // Prefer a live push stream; fall back to polling if EventSource is missing or errors.
+  var es = null;
+  try { es = new EventSource("/ingest/" + job + "/events"); } catch (e) { es = null; }
+  if (es) {
+    es.onmessage = function (e) {
+      var finished = false;
+      try { finished = render(JSON.parse(e.data)); } catch (_) {}
+      if (finished) es.close();
+    };
+    es.onerror = function () { es.close(); if (!done_) poll(); };
+  } else {
+    poll();
+  }
+})();
+</script>
+{% endblock %}

@@ -32,7 +32,8 @@ from .schemas import (
 router = APIRouter(prefix="/api", tags=["eclaim"])
 _service = ClaimService()
 
-_SUPPORTED_MEDIA = {"image/jpeg", "image/png", "image/webp"}
+# HEIC/HEIF (iPhone) accepted and transcoded to JPEG in add_line before OCR/storage.
+_SUPPORTED_MEDIA = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 
 
 def _claim_out(repos: Repos, claim) -> ClaimOut:
@@ -89,7 +90,7 @@ async def upload_claim(
             actor=actor,
             claimant_ref=claimant_ref,
         )
-    except OcrError as exc:
+    except (OcrError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"could not read receipt: {exc}")
     return _claim_out(repos, claim)
 

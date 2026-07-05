@@ -316,6 +316,11 @@ class ClaimLine(Base):
     # Nullable since 0014: a mileage line has a route, not a receipt image.
     image_path: Mapped[str | None] = mapped_column(String)
     image_sha256: Mapped[str | None] = mapped_column(String)
+    # Constituent page images when a line was merged (or split back) — an ordered
+    # list [{sha, path}, …] (migration 0017). NULL = an ordinary single-image line
+    # (its ``image_path`` is the one image). Lets a merged line remember its parts so
+    # it can be split again; ``image_path`` holds the stitched composite for display.
+    pages: Mapped[list | None] = mapped_column(JSONB)
     # Per-field OCR bounding boxes for the receipt viewer overlay (migration 0013):
     # { field_name: [x, y, w, h] } normalized 0..1, origin top-left.
     ocr_boxes: Mapped[dict | None] = mapped_column(JSONB)
@@ -720,4 +725,45 @@ class AuditEvent(Base):
     device: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class IngestionJob(Base):
+    """Durable queue row for asynchronous capture of a large upload.
+
+    ``/capture`` stages the raw files and inserts one of these; the in-process
+    worker claims it (``FOR UPDATE SKIP LOCKED``), builds the claim in the
+    background, and updates ``done_units``/``total_units`` for the progress page.
+    ``payload`` holds everything the worker needs: the principal snapshot
+    (firm/client/user/allowed clients), the header fields, the client-side items,
+    the mileage specs, and the staged-file manifest. See migration 0018 for the
+    RLS policy that lets the worker claim across tenants via ``app.worker``."""
+
+    __tablename__ = "ingestion_job"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','done','failed')",
+            name="ck_ingestion_job_status",
+        ),
+        Index("ix_ingestion_job_queue", "status", "created_at"),
+        Index("ix_ingestion_job_client", "client_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    claim_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("claim.id"))
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'queued'"))
+    total_units: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    done_units: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    error: Mapped[str | None] = mapped_column(String)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

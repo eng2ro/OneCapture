@@ -151,6 +151,12 @@ class ClaimRepository:
         self._s.flush()
         return line
 
+    def delete_line(self, line: ClaimLine) -> None:
+        """Remove a line (used when merging lines into one). Totals are re-rolled by
+        the caller."""
+        self._s.delete(line)
+        self._s.flush()
+
     def lines(self, claim_id: uuid.UUID) -> list[ClaimLine]:
         return list(
             self._s.execute(
@@ -204,17 +210,22 @@ class ClaimRepository:
         return list(self._s.execute(stmt).scalars())
 
     def list_for_clients(
-        self, client_ids, status: str | None = None
+        self, client_ids, status=None
     ) -> list[Claim]:
         """Claims across a set of clients (the principal's visible clients), newest
-        first, optionally filtered by status. Belt-and-suspenders to RLS: the
+        first, optionally filtered by status. ``status`` may be a single status
+        string or a list/tuple/set of statuses (a sidebar filter group, e.g. "needs
+        attention" = sent_back + partially_approved). Belt-and-suspenders to RLS: the
         explicit client filter keeps the cut correct even on an owner connection."""
         client_ids = list(client_ids)
         if not client_ids:
             return []
         stmt = select(Claim).where(Claim.client_id.in_(client_ids))
         if status is not None:
-            stmt = stmt.where(Claim.status == status)
+            if isinstance(status, (list, tuple, set)):
+                stmt = stmt.where(Claim.status.in_(list(status)))
+            else:
+                stmt = stmt.where(Claim.status == status)
         return list(self._s.execute(stmt.order_by(Claim.created_at.desc())).scalars())
 
     def status_counts(self, client_ids) -> dict[str, int]:

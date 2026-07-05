@@ -65,6 +65,12 @@ def test_edit_header_sets_grouping_fields(client, fake_ocr, db_session):
     edited = next(e for e in events if e["event_type"] == "edited")
     assert "posting_date" in edited["detail"]["header_fields"]
     assert "remarks" in edited["detail"]["header_fields"]
+    # ...and the old->new value of each change, so a dispute can answer "who changed
+    # this to what", not merely "which field was touched".
+    changes = edited["detail"]["changes"]
+    assert changes["remarks"]["to"] == "split across two cards"
+    assert changes["posting_date"]["to"] == "2026-06-30"
+    assert changes["department"] == {"from": None, "to": "SALES-02"}
 
 
 def test_edit_header_blank_clears_a_field(client, fake_ocr, db_session):

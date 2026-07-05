@@ -22,6 +22,9 @@ eclaim = [
     "jinja2>=3.1",
     "anthropic>=0.40",
     "fpdf2>=2.7",  # evidence-pack PDF rendering (pure Python, no system libs)
+    "pypdfium2>=4.30",  # ingest: render uploaded PDF pages to images (self-contained, no Poppler)
+    "pillow>=10.0",  # ingest: encode/stitch rendered PDF pages
+    "pillow-heif>=0.16",  # ingest: transcode iPhone HEIC/HEIF receipts to JPEG
 ]
 dev = ["pytest>=8.0", "httpx>=0.27"]
 

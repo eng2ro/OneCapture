@@ -19,6 +19,11 @@ import os
 os.environ["SHARE_GATE_USER"] = ""
 os.environ["SHARE_GATE_PASS"] = ""
 
+# The async ingestion worker is a background thread that would hit the real vision
+# model. Tests drive ingestion deterministically (build_claim / process_one with a
+# fake provider bundle), so the lifespan worker stays OFF here.
+os.environ["OC_DISABLE_INGEST_WORKER"] = "1"
+
 from decimal import Decimal
 
 import pytest
@@ -244,8 +249,26 @@ def fake_ocr() -> FakeOcr:
     return FakeOcr()
 
 
+class FakeSegmenter:
+    """Injectable page-segmenter; defaults to one page per group (so PDF tests stay
+    deterministic). A test sets ``.groups`` to force a specific grouping."""
+
+    def __init__(self) -> None:
+        self.groups = None
+
+    def segment(self, pages):
+        if self.groups is not None:
+            return self.groups
+        return [[i] for i in range(len(pages))]
+
+
 @pytest.fixture
-def client(db_session, fake_ocr, tmp_path):
+def fake_segmenter() -> FakeSegmenter:
+    return FakeSegmenter()
+
+
+@pytest.fixture
+def client(db_session, fake_ocr, fake_segmenter, tmp_path):
     from fastapi.testclient import TestClient
 
     from eclaim.api import deps
@@ -283,6 +306,7 @@ def client(db_session, fake_ocr, tmp_path):
     app.dependency_overrides[deps.get_principal] = _principal           # API bearer path
     app.dependency_overrides[deps.get_session_principal] = _principal   # web cookie path
     app.dependency_overrides[deps.get_ocr] = lambda: fake_ocr
+    app.dependency_overrides[deps.get_segmenter] = lambda: fake_segmenter
     app.dependency_overrides[deps.get_image_dir] = lambda: tmp_path
     with TestClient(app) as c:
         yield c
@@ -290,7 +314,7 @@ def client(db_session, fake_ocr, tmp_path):
 
 
 @pytest.fixture
-def browser(db_session, fake_ocr, tmp_path):
+def browser(db_session, fake_ocr, fake_segmenter, tmp_path):
     """A TestClient with the SAME db/ocr overrides as ``client`` but NO principal
     override — so the real cookie-session auth runs end to end (login mints the
     cookie; pages resolve the principal from it; no cookie redirects to /login)."""
@@ -310,6 +334,7 @@ def browser(db_session, fake_ocr, tmp_path):
     app = create_app()
     app.dependency_overrides[deps.get_db] = _override_db
     app.dependency_overrides[deps.get_ocr] = lambda: fake_ocr
+    app.dependency_overrides[deps.get_segmenter] = lambda: fake_segmenter
     app.dependency_overrides[deps.get_image_dir] = lambda: tmp_path
     with TestClient(app) as c:
         yield c

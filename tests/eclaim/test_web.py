@@ -140,6 +140,37 @@ def test_web_assign_category_clears_unmapped(client, fake_ocr, db_session):
     assert after["carbon_relevant"] is True
 
 
+def test_review_shows_gl_inherited_from_category(client, fake_ocr, db_session):
+    """A line coded purely by its category (no own gl_code override) must still
+    SHOW the GL on review — the category's gl_export_code is inherited into the
+    field, not left blank. This is the fix for 'GL not showing when a category
+    with a GL is already chosen'."""
+    diesel = db_session.execute(
+        select(Category).filter_by(
+            client_id=db_session.info["principal"]["client"], expense_type="fuel_diesel")
+    ).scalar_one()
+    diesel.gl_export_code = "6410"
+    db_session.commit()
+
+    cid = _upload(client, fake_ocr, _DIESEL)   # auto-maps to the diesel category
+    assert client.get(f"/api/claims/{cid}").json()["category_id"] == str(diesel.id)
+
+    page = client.get(f"/claims/{cid}/review")
+    assert page.status_code == 200
+    assert 'value="6410"' in page.text        # inherited GL is shown in the field
+    assert "From category" in page.text        # and labelled as inherited
+
+
+def test_receipt_image_endpoint_downloads_with_filename(client, fake_ocr):
+    """The download button must SAVE the receipt, not just open it — the endpoint
+    sends Content-Disposition: attachment with a friendly filename."""
+    cid = _upload(client, fake_ocr, _DIESEL)
+    r = client.get(f"/claims/{cid}/image")
+    assert r.status_code == 200
+    cd = r.headers.get("content-disposition", "")
+    assert "attachment" in cd and "receipt-" in cd
+
+
 # 8b ------------------------------------------------------------------------
 def test_approved_claim_is_locked_until_unapproved(client, fake_ocr):
     """An approved claim cannot be amended directly; you unapprove it (back to

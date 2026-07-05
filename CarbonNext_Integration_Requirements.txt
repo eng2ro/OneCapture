@@ -1,0 +1,137 @@
+================================================================================
+CARBONNEXT INTEGRATION — INFORMATION REQUEST
+What OneCapture (ERP Sync) needs from the CarbonNext side to wire the real post
+================================================================================
+
+Prepared for: the CarbonNext programmer
+Purpose:      collect everything needed to replace the stubbed "post to
+              CarbonNext" step (FR-S6) with a real, working integration.
+Context:      OneCapture already imports, classifies, dedups, stages and
+              RELEASES emission batches into its own ledger with a canonical
+              batch hash + audit trail. The only unbuilt piece is the actual
+              hand-off of a released batch to CarbonNext. The client, config
+              slots (api url / service token) and the destination-id column
+              (client.carbonnext_company_id) already exist on the OneCapture
+              side.
+
+
+--------------------------------------------------------------------------------
+0. GATING DECISION (answer this first — it changes the rest of the list)
+--------------------------------------------------------------------------------
+How should OneCapture deliver a released batch to CarbonNext?
+
+    [ ] HTTP ingestion API   (recommended — keeps the systems decoupled and
+                              matches the "company_dataentry" service identity
+                              + shared service token the code already assumes)
+    [ ] Direct database write (possible since the two systems share the same
+                              DB stack/version, but tightly couples them)
+
+Everything below assumes the HTTP API path. If a direct DB write is chosen,
+replace "endpoint / payload" items with "target table(s) + column mapping".
+
+
+--------------------------------------------------------------------------------
+1. AUTHENTICATION
+--------------------------------------------------------------------------------
+[ ] Service token for the "company_dataentry" identity
+    (this becomes CARBONNEXT_SERVICE_TOKEN on our side).
+[ ] Is it ONE token for all companies, or per-company? (Code assumes one.)
+[ ] How the token is passed (e.g. Authorization: Bearer <token>).
+[ ] How tokens are issued and rotated, and any expiry.
+
+
+--------------------------------------------------------------------------------
+2. DESTINATION COMPANY MAPPING
+--------------------------------------------------------------------------------
+[ ] The CarbonNext company_id for EACH OneCapture client
+    (e.g. what does "abc_manufacturing" map to on your side?).
+    -> fills client.carbonnext_company_id; without it a client cannot be posted.
+[ ] The format / type of that id (our code treats it as a string).
+
+
+--------------------------------------------------------------------------------
+3. INGESTION PAYLOAD SCHEMA  (most important)
+--------------------------------------------------------------------------------
+[ ] The exact endpoint: URL + HTTP method.
+[ ] The full field list + types expected PER emission line.
+[ ] KEY QUESTION: does CarbonNext want the pre-computed tCO2e, or does it
+    recompute from factor + quantity?
+    (ERP Sync already computes tonnage; your e-Claim channel forwards raw data
+     — confirm which the ERP Sync feed should send.)
+[ ] Units & conventions:
+        - tonnes vs kg
+        - decimal precision / rounding rules
+        - scope encoding: 1/2/3  vs  "scope_1"/"scope_2"/"scope_3_*"
+        - date format
+[ ] Must our factor keys / factor versions match CarbonNext's own registry?
+    (Ours are string-versioned, e.g. "MY-2026.1"; the shared ledger uses ints.)
+[ ] Any required batch-level header fields (company id, batch id, hash, count,
+    period, source system, etc.).
+
+
+--------------------------------------------------------------------------------
+4. IDEMPOTENCY + ACKNOWLEDGEMENT
+--------------------------------------------------------------------------------
+[ ] Does CarbonNext dedup on an idempotency key? If so:
+        - which field / header carries it
+        - the grain: per BATCH or per LINE
+[ ] What happens on RE-POST of the same batch (same ack returned? HTTP 409?).
+    (FR-S6 requires the post to be idempotent — this must be defined on your side.)
+[ ] Success response shape:
+        - batch id
+        - accepted count
+        - receipt / reference number
+        - any per-entry carbon reference
+[ ] Error responses (codes + bodies) for:
+        - validation failure
+        - unknown / unmapped company
+        - auth failure
+
+
+--------------------------------------------------------------------------------
+5. CORRECTIONS / REVERSALS
+--------------------------------------------------------------------------------
+[ ] How to back out or correct a batch that was already posted
+    (your e-Claim path has a forward/reversal concept).
+[ ] Does the ERP Sync feed need a reversal path? If so, what is the API for it?
+
+
+--------------------------------------------------------------------------------
+6. ENVIRONMENTS & CONNECTIVITY
+--------------------------------------------------------------------------------
+[ ] Base URLs for dev / staging / prod.
+[ ] Network reachability: VPN / IP allowlist / TLS / certificates.
+[ ] Rate limits.
+[ ] Maximum batch size (and whether large batches must be paginated).
+[ ] API version (or DB schema version) and how schema changes are communicated.
+
+
+--------------------------------------------------------------------------------
+7. RECONCILIATION  (nice to have — supports FR-S7 tie-out)
+--------------------------------------------------------------------------------
+[ ] An endpoint or query to read back what CarbonNext has received for a
+    company / period, so OneCapture can reconcile against its own ledger.
+
+
+--------------------------------------------------------------------------------
+SEPARATE DEPENDENCY (not from the CarbonNext programmer — flagged so it is not
+forgotten)
+--------------------------------------------------------------------------------
+FR-S6 also requires an RFC 3161 TSA (Time Stamp Authority) to anchor the batch
+hash BEFORE posting. This is currently stubbed too and must be sourced
+separately from a TSA provider — it is not part of the CarbonNext hand-off, but
+it is part of the same release gate.
+
+
+--------------------------------------------------------------------------------
+SUMMARY — the minimum needed to start wiring
+--------------------------------------------------------------------------------
+1. Integration method (API vs direct DB)          [Section 0]
+2. Service token + how to send it                  [Section 1]
+3. carbonnext_company_id for each client           [Section 2]
+4. Endpoint + payload schema (esp. tCO2e vs raw)   [Section 3]
+5. Idempotency key + ack/response format           [Section 4]
+
+Items 5-7 (reversals, environments, reconciliation) can follow, but the five
+above are enough to build and test the first real post.
+================================================================================
