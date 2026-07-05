@@ -32,16 +32,36 @@ logger = logging.getLogger(__name__)
 POLL_SECONDS = 1.0
 # A running job whose worker died: reclaim it once the heartbeat is this stale.
 STALE_INTERVAL = "5 minutes"
+# A job that HARD-crashes the worker (segfault/OOM before the in-process failure
+# handler can mark it failed) is left 'running' and re-claimed each time its
+# heartbeat goes stale. Cap the retries so one poison upload can't loop forever,
+# re-billing OCR each time. ``attempts`` is bumped on every claim (see _claim_next).
+MAX_ATTEMPTS = 5
 
 _CLAIM_SQL = text(f"""
     SELECT id, firm_id, client_id, payload
     FROM ingestion_job
     WHERE status = 'queued'
        OR (status = 'running'
-           AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '{STALE_INTERVAL}'))
+           AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '{STALE_INTERVAL}')
+           AND attempts < {MAX_ATTEMPTS})
     ORDER BY created_at
     LIMIT 1
     FOR UPDATE SKIP LOCKED
+""")
+
+# Dead-letter jobs that have burned their attempts: stuck 'running', heartbeat
+# stale, attempts exhausted — the ones _CLAIM_SQL now refuses to re-claim. Marked
+# failed (terminal) so the queue drains and the staging janitor can reclaim disk.
+_REAP_POISON_SQL = text(f"""
+    UPDATE ingestion_job
+    SET status = 'failed',
+        error = 'dead-lettered: crashed the worker {MAX_ATTEMPTS} times (poison job)',
+        heartbeat_at = now()
+    WHERE status = 'running'
+      AND (heartbeat_at IS NULL OR heartbeat_at < now() - interval '{STALE_INTERVAL}')
+      AND attempts >= {MAX_ATTEMPTS}
+    RETURNING id
 """)
 
 
@@ -88,6 +108,18 @@ def _finish(session: Session, job_id, status: str, *, claim_id=None, error: str 
     session.commit()
 
 
+def reap_poison_jobs(session: Session) -> int:
+    """Dead-letter jobs that have exhausted MAX_ATTEMPTS build attempts. A job that
+    keeps hard-crashing the worker never reaches the in-process failure handler, so
+    it must be reaped here or it loops forever. Returns the number reaped."""
+    session.execute(text("SELECT set_config('app.worker', 'on', true)"))
+    reaped = session.execute(_REAP_POISON_SQL).fetchall()
+    session.commit()
+    if reaped:
+        logger.warning("dead-lettered %d poison ingestion job(s)", len(reaped))
+    return len(reaped)
+
+
 def _existing_claim_id(session: Session, job_id) -> uuid.UUID | None:
     """The claim already built for this job, if any. A crash between the claim
     commit and the job being marked done leaves the job re-claimable; on re-run we
@@ -102,6 +134,7 @@ def _existing_claim_id(session: Session, job_id) -> uuid.UUID | None:
 def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID | None:
     """Claim and run at most one job on ``session``. Returns the job id it handled,
     or None if the queue was empty. Never raises — a failing job is marked failed."""
+    reap_poison_jobs(session)   # dead-letter jobs that have burned their attempts
     claimed = _claim_next(session)
     if claimed is None:
         return None

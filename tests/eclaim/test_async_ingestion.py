@@ -125,6 +125,52 @@ def test_worker_returns_none_when_queue_empty(db_session, fake_ocr, fake_segment
     assert worker.process_one(db_session, _providers(fake_ocr, fake_segmenter, tmp_path)) is None
 
 
+def _force_running(db_session, job_id, *, attempts: int):
+    """Put a job into the stale-'running' state a dead worker leaves behind."""
+    db_session.execute(
+        text("UPDATE ingestion_job SET status='running', attempts=:a, "
+             "heartbeat_at = now() - interval '10 minutes' WHERE id=:i"),
+        {"a": attempts, "i": str(job_id)},
+    )
+    db_session.commit()
+
+
+def test_poison_job_dead_lettered_after_max_attempts(
+    client, db_session, fake_ocr, fake_segmenter, tmp_path
+):
+    """B4: a job that has crashed the worker MAX_ATTEMPTS times is not re-claimed
+    again — it is dead-lettered to failed, so it can't loop forever re-billing OCR."""
+    job_id = _enqueue_via_http(client, 4)
+    provs = _providers(fake_ocr, fake_segmenter, tmp_path)
+    _force_running(db_session, job_id, attempts=worker.MAX_ATTEMPTS)
+
+    worker.process_one(db_session, provs)
+    db_session.expire_all()
+
+    job = db_session.get(IngestionJob, job_id)
+    assert job.status == "failed"
+    assert "crashed the worker" in (job.error or "")
+    assert job.claim_id is None
+    assert db_session.execute(
+        select(Claim).where(Claim.ingestion_job_id == job_id)
+    ).scalars().all() == []          # no claim was built on the exhausted job
+
+
+def test_stale_running_job_below_cap_is_still_reclaimed(
+    client, db_session, fake_ocr, fake_segmenter, tmp_path
+):
+    """A real worker crash / deploy below the cap must NOT lose the job — a stale
+    'running' job under MAX_ATTEMPTS is still retried."""
+    _enable_split(db_session)
+    job_id = _enqueue_via_http(client, 4)
+    provs = _providers(fake_ocr, fake_segmenter, tmp_path)
+    _force_running(db_session, job_id, attempts=worker.MAX_ATTEMPTS - 1)
+
+    assert worker.process_one(db_session, provs) == job_id   # reclaimed + built
+    db_session.expire_all()
+    assert db_session.get(IngestionJob, job_id).status == "done"
+
+
 def test_built_claim_is_keyed_to_its_job(client, db_session, fake_ocr, fake_segmenter, tmp_path):
     """B3: an async-built claim carries its ingestion_job_id (the idempotency key)."""
     job_id = _enqueue_via_http(client, 4)
