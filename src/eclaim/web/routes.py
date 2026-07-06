@@ -40,7 +40,7 @@ from ..auth.principal import Principal, list_visible_clients
 from ..auth.provider import AuthError, DevAuthProvider
 from ..auth.ratelimit import RateLimited, client_ip
 from ..config import get_settings
-from ..db.models import Category, Claimant, Client, Event, IngestionJob
+from ..db.models import ApprovalMatrixRule, Category, Claimant, Client, Event, IngestionJob
 from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
 from ..ocr.segment import PageSegmenter
 from ..repositories import ClaimRepository, LedgerRepository
@@ -1636,3 +1636,159 @@ def admin_save_event(
     except LookupError:
         return _render_events(request, repos, principal, error="Event not found.")
     return RedirectResponse("/admin/events", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Admin: approval authority matrix (Appendix B, Phase-1 — single-tier)
+# --------------------------------------------------------------------------- #
+# Starter row-sets the wizard/template picker writes. Bands are non-overlapping to
+# the cent (numeric(14,2)): each next band's floor is the previous ceiling + 0.01,
+# so exactly one rule ever governs an amount. Amounts are editable defaults (MYR).
+# Enterprise adds per-department + multi-step in Phase-2 (same engine, more rows);
+# at launch it seeds the Growing set.
+APPROVAL_TEMPLATES = {
+    "starter": {
+        "label": "Starter", "profile": "Micro team, under 20 staff",
+        "summary": "Any amount → a manager (one approval).",
+        "rules": [(None, None, "manager", 1)],
+    },
+    "small": {
+        "label": "Small business", "profile": "20–100 staff",
+        "summary": "≤ 2,000 → manager; above → partner.",
+        "rules": [(None, "2000", "manager", 1), ("2000.01", None, "partner", 1)],
+    },
+    "growing": {
+        "label": "Growing", "profile": "100–500 staff",
+        "summary": "≤ 1,000 → manager; 1,000–10,000 → partner; above → two partners.",
+        "rules": [
+            (None, "1000", "manager", 1),
+            ("1000.01", "10000", "partner", 1),
+            ("10000.01", None, "partner", 2),
+        ],
+    },
+    "enterprise": {
+        "label": "Enterprise", "profile": "500+ staff",
+        "summary": "Growing tiers now; per-department & multi-step approval in Phase-2.",
+        "rules": [
+            (None, "1000", "manager", 1),
+            ("1000.01", "10000", "partner", 1),
+            ("10000.01", None, "partner", 2),
+        ],
+    },
+}
+APPROVER_ROLES = ["manager", "partner", "approver"]
+
+
+def _render_approvals(request, repos, principal, *, client_id=None, error=None) -> HTMLResponse:
+    clients = list_visible_clients(repos.session, principal)
+    selected = client_id if (client_id and any(c.id == client_id for c in clients)) else (
+        clients[0].id if clients else None
+    )
+    rules = repos.approvals.list_for_clients([selected]) if selected else []
+    return templates.TemplateResponse(
+        request,
+        "admin_approvals.html",
+        {
+            "clients": clients,
+            "client_names": {c.id: c.name for c in clients},
+            "selected_client_id": selected,
+            "rules": rules,
+            "templates": APPROVAL_TEMPLATES,
+            "roles": APPROVER_ROLES,
+            "error": error,
+        },
+    )
+
+
+def _visible_client(repos, principal, client_id: uuid.UUID) -> bool:
+    return any(c.id == client_id for c in list_visible_clients(repos.session, principal))
+
+
+@router.get("/admin/approvals", response_class=HTMLResponse)
+def admin_approvals(
+    request: Request,
+    client_id: str = "",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+) -> HTMLResponse:
+    return _render_approvals(request, repos, principal, client_id=_opt_uuid(client_id))
+
+
+@router.post("/admin/approvals/template")
+def admin_apply_template(
+    request: Request,
+    client_id: str = Form(...),
+    template: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    """Replace a client's matrix with a named starter template's editable rows."""
+    try:
+        cid = uuid.UUID(client_id)
+    except ValueError:
+        return _render_approvals(request, repos, principal, error="Invalid client.")
+    if template not in APPROVAL_TEMPLATES or not _visible_client(repos, principal, cid):
+        return _render_approvals(request, repos, principal, client_id=cid,
+                                 error="Unknown template or client.")
+    repos.approvals.delete_for_client(cid)
+    for mn, mx, role, req in APPROVAL_TEMPLATES[template]["rules"]:
+        repos.approvals.add(ApprovalMatrixRule(
+            firm_id=principal.firm_id, client_id=cid,
+            min_amount=Decimal(mn) if mn else None,
+            max_amount=Decimal(mx) if mx else None,
+            step_order=1, approver_role=role, approvals_required=req, active=True,
+        ))
+    return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
+
+
+@router.post("/admin/approvals/add")
+def admin_add_rule(
+    request: Request,
+    client_id: str = Form(...),
+    min_amount: str = Form(""),
+    max_amount: str = Form(""),
+    approver_role: str = Form(""),
+    approvals_required: str = Form("1"),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    """Add a single-tier (step 1) rule to a client's matrix."""
+    try:
+        cid = uuid.UUID(client_id)
+        mn = Decimal(min_amount) if min_amount.strip() else None
+        mx = Decimal(max_amount) if max_amount.strip() else None
+        req = int(approvals_required) if approvals_required.strip() else 1
+    except (ValueError, InvalidOperation):
+        return _render_approvals(request, repos, principal, error="Invalid amount or count.")
+    if not _visible_client(repos, principal, cid):
+        return _render_approvals(request, repos, principal, error="You cannot manage that client.")
+    if mn is not None and mx is not None and mx < mn:
+        return _render_approvals(request, repos, principal, client_id=cid,
+                                 error="The band's maximum is below its minimum.")
+    role = approver_role if approver_role in APPROVER_ROLES else None
+    repos.approvals.add(ApprovalMatrixRule(
+        firm_id=principal.firm_id, client_id=cid, min_amount=mn, max_amount=mx,
+        step_order=1, approver_role=role, approvals_required=max(req, 1), active=True,
+    ))
+    return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
+
+
+@router.post("/admin/approvals/delete")
+def admin_delete_rule(
+    request: Request,
+    rule_id: str = Form(...),
+    client_id: str = Form(""),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    try:
+        rid = uuid.UUID(rule_id)
+    except ValueError:
+        return _render_approvals(request, repos, principal, error="Invalid rule.")
+    rule = repos.approvals.get(rid)
+    if rule is not None and _visible_client(repos, principal, rule.client_id):
+        cid = rule.client_id
+        repos.session.delete(rule)
+        repos.session.flush()
+        return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
+    return _render_approvals(request, repos, principal, error="Rule not found.")

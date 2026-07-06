@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Approval matrix · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Approval matrix{% endblock %}
+{% block content %}
+{% include "_editorial.html" %}
+<div class="capx" id="screen-approvals">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">Approval matrix</h1>
+      <p class="page-sub">Who signs off a claim, by amount — a setting, not bespoke code. One approval per band (single tier); multi-step chains arrive in a later release.</p>
+    </div>
+    {% if clients|length > 1 %}
+    <form method="get" action="/admin/approvals">
+      <label class="label-tiny">Client</label>
+      <select class="field" name="client_id" onchange="this.form.submit()">
+        {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if c.id == selected_client_id else '' }}>{{ c.name }}</option>{% endfor %}
+      </select>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="banner">
+    <i class="ti ti-info-circle"></i>
+    <span><strong>How it works.</strong> A claim's total picks the matching band; its approver must hold that band's role (a more senior role always qualifies). A personal authority limit, if set on a user, still applies on top. Leave the matrix empty to allow any authorised approver.</span>
+  </div>
+
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
+  {# ---- Setup wizard (recommends a template) --------------------------------- #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">Setup wizard</div>
+    <div class="field-row">
+      <div><label class="label-tiny">How many people submit claims?</label>
+        <select class="field" id="wiz-scale">
+          <option value="starter">Under 20</option>
+          <option value="small">20–100</option>
+          <option value="growing">100–500</option>
+          <option value="enterprise">500+</option>
+        </select>
+      </div>
+      <div><label class="label-tiny">Must large amounts go higher?</label>
+        <select class="field" id="wiz-tiered">
+          <option value="no">No — one sign-off for everything</option>
+          <option value="yes" selected>Yes — bigger claims need more authority</option>
+        </select>
+      </div>
+    </div>
+    <p class="page-sub" style="margin-top:10px;">Recommended: <strong id="wiz-rec">—</strong>. Apply it below, then adjust any row.</p>
+  </div>
+
+  {# ---- Template picker ------------------------------------------------------ #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">Start from a template</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;">
+      {% for key, tpl in templates.items() %}
+      <div class="tpl-card" id="tpl-{{ key }}" style="border:1px solid var(--rule);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:8px;">
+        <div style="font-weight:700;">{{ tpl.label }}</div>
+        <div class="page-sub" style="margin:0;">{{ tpl.profile }}</div>
+        <div style="font-size:12.5px;color:var(--ink-2);flex:1;">{{ tpl.summary }}</div>
+        <form method="post" action="/admin/approvals/template" onsubmit="return confirm('Replace this client’s current rules with the {{ tpl.label }} template?');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="hidden" name="client_id" value="{{ selected_client_id }}">
+          <input type="hidden" name="template" value="{{ key }}">
+          <button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;" {{ 'disabled' if not selected_client_id else '' }}>Apply {{ tpl.label }}</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ---- Current rules -------------------------------------------------------- #}
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">Current rules{% if selected_client_id %} — {{ client_names.get(selected_client_id, '') }}{% endif %}</div>
+    {% if rules %}
+    <table class="table" style="width:100%;">
+      <thead><tr>
+        <th>Amount band</th><th>Approver</th><th>Approvals</th><th>Status</th><th></th>
+      </tr></thead>
+      <tbody>
+        {% for r in rules %}
+        <tr>
+          <td>
+            {% if r.min_amount is none and r.max_amount is none %}Any amount
+            {% elif r.min_amount is none %}≤ RM {{ '%.2f' | format(r.max_amount) }}
+            {% elif r.max_amount is none %}≥ RM {{ '%.2f' | format(r.min_amount) }}
+            {% else %}RM {{ '%.2f' | format(r.min_amount) }} – {{ '%.2f' | format(r.max_amount) }}{% endif %}
+          </td>
+          <td>{{ r.approver_role | capitalize if r.approver_role else 'Any approver' }}{% if r.step_order != 1 %} · step {{ r.step_order }}{% endif %}</td>
+          <td>{{ r.approvals_required }}{% if r.approvals_required > 1 %} <span class="page-sub" title="Multi-approval counting arrives in a later release">(Phase-2)</span>{% endif %}</td>
+          <td>{{ 'Active' if r.active else 'Off' }}</td>
+          <td style="text-align:right;">
+            <form method="post" action="/admin/approvals/delete" onsubmit="return confirm('Delete this rule?');" style="display:inline;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="rule_id" value="{{ r.id }}">
+              <input type="hidden" name="client_id" value="{{ selected_client_id }}">
+              <button class="btn" type="submit" style="font-size:11px;padding:4px 9px;"><i class="ti ti-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="page-sub" style="margin:0;">No rules yet — any authorised approver may sign off. Apply a template or add a band below.</p>
+    {% endif %}
+  </div>
+
+  {# ---- Add a single band ---------------------------------------------------- #}
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px;">Add a band</div>
+    <form method="post" action="/admin/approvals/add">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="client_id" value="{{ selected_client_id }}">
+      <div class="field-row">
+        <div><label class="label-tiny">From (RM, blank = 0)</label><input class="field" name="min_amount" placeholder="0.00"></div>
+        <div><label class="label-tiny">To (RM, blank = no limit)</label><input class="field" name="max_amount" placeholder="no limit"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Required approver</label>
+          <select class="field" name="approver_role">
+            <option value="">Any approver</option>
+            {% for role in roles %}<option value="{{ role }}">{{ role | capitalize }}</option>{% endfor %}
+          </select>
+        </div>
+        <div><label class="label-tiny">Approvals required</label><input class="field" name="approvals_required" value="1"></div>
+      </div>
+      <div style="margin-top:12px;"><button class="btn btn-accent" type="submit" {{ 'disabled' if not selected_client_id else '' }}><i class="ti ti-plus"></i> Add band</button></div>
+    </form>
+  </div>
+</div>
+
+<script>
+/* Setup wizard: map the two answers to a recommended template and highlight it. */
+(function () {
+  var scale = document.getElementById("wiz-scale");
+  var tiered = document.getElementById("wiz-tiered");
+  var rec = document.getElementById("wiz-rec");
+  var LABELS = {starter: "Starter", small: "Small business", growing: "Growing", enterprise: "Enterprise"};
+  function recommend() {
+    var key = scale.value;
+    if (tiered.value === "no") key = "starter";      // one sign-off overrides scale
+    rec.textContent = LABELS[key] || "—";
+    Object.keys(LABELS).forEach(function (k) {
+      var card = document.getElementById("tpl-" + k);
+      if (card) card.style.outline = (k === key) ? "2px solid var(--pine)" : "none";
+    });
+  }
+  if (scale && tiered) { scale.onchange = tiered.onchange = recommend; recommend(); }
+})();
+</script>
+{% endblock %}
