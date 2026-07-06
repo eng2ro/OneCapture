@@ -51,30 +51,39 @@ class BodySizeLimitMiddleware:
 
         # (2) Enforce the real byte count for chunked / absent / understated lengths.
         received = 0
+        exceeded = False
+        forwarded_start = False
 
         async def limited_receive() -> Message:
-            nonlocal received
+            nonlocal received, exceeded
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
                 if received > self.max_bytes:
+                    exceeded = True
                     raise _BodyTooLarge()
             return message
 
-        started = False
-
         async def guarded_send(message: Message) -> None:
-            nonlocal started
+            # Once the cap is exceeded, suppress whatever the app emits. A framework
+            # body parser (FastAPI/Starlette multipart) catches our _BodyTooLarge and
+            # turns it into its OWN 400 "error parsing the body" response; if we let
+            # that through, the client sees a misleading 400 instead of the intended
+            # 413. We swallow it and synthesize the 413 after the app unwinds.
+            nonlocal forwarded_start
+            if exceeded:
+                return
             if message["type"] == "http.response.start":
-                started = True
+                forwarded_start = True
             await send(message)
 
         try:
             await self.app(scope, limited_receive, guarded_send)
         except _BodyTooLarge:
-            # Only safe to synthesize a 413 if the handler hasn't begun responding.
-            if started:
-                raise
+            pass   # the app let our signal propagate; fall through to the 413 below
+        # Send the 413 iff the cap tripped and nothing real was forwarded to the
+        # client yet (the guarded_send above ensures a suppressed 400 never counts).
+        if exceeded and not forwarded_start:
             await self._reject(scope, receive, send)
 
     async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:

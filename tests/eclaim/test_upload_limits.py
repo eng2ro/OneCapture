@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.testclient import TestClient
 
 from eclaim.api.limits import BodySizeLimitMiddleware
@@ -23,6 +23,12 @@ def _tiny_app(max_bytes: int) -> FastAPI:
     async def echo(request: Request) -> dict:
         body = await request.body()
         return {"len": len(body)}
+
+    # A real multipart upload route — its form parser is what would otherwise turn an
+    # over-cap streamed body into a misleading 400 (punch-list P6).
+    @app.post("/upload")
+    async def upload(file: UploadFile = File(...)) -> dict:
+        return {"len": len(await file.read())}
 
     return app
 
@@ -68,6 +74,33 @@ def test_streamed_body_without_length_is_capped():
 
 async def _should_not_run(scope, receive, send):  # pragma: no cover - placeholder
     raise AssertionError("app should not be reached")
+
+
+def test_streamed_over_cap_multipart_is_413_not_400():
+    """P6: an over-cap body streamed with NO Content-Length through the REAL FastAPI
+    stack (multipart form parser) must surface as 413 — not the 400 'error parsing the
+    body' the parser raises when our _BodyTooLarge interrupts it. Sending the body as a
+    generator makes httpx use chunked transfer (no Content-Length), so the fast path is
+    skipped and the streamed byte-counter is what trips."""
+    boundary = "----octestboundary"
+    head = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="big.bin"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+    payload = head + b"A" * 500 + tail          # ~600 B, well over the 100 B cap
+
+    def _chunks():
+        yield payload                            # a generator → httpx streams chunked
+
+    with TestClient(_tiny_app(100)) as c:
+        r = c.post(
+            "/upload", content=_chunks(),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+    assert r.status_code == 413, f"expected 413, got {r.status_code}: {r.text[:120]}"
+    assert "too large" in r.text.lower()
 
 
 # --------------------------------------------------------------------------- #
