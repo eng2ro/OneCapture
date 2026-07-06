@@ -50,7 +50,7 @@ def _enqueue_via_http(client, pages: int):
         "/capture",
         files=[("files", ("invoices.pdf", _pdf([f"Invoice {i}" for i in range(pages)]),
                           "application/pdf"))],
-        data={"items": "[null]"},
+        data={"items": "[null]", "attested": "yes"},
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text[:300]
@@ -64,7 +64,7 @@ def test_small_upload_stays_inline(client):
     resp = client.post(
         "/capture",
         files=[("files", ("inv.pdf", _pdf(["A", "B"]), "application/pdf"))],
-        data={"items": "[null]"},
+        data={"items": "[null]", "attested": "yes"},
         follow_redirects=False,
     )
     assert resp.status_code == 303

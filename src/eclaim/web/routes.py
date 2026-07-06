@@ -282,6 +282,7 @@ async def web_capture(
     new_event_title: str = Form(""),
     new_event_start: str = Form(""),
     new_event_end: str = Form(""),
+    attested: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
     image_dir: Path = Depends(deps.get_image_dir),
@@ -309,18 +310,21 @@ async def web_capture(
     _client = repos.session.get(Client, client_id)
     split_docs = bool(_client and (_client.modules or {}).get("allow_document_split"))
 
+    is_attested = attested.strip().lower() in ("1", "true", "yes", "on")
     header = {
         "title": title, "purpose": purpose, "remarks": remarks,
         "posting_date": posting_date, "claim_type": claim_type,
         "start_date": start_date, "end_date": end_date, "event_id": event_id,
         "new_event_title": new_event_title, "new_event_start": new_event_start,
         "new_event_end": new_event_end, "actor": _actor(principal),
+        "attested": is_attested,
     }
     # Echoed back into the form if inline validation fails (receipts get re-dropped).
     form = {
         "title": title, "claim_type": claim_type, "purpose": purpose,
         "remarks": remarks, "posting_date": posting_date,
         "start_date": start_date, "end_date": end_date, "event_id": event_id,
+        "attested": is_attested,
     }
 
     # Reject an unreasonable number of file parts up front (blocker B7) — the byte
@@ -332,6 +336,17 @@ async def web_capture(
             request, _capture_categories(repos), _events_for(repos),
             f"Too many files — please upload at most {max_files} at once "
             f"(you selected {len(named_files)}).",
+            form,
+        )
+
+    # Out-of-pocket attestation (Appendix A): capture builds out-of-pocket
+    # reimbursement claims by default, so the declaration is required to submit.
+    # Enforce it BEFORE the slow read phase (and before staging an async job), so a
+    # missing tick costs no OCR. The stamp itself is recorded in ClaimService.submit.
+    if not is_attested:
+        return _render_capture(
+            request, _capture_categories(repos), _events_for(repos),
+            "Please confirm the out-of-pocket declaration before submitting your claim.",
             form,
         )
 

@@ -175,6 +175,14 @@
         <div class="fk">Currency</div>
         <div class="fv">{{ claim.claim_currency or 'MYR' }}</div>
       </div>
+      <div>
+        <div class="fk">Out-of-pocket attestation</div>
+        {% if claim.attested_by %}
+        <div class="fv" title="Attested at {{ claim.attested_at }}"><i class="ti ti-shield-check" style="color:var(--pine);"></i> {{ claim.attested_by }}{% if claim.attested_at %} · {{ claim.attested_at.strftime('%d %b %Y') }}{% endif %}</div>
+        {% else %}
+        <div class="fv muted">Not attested</div>
+        {% endif %}
+      </div>
     </div>
 
     <div class="doc-prose2">

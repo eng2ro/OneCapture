@@ -55,7 +55,8 @@ def test_web_capture_records_creator_and_blocks_self_approval(client, db_session
     """A firm user who captures a claim via the web is recorded as created_by, so
     the SoD self-approval guard blocks them approving their own claim (403)."""
     resp = client.post("/capture", files=_files(1),
-                        data={"items": '[{"expense_type": "other", "total_amount": "10"}]'},
+                        data={"attested": "yes",
+                              "items": '[{"expense_type": "other", "total_amount": "10"}]'},
                         follow_redirects=False)
     cid = resp.headers["location"].split("/")[2]
     claim = db_session.get(Claim, uuid.UUID(cid))

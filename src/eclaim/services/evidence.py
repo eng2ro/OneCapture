@@ -65,6 +65,11 @@ class Evidence:
     employee_ref: str | None
     cost_centre: str | None
 
+    # Out-of-pocket attestation (Appendix A) — who declared, at submit, that the
+    # out-of-pocket expenses were self-paid and not reimbursed elsewhere, and when.
+    attested_by: str | None
+    attested_at: datetime | None
+
     # Source document
     image_path: str
     image_sha256: str
@@ -153,6 +158,8 @@ class EvidenceService:
             claimant_name=claimant.name if claimant else None,
             employee_ref=claimant.employee_ref if claimant else None,
             cost_centre=claimant.cost_centre if claimant else None,
+            attested_by=claim.attested_by,
+            attested_at=claim.attested_at,
             image_path=line.image_path if line else "",
             image_sha256=line.image_sha256 if line else "",
             trail=trail,

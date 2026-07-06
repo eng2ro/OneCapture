@@ -90,6 +90,25 @@ def render(evidence: Evidence, generated_at: datetime) -> bytes:
     else:
         pdf.cell(0, 6, _safe("(no claimant on record)"), **_NEXT)
 
+    # -- Out-of-pocket attestation (Appendix A) ------------------------------
+    _section(pdf, "Out-of-pocket attestation")
+    if evidence.attested_by:
+        pdf.cell(
+            0, 6,
+            _safe(
+                'Declared: "these out-of-pocket expenses were paid with my own money '
+                'and have not been (and will not be) reimbursed elsewhere."'
+            ),
+            **_NEXT,
+        )
+        _kv(pdf, "Attested by", evidence.attested_by)
+        _kv(
+            pdf, "Attested at",
+            evidence.attested_at.isoformat() if evidence.attested_at else None,
+        )
+    else:
+        pdf.cell(0, 6, _safe("(no out-of-pocket attestation on record)"), **_NEXT)
+
     # -- Approval trail ------------------------------------------------------
     _section(pdf, "Approval trail")
     for ev in evidence.trail:

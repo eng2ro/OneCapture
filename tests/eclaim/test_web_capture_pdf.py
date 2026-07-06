@@ -30,7 +30,7 @@ def _post_pdf(client, pages):
     return client.post(
         "/capture",
         files=[("files", ("invoices.pdf", _pdf_bytes(pages), "application/pdf"))],
-        data={"items": json.dumps([None])},   # no client-side fields — server reads it
+        data={"items": json.dumps([None]), "attested": "yes"},   # no client-side fields — server reads it
         follow_redirects=False,
     )
 
@@ -73,7 +73,7 @@ def test_unreadable_pdf_makes_no_line_and_does_not_crash(client, fake_ocr, db_se
     resp = client.post(
         "/capture",
         files=[("files", ("broken.pdf", b"%PDF-1.4 not really", "application/pdf"))],
-        data={"items": json.dumps([None])},
+        data={"items": json.dumps([None]), "attested": "yes"},
         follow_redirects=False,
     )
     # A mileage-less, receipt-less claim still lands (its review screen shows the

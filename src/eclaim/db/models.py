@@ -189,6 +189,12 @@ class Claim(Base):
     received_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # Out-of-pocket attestation (Appendix A, migration 0022): who confirmed at submit
+    # that the out-of-pocket expenses were paid with their own money and not
+    # reimbursed elsewhere, and when. NULL for pre-attestation claims and the
+    # non-interactive API/claimant channel.
+    attested_by: Mapped[str | None] = mapped_column(String)
+    attested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Header (multi-line redesign, migration 0008). A claim is now a header that
     # owns N ``claim_line`` rows; these carry the per-claim context + rolled-up

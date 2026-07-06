@@ -153,7 +153,7 @@ def _capture_pdf(client, n_pages):
     resp = client.post(
         "/capture",
         files=[("files", ("inv.pdf", _pdf(n_pages), "application/pdf"))],
-        data={"items": "[null]"},
+        data={"items": "[null]", "attested": "yes"},
         follow_redirects=False,
     )
     cid = re.match(r"^/claims/([0-9a-f-]+)/review$", resp.headers["location"]).group(1)

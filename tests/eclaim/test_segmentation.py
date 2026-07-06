@@ -51,7 +51,7 @@ def _capture(client, n_pages):
     resp = client.post(
         "/capture",
         files=[("files", ("inv.pdf", _pdf(n_pages), "application/pdf"))],
-        data={"items": "[null]"},
+        data={"items": "[null]", "attested": "yes"},
         follow_redirects=False,
     )
     assert resp.status_code == 303, resp.text[:400]

@@ -25,7 +25,7 @@ def _capture(client, items, *, title="", event_id=""):
     return client.post(
         "/capture",
         files=_files(len(items)),
-        data={"items": json.dumps(items), "title": title, "event_id": event_id},
+        data={"items": json.dumps(items), "title": title, "event_id": event_id, "attested": "yes"},
         follow_redirects=False,
     )
 

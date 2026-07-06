@@ -174,7 +174,7 @@ def test_add_mileage_line_to_existing_receipt_claim(client, db_session, monkeypa
     # 1) capture a receipt claim
     client.post("/capture",
                 files=[("files", ("r.png", b"\x89PNG\r\n fake", "image/png"))],
-                data={"items": json.dumps([
+                data={"attested": "yes", "items": json.dumps([
                     {"expense_type": "other", "total_amount": "20", "vendor": "Cafe"}])},
                 follow_redirects=False)
     claim = db_session.execute(select(Claim)).scalars().one()
@@ -235,6 +235,7 @@ def test_capture_receipt_and_mileage_in_one_claim(client, db_session, monkeypatc
         "/capture",
         files=[("files", ("r.png", b"\x89PNG\r\n fake", "image/png"))],
         data={
+            "attested": "yes",
             "items": json.dumps([
                 {"expense_type": "other", "total_amount": "20", "vendor": "Cafe"}]),
             "mileage": json.dumps([
@@ -259,6 +260,7 @@ def test_capture_mileage_only_no_receipt(client, db_session, monkeypatch):
     monkeypatch.setattr(deps, "get_directions", lambda: _FakeDirections())
     _mileage_category(db_session)
     r = client.post("/capture", data={
+        "attested": "yes",
         "items": "[]",
         "mileage": json.dumps([
             {"origin": "A", "destination": "B", "route_index": 0,
@@ -276,6 +278,7 @@ def test_capture_mileage_missing_date_skipped(client, db_session, monkeypatch):
     monkeypatch.setattr(deps, "get_directions", lambda: _FakeDirections())
     _mileage_category(db_session)
     r = client.post("/capture", data={
+        "attested": "yes",
         "items": "[]",
         "mileage": json.dumps([{"origin": "A", "destination": "B", "route_index": 0}]),
     }, follow_redirects=False)

@@ -511,7 +511,7 @@ def build_claim(
             return IngestResult(added=0, errors=errors)
 
         _service.submit(repos=repos, claim=claim, actor=_capture_actor(created_by_user_id, header),
-                        line_count=added)
+                        line_count=added, attested=bool(header.get("attested")))
         if ingestion_job_id is not None:
             claim.ingestion_job_id = ingestion_job_id
         repos.session.flush()            # assign claim.id; make the job link durable-on-commit

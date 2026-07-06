@@ -490,9 +490,23 @@ class ClaimService:
         )
         return line
 
-    def submit(self, *, repos: "Repos", claim: Claim, actor: str, line_count: int) -> Claim:
+    def submit(
+        self, *, repos: "Repos", claim: Claim, actor: str, line_count: int,
+        attested: bool = False,
+    ) -> Claim:
         """Record the 'submitted' audit event for a multi-line claim once its lines
-        are attached (the capture path). The header is already in_review."""
+        are attached (the capture path). The header is already in_review.
+
+        When the claim has any out-of-pocket line and ``attested`` is set, stamp the
+        attestation (who + when) on the claim — the employee's Appendix-A declaration
+        that they paid it themselves and won't be reimbursed elsewhere. The web
+        capture route enforces the checkbox *before* the read phase; recording it here
+        keeps the stamp on the same transaction as the claim for both the inline and
+        the async-ingestion path."""
+        lines = repos.claims.lines(claim.id)
+        if attested and any(ln.payment_method == "out_of_pocket" for ln in lines):
+            claim.attested_by = actor
+            claim.attested_at = dt.datetime.now(dt.timezone.utc)
         record_event(
             repos.audit,
             firm_id=claim.firm_id,
@@ -501,7 +515,7 @@ class ClaimService:
             entity_id=claim.id,
             event_type="submitted",
             actor=actor,
-            detail={"line_count": line_count},
+            detail={"line_count": line_count, "attested": bool(claim.attested_by)},
         )
         return claim
 

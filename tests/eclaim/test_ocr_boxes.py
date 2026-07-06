@@ -69,7 +69,7 @@ def test_web_capture_persists_boxes(client, db_session):
     resp = client.post(
         "/capture",
         files=[("files", ("r.png", b"\x89PNG\r\n fake", "image/png"))],
-        data={"items": json.dumps(items)}, follow_redirects=False,
+        data={"items": json.dumps(items), "attested": "yes"}, follow_redirects=False,
     )
     assert resp.status_code == 303
     claim = db_session.execute(select(Claim)).scalars().one()

@@ -37,7 +37,7 @@ def _capture(client, items=None, n=None):
     if n is None:
         n = len(items) or 1
     return client.post(
-        "/capture", files=_files(n), data={"items": json.dumps(items)},
+        "/capture", files=_files(n), data={"items": json.dumps(items), "attested": "yes"},
         follow_redirects=False,
     )
 
@@ -180,7 +180,7 @@ def test_batch_without_items_falls_back_to_server_ocr(client, fake_ocr, db_sessi
         expense_type="fuel_diesel", quantity=Decimal("10"), unit="L",
         total_amount=Decimal("50"),
     )
-    resp = client.post("/capture", files=_files(2), data={"items": "[]"},
+    resp = client.post("/capture", files=_files(2), data={"items": "[]", "attested": "yes"},
                        follow_redirects=False)
     assert resp.status_code == 303
     # No client-side extraction → each file is OCR'd server-side: one claim, 2 lines.
@@ -201,7 +201,7 @@ def test_batch_unread_receipts_are_ocrd_not_saved_blank(client, fake_ocr, db_ses
         None,                                                 # not read yet
         {"expense_type": "other", "vendor": None, "total_amount": None},  # all-null
     ]
-    resp = client.post("/capture", files=_files(3), data={"items": json.dumps(items)},
+    resp = client.post("/capture", files=_files(3), data={"items": json.dumps(items), "attested": "yes"},
                        follow_redirects=False)
     assert resp.status_code == 303
     claim = db_session.execute(select(Claim)).scalars().one()
@@ -278,7 +278,7 @@ def test_server_ocr_line_auto_categorised_by_merchant(client, fake_ocr, db_sessi
     fake_ocr.extraction = Extraction(
         vendor="McDonald's KLCC", expense_type="other", total_amount=Decimal("12"),
     )
-    resp = client.post("/capture", files=_files(1), data={"items": "[]"},
+    resp = client.post("/capture", files=_files(1), data={"items": "[]", "attested": "yes"},
                        follow_redirects=False)
     assert resp.status_code == 303
     claim = db_session.execute(select(Claim)).scalars().one()
@@ -294,7 +294,7 @@ def _post_capture(client, *, items=None, n=None, **data):
     items = items or [{"expense_type": "other", "total_amount": "10", "vendor": "A"}]
     if n is None:
         n = len(items) or 1
-    payload = {"items": json.dumps(items)}
+    payload = {"items": json.dumps(items), "attested": "yes"}
     payload.update(data)
     return client.post("/capture", files=_files(n), data=payload, follow_redirects=False)
 
