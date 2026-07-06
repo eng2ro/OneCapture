@@ -30,7 +30,9 @@ from eclaim.auth import tokens
 from eclaim.auth.principal import build_principal
 from eclaim.config import get_settings
 from eclaim.db.models import AppUser, Claim, UserClientGrant
-from eclaim.services.sod import SoDViolation, check_can_approve
+from eclaim.repositories import AuditRepository
+from eclaim.services.claims import Repos
+from eclaim.services.sod import SoDViolation, authorize_approval, check_can_approve
 
 
 # --------------------------------------------------------------------------- #
@@ -236,6 +238,66 @@ def test_api_blocks_ungranted_approver(db_session, sod_world, api):
     assert resp.status_code in (403, 404)
     db_session.refresh(claim)
     assert claim.status == "in_review" and claim.approved_by_user_id is None
+
+
+# =========================================================================== #
+# 4b. Denied-attempt audit uses its OWN transaction (blocker B5)
+#
+# The denial must be durable even though the request transaction rolls back on the
+# 403, AND writing it must NOT commit the request session (which would flush any
+# pending business work with it). Both are pinned here — mutation testing showed the
+# earlier suite passed even if sod.py reverted to committing repos.session.
+# =========================================================================== #
+def test_denial_written_in_own_txn_not_the_request_session(db_session, sod_world, monkeypatch):
+    """The denial is written in its OWN short-lived transaction — never by committing
+    the request session. That independence is exactly what lets it survive the request
+    rollback that the API/web layer performs on the 403 (the request session carries
+    no part of it). We spy on the request session's commit: it must stay untouched
+    while the approval_denied event is still durably written. Fails if sod.py reverts
+    to writing the event via ``repos.session.commit()``."""
+    claim = _make_claim(db_session, sod_world, created_by=sod_world.manager)
+    repos = Repos.for_session(db_session)
+    viewer = build_principal(
+        db_session, {"user_id": str(sod_world.viewer), "firm_id": str(sod_world.firm)}
+    )
+
+    commits: list[int] = []
+    monkeypatch.setattr(db_session, "commit", lambda: commits.append(1))
+
+    with pytest.raises(SoDViolation):
+        authorize_approval(repos, claim, viewer, action="approve")
+
+    assert commits == [], "the denial must not commit the request session (blocker B5)"
+    denied = [
+        e for e in AuditRepository(db_session).chain("claim", claim.id)
+        if e.event_type == "approval_denied"
+    ]
+    assert len(denied) == 1 and denied[0].actor == "sod-viewer@seed.test"
+
+
+def test_denial_does_not_flush_pending_request_work(db_session, sod_world, monkeypatch):
+    """Because the denial never commits the request session, unrelated business work
+    pending on that session at denial time is NOT flushed with it — the 'one request =
+    one atomic transaction' contract holds and the request layer can still roll the
+    whole thing back on the 403. Stage a pending edit, trigger the denial, and assert
+    the request session was never committed. Fails if sod.py reverts to committing it
+    (which would persist the edit below)."""
+    claim = _make_claim(db_session, sod_world, created_by=sod_world.manager)
+    repos = Repos.for_session(db_session)
+    viewer = build_principal(
+        db_session, {"user_id": str(sod_world.viewer), "firm_id": str(sod_world.firm)}
+    )
+
+    # Unrelated, uncommitted business work sitting on the request session.
+    claim.total_amount = Decimal("99999.00")
+
+    commits: list[int] = []
+    monkeypatch.setattr(db_session, "commit", lambda: commits.append(1))
+
+    with pytest.raises(SoDViolation):
+        authorize_approval(repos, claim, viewer, action="approve")
+
+    assert commits == [], "denial committed the request session — pending edit leaks"
 
 
 # =========================================================================== #
