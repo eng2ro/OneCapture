@@ -18,6 +18,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sqlalchemy.exc import IntegrityError
+
 from core.release import StubSink, StubTSA, canonical_hash
 
 if TYPE_CHECKING:
@@ -555,6 +557,15 @@ class ClaimService:
             raise ClaimNotFound(str(claim_id))
         return claim
 
+    def _lock(self, repos: "Repos", claim_id: uuid.UUID) -> Claim:
+        """Like :meth:`get` but takes a row lock (``SELECT … FOR UPDATE``) — used by
+        the state transitions that must not race (approve/decide/release/reverse), so
+        two concurrent requests on one claim serialise rather than both writing."""
+        claim = repos.claims.lock_for_update(claim_id)
+        if claim is None:
+            raise ClaimNotFound(str(claim_id))
+        return claim
+
     @staticmethod
     def _require_writer(claim: Claim, principal: "Principal | None") -> None:
         """Server-side write gate shared by every claim mutation: a Viewer may
@@ -910,7 +921,7 @@ class ClaimService:
     ) -> Claim:
         """Approve an in-review claim. When an ``approver`` principal is given,
         the SoD/authority guard runs and ``approved_by_user_id`` is recorded."""
-        claim = self.get(repos, claim_id)
+        claim = self._lock(repos, claim_id)
         if claim.status != "in_review":
             raise IllegalTransition(f"cannot approve a claim in status {claim.status!r}")
         if approver is not None:
@@ -955,7 +966,7 @@ class ClaimService:
         * every (decided) line rejected        → ``rejected``
         * a mix of approved + rejected         → ``partially_approved``
         """
-        claim = self.get(repos, claim_id)
+        claim = self._lock(repos, claim_id)
         if claim.status != "in_review":
             raise IllegalTransition(f"cannot decide a claim in status {claim.status!r}")
         from .sod import authorize_approval
@@ -1148,7 +1159,7 @@ class ClaimService:
         date). NO scope/factor/tCO2e — e-Claim does no carbon maths; CarbonNext maps
         and computes. Non-relevant lines never forward; the claim still releases (and
         ALL lines still export to ERP)."""
-        claim = self.get(repos, claim_id)
+        claim = self._lock(repos, claim_id)
         self._require_writer(claim, principal)
         lines = repos.claims.lines(claim_id)
 
@@ -1195,66 +1206,79 @@ class ClaimService:
         carbon_ref = f"CARB-{digest[:12].upper()}"
         token = StubTSA().stamp(digest)
 
-        batch = repos.releases.add_batch(
-            ReleaseBatch(
-                firm_id=claim.firm_id,
-                client_id=claim.client_id,
-                source_type=SOURCE_TYPE,
-                created_by=actor,
-                batch_hash=digest,
-                tsa_token=token,
-                record_count=len(relevant),
-                total_tco2e=None,  # e-Claim does not compute tonnage
-                status="released",
-            )
-        )
-        for ln, cat in items:
-            repos.handoffs.add(
-                CarbonHandoff(
+        # The whole release is written in a savepoint. Concurrent transitions on this
+        # claim already serialise on the FOR UPDATE lock above, so the loser normally
+        # takes an idempotent early-return; the UNIQUE(client_id, batch_hash) on
+        # release_batch (and the handoff idempotency key) is the DB-level backstop that
+        # makes a double-release impossible even if the lock were ever bypassed. Map
+        # that collision to the same idempotent no-op instead of a 500.
+        try:
+            with repos.session.begin_nested():
+                batch = repos.releases.add_batch(
+                    ReleaseBatch(
+                        firm_id=claim.firm_id,
+                        client_id=claim.client_id,
+                        source_type=SOURCE_TYPE,
+                        created_by=actor,
+                        batch_hash=digest,
+                        tsa_token=token,
+                        record_count=len(relevant),
+                        total_tco2e=None,  # e-Claim does not compute tonnage
+                        status="released",
+                    )
+                )
+                for ln, cat in items:
+                    repos.handoffs.add(
+                        CarbonHandoff(
+                            firm_id=claim.firm_id,
+                            client_id=claim.client_id,
+                            claim_id=claim.id,
+                            line_id=ln.id,
+                            release_batch_id=batch.id,
+                            category_id=ln.category_id,
+                            category_name=(cat.name if cat else None),
+                            expense_type=ln.expense_type,
+                            vendor=ln.vendor,
+                            doc_date=ln.doc_date,
+                            amount=ln.total_amount,
+                            currency=ln.currency,
+                            quantity=ln.quantity,
+                            unit=ln.unit,
+                            cost_centre=ln.cost_centre_override,
+                            direction="forward",
+                            idempotency_key=_idempotency_key(claim.client_id, ln.id),
+                            carbon_ref=f"CARB-{canonical_hash([self._payload(ln, cat)])[:12].upper()}",
+                        )
+                    )
+                claim.status = "released"
+
+                released = record_event(
+                    repos.audit,
                     firm_id=claim.firm_id,
                     client_id=claim.client_id,
-                    claim_id=claim.id,
-                    line_id=ln.id,
-                    release_batch_id=batch.id,
-                    category_id=ln.category_id,
-                    category_name=(cat.name if cat else None),
-                    expense_type=ln.expense_type,
-                    vendor=ln.vendor,
-                    doc_date=ln.doc_date,
-                    amount=ln.total_amount,
-                    currency=ln.currency,
-                    quantity=ln.quantity,
-                    unit=ln.unit,
-                    cost_centre=ln.cost_centre_override,
-                    direction="forward",
-                    idempotency_key=_idempotency_key(claim.client_id, ln.id),
-                    carbon_ref=f"CARB-{canonical_hash([self._payload(ln, cat)])[:12].upper()}",
+                    entity_type="claim",
+                    entity_id=claim.id,
+                    event_type="released",
+                    actor=actor,
+                    detail={"batch_hash": digest, "carbon_ref": carbon_ref, "record_count": len(relevant)},
                 )
-            )
-        claim.status = "released"
+                record_event(
+                    repos.audit,
+                    firm_id=claim.firm_id,
+                    client_id=claim.client_id,
+                    entity_type="claim",
+                    entity_id=claim.id,
+                    event_type="tsa_anchored",
+                    actor="system",
+                    detail={"tsa_token": token},
+                    prev_hash=released.hash,
+                )
+        except IntegrityError:
+            prior = self._recover_release(repos, claim, digest)
+            if prior is not None:
+                return prior
+            raise
         StubSink().post(digest, len(relevant))
-
-        released = record_event(
-            repos.audit,
-            firm_id=claim.firm_id,
-            client_id=claim.client_id,
-            entity_type="claim",
-            entity_id=claim.id,
-            event_type="released",
-            actor=actor,
-            detail={"batch_hash": digest, "carbon_ref": carbon_ref, "record_count": len(relevant)},
-        )
-        record_event(
-            repos.audit,
-            firm_id=claim.firm_id,
-            client_id=claim.client_id,
-            entity_type="claim",
-            entity_id=claim.id,
-            event_type="tsa_anchored",
-            actor="system",
-            detail={"tsa_token": token},
-            prev_hash=released.hash,
-        )
         return batch
 
     def reverse(
@@ -1265,7 +1289,7 @@ class ClaimService:
         per relevant line of the original release, with negated amount/quantity and
         ``direction='reversal'``. Never edits or deletes the originals; a correction
         is a new, opposite-signed handoff batch."""
-        claim = self.get(repos, claim_id)
+        claim = self._lock(repos, claim_id)
         self._require_writer(claim, principal)
         if claim.status != "released":
             raise IllegalTransition("only a released claim can be reversed")
@@ -1286,53 +1310,73 @@ class ClaimService:
         ]
         digest = canonical_hash(payloads or [{"reversal_of": str(claim.id)}])
 
-        batch = repos.releases.add_batch(
-            ReleaseBatch(
-                firm_id=claim.firm_id,
-                client_id=claim.client_id,
-                source_type=SOURCE_TYPE,
-                created_by=actor,
-                batch_hash=digest,
-                tsa_token=StubTSA().stamp(digest),
-                record_count=len(relevant),
-                total_tco2e=None,
-                status="released",
-            )
-        )
-        for (ln, cat), idem in zip(items, rev_keys):
-            repos.handoffs.add(
-                CarbonHandoff(
+        # Same savepoint + idempotent-recovery pattern as release(): the FOR UPDATE
+        # lock serialises, and UNIQUE(client_id, batch_hash) is the backstop that
+        # stops a concurrent double-reversal (the zero-relevant-line case has no
+        # handoff idempotency key to collide on, so the batch hash is what guards it).
+        try:
+            with repos.session.begin_nested():
+                batch = repos.releases.add_batch(
+                    ReleaseBatch(
+                        firm_id=claim.firm_id,
+                        client_id=claim.client_id,
+                        source_type=SOURCE_TYPE,
+                        created_by=actor,
+                        batch_hash=digest,
+                        tsa_token=StubTSA().stamp(digest),
+                        record_count=len(relevant),
+                        total_tco2e=None,
+                        status="released",
+                    )
+                )
+                for (ln, cat), idem in zip(items, rev_keys):
+                    repos.handoffs.add(
+                        CarbonHandoff(
+                            firm_id=claim.firm_id,
+                            client_id=claim.client_id,
+                            claim_id=claim.id,
+                            line_id=ln.id,
+                            release_batch_id=batch.id,
+                            category_id=ln.category_id,
+                            category_name=(cat.name if cat else None),
+                            expense_type=ln.expense_type,
+                            vendor=ln.vendor,
+                            doc_date=ln.doc_date,
+                            amount=None if ln.total_amount is None else -ln.total_amount,
+                            currency=ln.currency,
+                            quantity=None if ln.quantity is None else -ln.quantity,
+                            unit=ln.unit,
+                            cost_centre=ln.cost_centre_override,
+                            direction="reversal",
+                            idempotency_key=idem,
+                            carbon_ref=f"CARB-REV-{digest[:12].upper()}",
+                        )
+                    )
+                record_event(
+                    repos.audit,
                     firm_id=claim.firm_id,
                     client_id=claim.client_id,
-                    claim_id=claim.id,
-                    line_id=ln.id,
-                    release_batch_id=batch.id,
-                    category_id=ln.category_id,
-                    category_name=(cat.name if cat else None),
-                    expense_type=ln.expense_type,
-                    vendor=ln.vendor,
-                    doc_date=ln.doc_date,
-                    amount=None if ln.total_amount is None else -ln.total_amount,
-                    currency=ln.currency,
-                    quantity=None if ln.quantity is None else -ln.quantity,
-                    unit=ln.unit,
-                    cost_centre=ln.cost_centre_override,
-                    direction="reversal",
-                    idempotency_key=idem,
-                    carbon_ref=f"CARB-REV-{digest[:12].upper()}",
+                    entity_type="claim",
+                    entity_id=claim.id,
+                    event_type="reversed",
+                    actor=actor,
+                    detail={"batch_hash": digest, "record_count": len(relevant)},
                 )
-            )
-        record_event(
-            repos.audit,
-            firm_id=claim.firm_id,
-            client_id=claim.client_id,
-            entity_type="claim",
-            entity_id=claim.id,
-            event_type="reversed",
-            actor=actor,
-            detail={"batch_hash": digest, "record_count": len(relevant)},
-        )
+        except IntegrityError:
+            prior = self._recover_release(repos, claim, digest)
+            if prior is not None:
+                return prior
+            raise
         return batch
+
+    def _recover_release(self, repos: "Repos", claim: Claim, digest: str):
+        """After a UNIQUE/idempotency collision on release or reverse, discard this
+        transaction's rolled-back in-memory changes and return the batch the winning
+        concurrent transaction already committed (keyed by the deterministic content
+        hash), so the caller reports an idempotent no-op rather than a 500. Returns
+        None only if no such batch is found (a genuine, unrelated integrity error)."""
+        repos.session.expire(claim)
+        return repos.releases.batch_by_hash(claim.client_id, digest)
 
 
 @dataclass

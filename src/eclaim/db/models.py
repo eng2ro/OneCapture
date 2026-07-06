@@ -390,6 +390,11 @@ class ReleaseBatch(Base):
     __tablename__ = "release_batch"
     __table_args__ = (
         CheckConstraint("source_type IN ('eclaim','erpsync')", name="ck_batch_source"),
+        # A release is content-addressed by its deterministic batch_hash; two batches
+        # with the same (client_id, batch_hash) would be a double-release. The UNIQUE
+        # makes that impossible at the DB even under a concurrency race (blocker
+        # HIGH), and lets the service map the collision to an idempotent no-op.
+        UniqueConstraint("client_id", "batch_hash", name="uq_release_batch_client_hash"),
         Index("ix_batch_firm", "firm_id"),
     )
 

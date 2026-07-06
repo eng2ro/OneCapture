@@ -145,6 +145,15 @@ class ClaimRepository:
     def get(self, claim_id: uuid.UUID) -> Claim | None:
         return self._s.get(Claim, claim_id)
 
+    def lock_for_update(self, claim_id: uuid.UUID) -> Claim | None:
+        """Load the claim row with ``SELECT … FOR UPDATE`` so concurrent lifecycle
+        transitions (approve/decide/release/reverse) on the same claim serialise: a
+        second request blocks until the first commits, then reads the committed state
+        and takes the idempotent path instead of double-writing."""
+        return self._s.execute(
+            select(Claim).where(Claim.id == claim_id).with_for_update()
+        ).scalar_one_or_none()
+
     # -- lines (the per-receipt records under a claim header) --------------- #
     def add_line(self, line: ClaimLine) -> ClaimLine:
         self._s.add(line)
