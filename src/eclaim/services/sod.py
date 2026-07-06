@@ -9,8 +9,12 @@ defence-in-depth second layer at the application boundary.
 
 from __future__ import annotations
 
+from sqlalchemy.orm import sessionmaker
+
 from ..auth.principal import Principal
 from ..db.models import Claim
+from ..repositories import AuditRepository
+from ..tenancy import set_tenant_context
 from .audit import record_event
 from .claims import ClaimError
 
@@ -48,11 +52,17 @@ def check_can_approve(claim: Claim, approver: Principal) -> None:
 
 
 def authorize_approval(repos, claim: Claim, approver: Principal, *, action: str) -> None:
-    """Run :func:`check_can_approve` and, if it fails, persist a COMMITTED
+    """Run :func:`check_can_approve` and, if it fails, persist a durable
     ``approval_denied`` audit event before re-raising — so a blocked attempt
     (maker==checker, over-authority, viewer, no client grant) is never invisible to
-    auditors. The guard runs before any business mutation, so the only pending change
-    committed here is this single audit event; the caller still gets the 403/error.
+    auditors. The caller still gets the 403/error.
+
+    The denial is written in a SEPARATE short-lived transaction (see
+    :func:`_record_denied`), never by committing ``repos.session``: both the API and
+    the web layer roll the request transaction back on ``SoDViolation``, so the event
+    must live outside it to survive — and committing the request session here would
+    flush any pending business work with it, breaking the "one request = one atomic
+    transaction" contract (blocker B5).
 
     Use this (not bare ``check_can_approve``) on the real approval transitions. The
     non-raising :func:`can_approve` predicate stays audit-free — it's only the UI
@@ -66,18 +76,44 @@ def authorize_approval(repos, claim: Claim, approver: Principal, *, action: str)
         # attempt with no grant cannot — and must not — write into another client's
         # chain under RLS; the attempt fails closed either way.
         if approver.can_access_client(claim.client_id):
-            record_event(
-                repos.audit,
-                firm_id=claim.firm_id,
-                client_id=claim.client_id,
-                entity_type="claim",
-                entity_id=claim.id,
-                event_type="approval_denied",
-                actor=approver.email or str(approver.user_id),
-                detail={"action": action, "reason": str(exc)},
-            )
-            repos.session.commit()
+            _record_denied(repos, claim, approver, action=action, reason=str(exc))
         raise
+
+
+def _record_denied(
+    repos, claim: Claim, approver: Principal, *, action: str, reason: str
+) -> None:
+    """Persist the ``approval_denied`` event in its own short-lived transaction, so a
+    blocked attempt is durable even though the request transaction is about to roll
+    back — WITHOUT committing ``repos.session`` (which would flush partial business
+    work; blocker B5).
+
+    The new session shares the request session's *bind*: in production that bind is the
+    engine, so this opens its own connection and commits independently of the request;
+    under the test harness the bind is the pinned per-test connection, so the write
+    lands in a nested savepoint that the suite's outer rollback still reverts — nothing
+    leaks. A fresh session starts with no tenant context, so RLS is re-primed from the
+    approver (who, in this branch, provably has access to ``claim.client_id`` and thus
+    its firm) before the append-only insert."""
+    factory = sessionmaker(
+        bind=repos.session.get_bind(), expire_on_commit=False, future=True
+    )
+    audit_session = factory()
+    try:
+        set_tenant_context(audit_session, approver.firm_id, approver.allowed_client_ids)
+        record_event(
+            AuditRepository(audit_session),
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            entity_type="claim",
+            entity_id=claim.id,
+            event_type="approval_denied",
+            actor=approver.email or str(approver.user_id),
+            detail={"action": action, "reason": reason},
+        )
+        audit_session.commit()
+    finally:
+        audit_session.close()
 
 
 def can_approve(claim: Claim, approver: Principal) -> bool:
