@@ -71,6 +71,22 @@ async def _should_not_run(scope, receive, send):  # pragma: no cover - placehold
 
 
 # --------------------------------------------------------------------------- #
+# Body cap vs ZIP budget invariant (punch-list P2)
+# --------------------------------------------------------------------------- #
+def test_body_cap_covers_zip_budget():
+    """The request-body cap must be >= the ZIP expansion budget, or a legitimate
+    full-budget receipt ZIP (mostly barely-compressible images) is 413'd before it
+    ever reaches ZIP expansion. Fails if max_upload_mb is dropped below the ZIP
+    total budget again — the exact regression P2 fixed."""
+    from eclaim.config import get_settings
+    from eclaim.services.ingestion import _ZIP_MAX_TOTAL_BYTES
+
+    assert get_settings().max_upload_bytes >= _ZIP_MAX_TOTAL_BYTES, (
+        "request body cap is below the documented ZIP budget — bulk ZIPs will 413"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # File-count cap on /capture
 # --------------------------------------------------------------------------- #
 def test_capture_rejects_too_many_files(client, monkeypatch):

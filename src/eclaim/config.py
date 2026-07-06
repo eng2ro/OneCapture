@@ -75,9 +75,14 @@ class Settings(BaseSettings):
     # (UploadFile.read / request.form), so an unbounded upload OOMs the single
     # host. Cap the request body size and the number of files per capture. Both
     # are settings (Appendix B: configuration, not customization) — a firm with
-    # heavy bulk/PDF batches can raise them. Default 50 MB comfortably fits a
-    # multi-page PDF or a modest receipt ZIP while bounding worst-case memory.
-    max_upload_mb: int = 50
+    # heavier batches can raise them.
+    #
+    # The body cap MUST be >= the ZIP expansion budget (ingestion._ZIP_MAX_TOTAL_BYTES,
+    # 100 MB). A receipt ZIP is mostly JP/PNG images, which barely compress, so a
+    # legitimate full-budget batch arrives on the wire at ~100 MB — a lower body cap
+    # 413s bulk ZIPs that the ZIP path is documented to accept (punch-list P2). Kept
+    # equal at 100 MB; test_upload_limits pins the invariant so they can't diverge.
+    max_upload_mb: int = 100
     max_upload_files: int = 100
 
     @property
