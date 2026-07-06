@@ -852,13 +852,15 @@ def _render_review(
     # When the approve controls are hidden on an in-review claim, say WHY (instead of
     # silently dropping them) — most often separation of duties: the user who keyed
     # the claim cannot approve it.
-    can_review = can_approve(claim, principal) and claim.status == "in_review"
+    from ..services.sod import matrix_rule_for
+    matrix_rule = matrix_rule_for(repos, claim)
+    can_review = can_approve(claim, principal, matrix_rule=matrix_rule) and claim.status == "in_review"
     review_block_reason = None
     if claim.status == "in_review" and not can_review:
         from ..services.sod import SoDViolation, check_can_approve
 
         try:
-            check_can_approve(claim, principal)
+            check_can_approve(claim, principal, matrix_rule=matrix_rule)
         except SoDViolation as exc:
             review_block_reason = str(exc)
     return templates.TemplateResponse(

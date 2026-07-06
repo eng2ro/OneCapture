@@ -16,6 +16,7 @@ from sqlalchemy import exists, func, select, text
 from sqlalchemy.orm import Session
 
 from .db.models import (
+    ApprovalMatrixRule,
     AuditEvent,
     CarbonHandoff,
     Category,
@@ -109,6 +110,60 @@ class CategoryRepository:
                 .order_by(Category.client_id, Category.name)
             ).scalars()
         )
+
+
+class ApprovalMatrixRepository:
+    """Approval authority matrix (Appendix B). RLS-scoped like the other data
+    tables; the explicit client filter is belt-and-suspenders on top."""
+
+    def __init__(self, session: Session) -> None:
+        self._s = session
+
+    def rules_for_client(self, client_id: uuid.UUID) -> list[ApprovalMatrixRule]:
+        """Active rules for one client (the approval engine reads these). Ordered by
+        step then band floor so a caller can walk them predictably."""
+        return list(
+            self._s.execute(
+                select(ApprovalMatrixRule)
+                .where(
+                    ApprovalMatrixRule.client_id == client_id,
+                    ApprovalMatrixRule.active.is_(True),
+                )
+                .order_by(ApprovalMatrixRule.step_order, ApprovalMatrixRule.min_amount)
+            ).scalars()
+        )
+
+    def list_for_clients(self, client_ids) -> list[ApprovalMatrixRule]:
+        """All rules (active or not) across a set of clients — the admin editor."""
+        client_ids = list(client_ids)
+        if not client_ids:
+            return []
+        return list(
+            self._s.execute(
+                select(ApprovalMatrixRule)
+                .where(ApprovalMatrixRule.client_id.in_(client_ids))
+                .order_by(
+                    ApprovalMatrixRule.client_id,
+                    ApprovalMatrixRule.step_order,
+                    ApprovalMatrixRule.min_amount,
+                )
+            ).scalars()
+        )
+
+    def get(self, rule_id: uuid.UUID) -> ApprovalMatrixRule | None:
+        return self._s.get(ApprovalMatrixRule, rule_id)
+
+    def add(self, rule: ApprovalMatrixRule) -> ApprovalMatrixRule:
+        self._s.add(rule)
+        self._s.flush()
+        return rule
+
+    def delete_for_client(self, client_id: uuid.UUID) -> None:
+        """Clear a client's rules — the admin editor rewrites the whole set (the
+        wizard/template pattern writes a fresh row-set)."""
+        for rule in self.list_for_clients([client_id]):
+            self._s.delete(rule)
+        self._s.flush()
 
 
 class ClaimantRepository:

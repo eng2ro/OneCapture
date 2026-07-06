@@ -542,6 +542,56 @@ class Category(Base):
     )
 
 
+class ApprovalMatrixRule(Base):
+    """Configurable approval authority (Appendix B). One tenant-scoped row per
+    amount band decides who may approve. The launch engine reads ``step_order = 1``
+    only (one approval); extra ``step_order`` rows (multi-layer) and the
+    ``scope_department`` / ``scope_category_id`` overrides are future-proof columns
+    for Phase-2 with no schema change. RLS-scoped like the other data tables."""
+
+    __tablename__ = "approval_matrix_rule"
+    __table_args__ = (
+        CheckConstraint(
+            "approver_role IS NULL OR approver_role IN ('partner','manager','approver')",
+            name="ck_amr_role",
+        ),
+        CheckConstraint("step_order >= 1", name="ck_amr_step"),
+        CheckConstraint("approvals_required >= 1", name="ck_amr_approvals"),
+        CheckConstraint(
+            "min_amount IS NULL OR max_amount IS NULL OR max_amount >= min_amount",
+            name="ck_amr_band",
+        ),
+        Index("ix_amr_firm_client", "firm_id", "client_id"),
+        Index("ix_amr_client_active", "client_id", "active", "step_order"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+
+    # Scope (NULL = applies to all) — Phase-2 overrides; the launch UI writes NULL.
+    scope_department: Mapped[str | None] = mapped_column(String)
+    scope_category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("category.id"))
+    # Amount band: min NULL = 0; max NULL = unlimited.
+    min_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    max_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # 1 = first approval; 2, 3 … = additional layers (Phase-2 multi-step states).
+    step_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    # Required role OR a specific person for this step.
+    approver_role: Mapped[str | None] = mapped_column(String)
+    approver_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    approvals_required: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class EmissionEntry(Base):
     __tablename__ = "emission_entry"
     __table_args__ = (

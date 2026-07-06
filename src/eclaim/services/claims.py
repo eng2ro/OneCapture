@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 from ..db.models import CarbonHandoff, Claim, Claimant, ClaimLine, Client, ReleaseBatch
 from ..ocr.base import Extraction, OcrProvider
 from ..repositories import (
+    ApprovalMatrixRepository,
     AuditRepository,
     CarbonHandoffRepository,
     CategoryRepository,
@@ -1405,6 +1406,7 @@ class Repos:
     handoffs: CarbonHandoffRepository
     audit: AuditRepository
     events: EventRepository
+    approvals: ApprovalMatrixRepository
 
     @classmethod
     def for_session(cls, session) -> "Repos":
@@ -1417,6 +1419,7 @@ class Repos:
             handoffs=CarbonHandoffRepository(session),
             audit=AuditRepository(session),
             events=EventRepository(session),
+            approvals=ApprovalMatrixRepository(session),
         )
 
 

@@ -9,10 +9,12 @@ defence-in-depth second layer at the application boundary.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from sqlalchemy.orm import sessionmaker
 
 from ..auth.principal import Principal
-from ..db.models import Claim
+from ..db.models import ApprovalMatrixRule, Claim
 from ..repositories import AuditRepository
 from ..tenancy import set_tenant_context
 from .audit import record_event
@@ -23,8 +25,81 @@ class SoDViolation(ClaimError):
     """An approval that violates separation of duties / authority (API → 403)."""
 
 
-def check_can_approve(claim: Claim, approver: Principal) -> None:
-    """Raise :class:`SoDViolation` if ``approver`` may not approve ``claim``."""
+# Role adequacy for the approval matrix (Appendix B): a higher role satisfies a
+# rule that requires a lower one (a partner can sign off what a manager can).
+_ROLE_RANK = {"viewer": 0, "approver": 1, "manager": 2, "partner": 3}
+
+
+def _rule_satisfied(rule: ApprovalMatrixRule, approver: Principal) -> bool:
+    """Does ``approver`` meet this step's requirement — the named person, or a role
+    at least as senior as the one required? A rule with neither is any approver."""
+    if rule.approver_user_id is not None:
+        return approver.user_id == rule.approver_user_id
+    if rule.approver_role:
+        return _ROLE_RANK.get(approver.base_role, -1) >= _ROLE_RANK.get(rule.approver_role, 99)
+    return True
+
+
+def _in_band(amount: Decimal, rule: ApprovalMatrixRule) -> bool:
+    return (rule.min_amount is None or amount >= rule.min_amount) and (
+        rule.max_amount is None or amount <= rule.max_amount
+    )
+
+
+def select_matrix_rule(rules, *, amount, department, category_ids) -> ApprovalMatrixRule | None:
+    """The most specific active ``step_order = 1`` rule whose amount band and scope
+    fit this claim, or None. Phase-1 rules carry NULL scopes (apply to all); the
+    scope checks are here so Phase-2 per-department / per-category rows just work.
+    A more specific rule (category, then department) wins over a general one."""
+    matches = [
+        r for r in rules
+        if r.active and r.step_order == 1 and _in_band(amount, r)
+        and (r.scope_department is None or r.scope_department == department)
+        and (r.scope_category_id is None or r.scope_category_id in category_ids)
+    ]
+    matches.sort(
+        key=lambda r: (r.scope_category_id is not None, r.scope_department is not None),
+        reverse=True,
+    )
+    return matches[0] if matches else None
+
+
+def matrix_rule_for(repos, claim: Claim) -> ApprovalMatrixRule | None:
+    """Resolve the approval-matrix rule that governs this claim, or None when the
+    client has configured no matrix (→ legacy behaviour: any authorised approver
+    within their personal authority_limit)."""
+    rules = repos.approvals.rules_for_client(claim.client_id)
+    if not rules:
+        return None
+    amount = claim.total_claimed if claim.total_claimed is not None else claim.total_amount
+    cats = {ln.category_id for ln in repos.claims.lines(claim.id) if ln.category_id}
+    return select_matrix_rule(
+        rules, amount=amount if amount is not None else Decimal(0),
+        department=claim.department, category_ids=cats,
+    )
+
+
+def _describe_rule(rule: ApprovalMatrixRule) -> str:
+    if rule.approver_user_id is not None:
+        who = "a specific approver"
+    elif rule.approver_role:
+        who = f"a {rule.approver_role}"
+    else:
+        who = "an authorised approver"
+    if rule.approvals_required > 1:
+        who = f"{rule.approvals_required}× {who}"
+    return who
+
+
+def check_can_approve(
+    claim: Claim, approver: Principal, *, matrix_rule: ApprovalMatrixRule | None = None
+) -> None:
+    """Raise :class:`SoDViolation` if ``approver`` may not approve ``claim``.
+
+    ``matrix_rule`` is the pre-resolved Appendix-B rule for this claim (via
+    :func:`matrix_rule_for`); when given, the approver must satisfy it (required
+    role/person) on top of the base separation-of-duties + personal authority_limit
+    checks. Kept pure (no DB) so the UI predicate and the real gate share it."""
     if approver.base_role == "viewer":
         raise SoDViolation("viewers cannot approve claims")
 
@@ -50,6 +125,14 @@ def check_can_approve(claim: Claim, approver: Principal) -> None:
             f"amount {amount} exceeds approver authority limit {approver.authority_limit}"
         )
 
+    # Appendix B: the configured approval matrix takes priority for who may sign off
+    # this band. authority_limit above remains an optional extra personal cap.
+    if matrix_rule is not None and not _rule_satisfied(matrix_rule, approver):
+        raise SoDViolation(
+            f"approval of {amount} requires {_describe_rule(matrix_rule)} "
+            "under this client's approval matrix"
+        )
+
 
 def authorize_approval(repos, claim: Claim, approver: Principal, *, action: str) -> None:
     """Run :func:`check_can_approve` and, if it fails, persist a durable
@@ -68,7 +151,7 @@ def authorize_approval(repos, claim: Claim, approver: Principal, *, action: str)
     non-raising :func:`can_approve` predicate stays audit-free — it's only the UI
     deciding whether to draw a button, not an attempted sign-off."""
     try:
-        check_can_approve(claim, approver)
+        check_can_approve(claim, approver, matrix_rule=matrix_rule_for(repos, claim))
     except SoDViolation as exc:
         # The denial event lives on the claim's tenant audit chain, so it can only
         # be written when the actor actually has access to that client (the
@@ -116,11 +199,14 @@ def _record_denied(
         audit_session.close()
 
 
-def can_approve(claim: Claim, approver: Principal) -> bool:
+def can_approve(
+    claim: Claim, approver: Principal, *, matrix_rule: ApprovalMatrixRule | None = None
+) -> bool:
     """Non-raising predicate over :func:`check_can_approve` — for the UI to decide
-    whether to draw the review actions. The service stays the real gate."""
+    whether to draw the review actions. Pass the resolved ``matrix_rule`` so the
+    button reflects the approval matrix; the service stays the real gate."""
     try:
-        check_can_approve(claim, approver)
+        check_can_approve(claim, approver, matrix_rule=matrix_rule)
         return True
     except SoDViolation:
         return False
