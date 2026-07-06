@@ -81,9 +81,11 @@ def _thumbnail(data: bytes, *, max_side: int = SEG_THUMB_MAX_SIDE) -> bytes:
     """Downscale a page render to a small JPEG for boundary detection. On any
     failure the original bytes are returned unchanged (correctness over size)."""
     try:
-        from PIL import Image
+        from ..imaging import open_guarded
 
-        im = Image.open(io.BytesIO(data)).convert("RGB")
+        # Bomb-guarded open (also arms PIL's global pixel ceiling). Any oversize/decode
+        # failure is caught below and the original bytes are returned unchanged.
+        im = open_guarded(data, what="segmentation thumbnail").convert("RGB")
         w, h = im.size
         scale = min(1.0, max_side / max(w, h))
         if scale < 1.0:

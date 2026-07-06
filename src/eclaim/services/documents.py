@@ -15,10 +15,18 @@ pack all stay unchanged — a PDF-derived line looks like any image receipt.
 from __future__ import annotations
 
 import io
+import math
 
 import pillow_heif
 import pypdfium2 as pdfium
 from PIL import Image, ImageOps
+
+from ..imaging import (
+    MAX_RENDER_PIXELS,
+    MAX_STITCH_PIXELS,
+    check_pixels,
+    open_guarded,
+)
 
 # Teach PIL to open HEIF/HEIC (iPhone photos) so ``normalize_image`` can transcode
 # them. Registering the opener is idempotent and cheap.
@@ -50,7 +58,15 @@ def normalize_image(data: bytes, media_type: str, *, name: str = "") -> tuple[by
     if not is_heic(name, media_type):
         return data, media_type
     try:
-        im = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
+        # open_guarded rejects a decompression bomb from the header, before the
+        # convert() below would allocate the full raster.
+        im = ImageOps.exif_transpose(
+            open_guarded(data, what="HEIC/HEIF image")
+        ).convert("RGB")
+    except ValueError:
+        # ImageTooLarge (a ValueError) carries its own clear message — keep it; any
+        # other decode failure becomes the generic per-receipt read error.
+        raise
     except Exception as exc:
         raise ValueError("could not read HEIC/HEIF image") from exc
     buf = io.BytesIO()
@@ -68,7 +84,16 @@ def render_pdf_pages(data: bytes, *, max_pages: int = PDF_MAX_PAGES) -> list[byt
     try:
         pages: list[bytes] = []
         for i in range(min(len(doc), max_pages)):
-            pil = doc[i].render(scale=_RENDER_SCALE).to_pil().convert("RGB")
+            page = doc[i]
+            # Clamp the render scale so a hostile page with a giant MediaBox can't
+            # rasterise to a gigapixel image: keep output ≤ MAX_RENDER_PIXELS.
+            w_pt, h_pt = page.get_size()
+            scale = _RENDER_SCALE
+            if w_pt > 0 and h_pt > 0 and (w_pt * scale) * (h_pt * scale) > MAX_RENDER_PIXELS:
+                # 0.98 leaves headroom for the rasteriser rounding each dimension up,
+                # so the rendered page stays at/under the cap, not a hair over it.
+                scale = math.sqrt(MAX_RENDER_PIXELS * 0.98 / (w_pt * h_pt))
+            pil = page.render(scale=scale).to_pil().convert("RGB")
             buf = io.BytesIO()
             pil.save(buf, format="PNG")
             pages.append(buf.getvalue())
@@ -81,14 +106,20 @@ def stitch_pages(pngs: list[bytes]) -> bytes:
     """Stack page images top-to-bottom into one tall JPEG (normalised to the widest
     page). This IS the whole document as a single viewable evidence image — what a
     strict-provenance client gets instead of split-per-page lines."""
-    imgs = [Image.open(io.BytesIO(p)).convert("RGB") for p in pngs]
+    if not pngs:
+        raise ValueError("no pages to stitch")
+    imgs = [open_guarded(p, what="page image").convert("RGB") for p in pngs]
     width = max(im.width for im in imgs)
     scaled = []
     for im in imgs:
         if im.width != width:
             im = im.resize((width, round(im.height * width / im.width)))
         scaled.append(im)
-    canvas = Image.new("RGB", (width, sum(im.height for im in scaled)), "white")
+    total_height = sum(im.height for im in scaled)
+    # Bound the canvas before allocating it — a pile of tall pages could still add
+    # up past what we should hold in memory even if each page passed on its own.
+    check_pixels(width, total_height, MAX_STITCH_PIXELS, "stitched document")
+    canvas = Image.new("RGB", (width, total_height), "white")
     y = 0
     for im in scaled:
         canvas.paste(im, (0, y))
