@@ -1,5 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Review line — OneCapture ERP Sync{% endblock %}
+{# Appendix D — carbon-related leaf. Carbon-related iff a mapping rule matched
+   (category != 'UNMAPPED'); green leaf = carbon-related, muted dash = not. The
+   tCO₂e figure is an internal estimate, not the product output. #}
+{% macro carbon_leaf(on) -%}
+{%- if on -%}
+<span class="carbon-leaf" data-carbon="1" title="Carbon-related — posts to CarbonNext on release" aria-label="Carbon-related — posts to CarbonNext on release"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1f5d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg> Carbon-related</span>
+{%- else -%}
+<span class="carbon-none muted" data-carbon="0" title="Not carbon-related" aria-label="Not carbon-related">– Not carbon-related</span>
+{%- endif -%}
+{%- endmacro %}
 {% block content %}
 {% if not entry %}
   <section class="card"><h1>Entry not found</h1></section>
@@ -11,6 +21,7 @@
     <p class="muted mono">{{ entry.doc_number or entry.doc_entry }} · line {{ entry.line_num }}</p>
     <dl class="fields">
       <dt>Category</dt><dd>{{ entry.category }}</dd>
+      <dt>Carbon</dt><dd>{{ carbon_leaf(entry.category != 'UNMAPPED') }}</dd>
       <dt>Scope</dt><dd>{{ entry.scope }}</dd>
       <dt>Basis</dt><dd>{{ entry.basis }}</dd>
       <dt>Data quality</dt><dd>{{ entry.data_quality }}</dd>

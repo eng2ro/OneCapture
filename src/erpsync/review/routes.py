@@ -23,6 +23,7 @@ from eclaim.api.schemas import BatchOut
 from eclaim.auth.principal import Principal, list_visible_clients
 from eclaim.db.models import ErpsyncEntry
 from eclaim.services.claims import Repos
+from eclaim.web.routes import _nav_context
 from erpsync.release.service import release_clean
 from erpsync.review import service
 from erpsync.review.service import (
@@ -34,9 +35,15 @@ from erpsync.review.service import (
 )
 
 # Reuse e-Claim's base.html / static styling by searching its template dir too.
+# base.html (the shared shell) reads nav_counts / csrf_token / scope_name from the
+# same _nav_context processor e-Claim registers — without it these pages raise
+# UndefinedError on render, so wire it in here too (mirrors the e-Claim templates).
 ECLAIM_WEB_TEMPLATES = Path(deps.__file__).resolve().parents[1] / "web" / "templates"
 ERPSYNC_TEMPLATES = Path(__file__).resolve().parent / "templates"
-templates = Jinja2Templates(directory=[str(ERPSYNC_TEMPLATES), str(ECLAIM_WEB_TEMPLATES)])
+templates = Jinja2Templates(
+    directory=[str(ERPSYNC_TEMPLATES), str(ECLAIM_WEB_TEMPLATES)],
+    context_processors=[_nav_context],
+)
 
 
 # --------------------------------------------------------------------------- #

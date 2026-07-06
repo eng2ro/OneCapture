@@ -3,6 +3,16 @@
 {% block topbar_sub %}{{ claims | length }} claims in view{% endblock %}
 {% set badge = {"submitted":"info","in_review":"warning","approved":"success","partially_approved":"warning","sent_back":"info","released":"success","rejected":"danger","exported":"success","paid":"success"} %}
 {% set label = {"submitted":"Submitted","in_review":"In review","approved":"Approved","partially_approved":"Partially approved","sent_back":"Sent back","released":"Released","rejected":"Rejected","exported":"Exported","paid":"Paid","attention":"Needs attention"} %}
+{# Appendix D — carbon-related leaf. OneCapture does not compute CO2e; it flags which
+   lines post to CarbonNext on release. A green leaf = carbon-related; a muted dash =
+   not (so the column reads as deliberate, never an empty cell). #}
+{% macro carbon_leaf(on) -%}
+{%- if on -%}
+<span class="carbon-leaf" data-carbon="1" title="Carbon-related — posts to CarbonNext on release" aria-label="Carbon-related — posts to CarbonNext on release"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1f5d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg></span>
+{%- else -%}
+<span class="carbon-none" data-carbon="0" title="Not carbon-related" aria-label="Not carbon-related" style="color:var(--faint);">–</span>
+{%- endif -%}
+{%- endmacro %}
 {% block content %}
 <style>
 @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap");
@@ -97,6 +107,7 @@
           <th>Ref</th>
           <th>Claim</th>
           <th>Lines</th>
+          <th style="text-align:center;" title="Carbon-related — any line posts to CarbonNext on release"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1f5d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="Carbon" style="vertical-align:middle;"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg></th>
           <th style="text-align:right;">Amount (RM)</th>
           <th>Date</th>
           <th>Status</th>
@@ -109,6 +120,7 @@
           <td style="font-family:var(--mono);font-size:11.5px;">{{ c.claim_no or (c.id | string | truncate(8, true, '')) }}</td>
           <td><strong>{{ c.title or ri.get('vendor') or '—' }}</strong><br><span style="font-size:11px;color:var(--faint);">{{ client_names.get(c.client_id, '') }}</span></td>
           <td>{{ ri.get('count', 0) }} line{{ '' if ri.get('count', 0) == 1 else 's' }}</td>
+          <td style="text-align:center;">{{ carbon_leaf(ri.get('carbon')) }}</td>
           <td style="text-align:right;font-family:var(--serif);font-weight:600;font-variant-numeric:tabular-nums;">{{ c.total_claimed if c.total_claimed is not none else '—' }}</td>
           <td>{{ c.created_at.strftime('%d %b') }}</td>
           <td>
@@ -117,10 +129,14 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" style="text-align:center;padding:30px;color:var(--faint);">No claims in this view.</td></tr>
+        <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--faint);">No claims in this view.</td></tr>
         {% endfor %}
       </tbody>
     </table>
+  </div>
+  <div style="margin-top:8px;font-size:11px;color:var(--graphite);display:flex;align-items:center;gap:6px;">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1f5d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg>
+    Carbon-related — a claim with any such line posts to CarbonNext on release.
   </div>
 
   {% set base_qs = (('status=' + current_status) if current_status else '') ~ (('&q=' + q) if (current_status and q) else (('q=' + q) if q else '')) %}
