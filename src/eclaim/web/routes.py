@@ -807,6 +807,12 @@ def _render_review(
             "related_count": len(related),
         }
     carbon_count = sum(1 for ln in lines if ln.carbon_relevant)
+    # Automatic duplicate detection (Appendix A): flag lines that look like an
+    # expense already recorded for this client (another e-Claim, or the ERP feed).
+    # Advisory only — surfaced as an approver warning, never a block.
+    from ..services.duplicates import find_duplicates
+
+    duplicate_flags = find_duplicates(repos, claim, lines)
     # Per-line OCR bounding boxes for the receipt-highlight overlay (field -> box).
     line_boxes = {str(ln.id): (ln.ocr_boxes or {}) for ln in lines}
     # Mileage lines show a route map instead of a receipt.
@@ -880,6 +886,7 @@ def _render_review(
             "budget": budget,
             "related": related,
             "carbon_count": carbon_count,
+            "duplicate_flags": duplicate_flags,
             "events": repos.audit.chain("claim", claim_id),
             "can_review": can_review,
             "review_block_reason": review_block_reason,

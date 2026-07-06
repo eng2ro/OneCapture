@@ -133,6 +133,18 @@
   {% if requires_coding and claim.status in ('approved','partially_approved') and not posting_ready %}
   <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-alert-triangle"></i> Not ready to post — every approved line needs a GL code and cost centre before release. Open a line to add its coding.</div>
   {% endif %}
+  {% if duplicate_flags %}
+  <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-copy"></i>
+    <div>
+      <strong>Possible duplicate{{ 's' if duplicate_flags|length > 1 else '' }}</strong> — this expense may already be recorded. Please check before approving.
+      <ul style="margin:6px 0 0;padding-left:18px;">
+        {% for flag in duplicate_flags %}
+        <li>Line {{ flag.line_no }}: {% for m in flag.matches %}{{ m.reason }} ({{ m.channel }} — {{ m.reference }}){{ '; ' if not loop.last }}{% endfor %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
 
   {# -- Document header (the grouping band) --------------------------------- #}
   {# The fields that describe the whole claim, not a single line — what the
