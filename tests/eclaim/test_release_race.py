@@ -96,6 +96,53 @@ def test_release_collision_resolves_to_idempotent_no_op(client, fake_ocr, db_ses
     assert n == 1
 
 
+def test_reverse_collision_resolves_to_idempotent_no_op(db_session, fake_ocr, tmp_path):
+    """The reverse path has the SAME idempotent-recovery guarantee as release: two
+    concurrent /reverse on one released claim collide on UNIQUE(client_id, batch_hash),
+    and the loser returns the winner's reversal batch instead of a 500 (punch-list P7).
+    """
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    noncarbon = Category(
+        firm_id=ids["firm"], client_id=ids["client"], name="Stationery",
+        expense_type="other", carbon_relevant=False,
+    )
+    db_session.add(noncarbon)
+    db_session.flush()
+
+    claim = svc.start_claim(repos=repos, firm_id=ids["firm"], client_id=ids["client"])
+    fake_ocr.extraction = Extraction(expense_type="other", total_amount=Decimal("40"))
+    svc.add_line(
+        repos=repos, claim=claim, image_bytes=b"\x89PNG\r\n fake", media_type="image/png",
+        ocr=fake_ocr, image_dir=tmp_path, category_id=noncarbon.id,
+    )
+    claim.attested_by = "claimant@seed.test"   # clear the P3 release gate
+    db_session.flush()
+    svc.approve(repos=repos, claim_id=claim.id, actor="r", approver=_partner(db_session))
+    svc.release(repos=repos, claim_id=claim.id, actor="r", principal=_partner(db_session))
+
+    # A concurrent winner already anchored the reversal batch for this claim (the
+    # zero-relevant reversal keys its hash off the claim id).
+    digest = canonical_hash([{"reversal_of": str(claim.id)}])
+    winner = _batch(ids, digest, created_by="winner")
+    db_session.add(winner)
+    db_session.flush()
+    winner_id = winner.id
+
+    result = svc.reverse(
+        repos=repos, claim_id=claim.id, actor="loser", principal=_partner(db_session)
+    )
+    assert result.id == winner_id            # idempotent — returns the winner's batch
+
+    n = db_session.execute(
+        select(func.count()).select_from(ReleaseBatch).where(
+            ReleaseBatch.client_id == ids["client"],
+            ReleaseBatch.batch_hash == digest,
+        )
+    ).scalar_one()
+    assert n == 1                            # no second reversal batch written
+
+
 def test_locking_read_returns_claim(db_session):
     """The FOR UPDATE read used by the transitions resolves the row like a plain get
     (the lock only matters under concurrency); a missing id returns None."""

@@ -27,7 +27,7 @@ from eclaim.repositories import AuditRepository
 from erpsync.persistence.pg_staging import PgStagingStore
 from erpsync.persistence.store import Store
 from erpsync.pipeline import run_import
-from erpsync.release.service import release_clean
+from erpsync.release.service import RELEASABLE_STATUSES, _projection, release_clean
 from gen_synthetic import month_rows, write_csv
 
 
@@ -236,3 +236,47 @@ def test_released_rows_are_rls_isolated_by_firm(db_session, config, tmp_path):
         {"v": str(ids["client"])},
     )
     assert _visible_erpsync_entries() == 3
+
+
+def test_release_clean_collision_resolves_to_idempotent_no_op(db_session, config, tmp_path):
+    """Two concurrent release_clean calls read the same clean rows and compute the same
+    batch hash; the loser collides on UNIQUE(client_id, batch_hash) and must return the
+    winner's batch, not a 500 — the same idempotent-recovery guarantee the e-Claim
+    release path has (punch-list P7)."""
+    from core.release import canonical_hash
+
+    ids = _stage_month(db_session, config, tmp_path)
+    rows = list(
+        db_session.execute(
+            select(ErpsyncEntry)
+            .where(
+                ErpsyncEntry.client_id == ids["client"],
+                ErpsyncEntry.status.in_(RELEASABLE_STATUSES),
+            )
+            .order_by(ErpsyncEntry.created_at, ErpsyncEntry.id)
+        ).scalars()
+    )
+    digest = canonical_hash([_projection(r) for r in rows])
+
+    # A concurrent winner already anchored this exact batch.
+    winner = ReleaseBatch(
+        firm_id=ids["firm"], client_id=ids["client"], source_type="erpsync",
+        created_by="winner", batch_hash=digest, record_count=len(rows),
+        total_tco2e=Decimal("0"), status="released",
+    )
+    db_session.add(winner)
+    db_session.flush()
+    winner_id = winner.id
+
+    result = release_clean(
+        db_session, firm_id=ids["firm"], client_id=ids["client"], actor="loser"
+    )
+    assert result is not None and result.id == winner_id   # idempotent → winner's batch
+
+    n = db_session.execute(
+        select(func.count()).select_from(ReleaseBatch).where(
+            ReleaseBatch.client_id == ids["client"],
+            ReleaseBatch.batch_hash == digest,
+        )
+    ).scalar_one()
+    assert n == 1                                          # no duplicate batch written

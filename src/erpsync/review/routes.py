@@ -207,16 +207,23 @@ def release_client(
 
 
 # --------------------------------------------------------------------------- #
-# Server-rendered pages
+# Server-rendered pages + their cookie-authenticated action routes
+#
+# This is a BROWSER surface: a logged-in reviewer carries the oc_session cookie, not
+# a bearer token, so the pages AND the button actions authenticate by cookie
+# (get_session_principal / get_web_repos) — the bearer JSON API under /api/erpsync is
+# for programmatic clients. The router is CSRF-protected (csrf_protect is a no-op on
+# GETs and on cookie-less requests), so the page buttons post a token-bearing fetch
+# and a cross-site page can't drive approve/dismiss/remap/release (punch-list P7).
 # --------------------------------------------------------------------------- #
-web_router = APIRouter(tags=["erpsync-web"])
+web_router = APIRouter(tags=["erpsync-web"], dependencies=[Depends(deps.csrf_protect)])
 
 
 @web_router.get("/erpsync/review", response_class=HTMLResponse)
 def review_queue_page(
     request: Request,
-    repos: Repos = Depends(deps.get_repos),
-    principal: Principal = Depends(deps.get_principal),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
     rows = service.review_queue(repos.session, principal.allowed_client_ids)
     names = {c.id: c.name for c in list_visible_clients(repos.session, principal)}
@@ -234,10 +241,81 @@ def review_queue_page(
 def entry_review_page(
     request: Request,
     entry_id: uuid.UUID,
-    repos: Repos = Depends(deps.get_repos),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
     entry = repos.session.get(ErpsyncEntry, entry_id)
     events = repos.audit.chain("erpsync_entry", entry_id)
     return templates.TemplateResponse(
         request, "erpsync_entry.html", {"entry": entry, "events": events}
     )
+
+
+@web_router.post("/erpsync/review/entries/{entry_id}/approve")
+def web_approve_entry(
+    entry_id: uuid.UUID,
+    body: ApproveBody | None = None,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> dict:
+    try:
+        service.approve(
+            repos.session, entry_id=entry_id, reviewer=principal,
+            note=(body.note if body else None),
+        )
+    except ReviewError as exc:
+        raise _handle(exc)
+    return {"ok": True}
+
+
+@web_router.post("/erpsync/review/entries/{entry_id}/remap")
+def web_remap_entry(
+    entry_id: uuid.UUID,
+    body: RemapBody,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> dict:
+    try:
+        service.remap(
+            repos.session, entry_id=entry_id,
+            mapping=RemapInput(**body.model_dump()), reviewer=principal,
+        )
+    except ReviewError as exc:
+        raise _handle(exc)
+    return {"ok": True}
+
+
+@web_router.post("/erpsync/review/entries/{entry_id}/dismiss")
+def web_dismiss_entry(
+    entry_id: uuid.UUID,
+    body: DismissBody | None = None,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> dict:
+    body = body or DismissBody()
+    event_type = "rejected_duplicate" if body.reason == "duplicate" else "dismissed"
+    try:
+        service.dismiss(
+            repos.session, entry_id=entry_id, reviewer=principal,
+            event_type=event_type, note=body.note,
+        )
+    except ReviewError as exc:
+        raise _handle(exc)
+    return {"ok": True}
+
+
+@web_router.post("/erpsync/review/clients/{client_id}/release")
+def web_release_client(
+    client_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> dict:
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot release")
+    if not principal.can_access_client(client_id):
+        raise HTTPException(status_code=403, detail="no grant to this client")
+    release_clean(
+        repos.session, firm_id=principal.firm_id, client_id=client_id,
+        actor=principal.email or str(principal.user_id),
+    )
+    return {"ok": True}

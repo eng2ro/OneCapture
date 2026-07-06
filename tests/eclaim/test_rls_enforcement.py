@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from eclaim.db.models import (
+    ApprovalMatrixRule,
     AuditEvent,
     Claim,
     Client,
@@ -35,8 +36,11 @@ from eclaim.db.models import (
 )
 
 # The firm + allowed-client gated tables. (claimant is in the same policy class
-# but we seed no claimants; these four carry the e-Claim ledger + trail.)
-DATA_TABLES = ["claim", "release_batch", "emission_entry", "audit_event"]
+# but we seed no claimants.) approval_matrix_rule carries the same firm+client RLS
+# policy (migration 0023) and must be proven isolated too (punch-list P7).
+DATA_TABLES = [
+    "claim", "release_batch", "emission_entry", "audit_event", "approval_matrix_rule",
+]
 
 
 def _seed_firm(session: Session, label: str) -> dict:
@@ -77,6 +81,10 @@ def _seed_firm(session: Session, label: str) -> dict:
             entity_id=uuid.uuid4(), event_type="submitted", actor="seed",
             hash=f"h-{tag}",
         ),
+        ApprovalMatrixRule(
+            firm_id=firm.id, client_id=client.id, step_order=1,
+            approver_role="manager", approvals_required=1, active=True,
+        ),
     ])
     session.flush()
     return {"firm": firm.id, "client": client.id}
@@ -95,7 +103,8 @@ def two_firms(db_engine):
     finally:
         for entry in made.values():
             fid = entry["firm"]
-            for tbl in ["emission_entry", "audit_event", "release_batch", "claim", "client"]:
+            for tbl in ["emission_entry", "audit_event", "release_batch",
+                        "approval_matrix_rule", "claim", "client"]:
                 owner.execute(text(f"DELETE FROM {tbl} WHERE firm_id = :f"), {"f": fid})
             owner.execute(text("DELETE FROM firm WHERE id = :f"), {"f": fid})
         owner.commit()

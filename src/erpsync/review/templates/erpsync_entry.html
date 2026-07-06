@@ -76,10 +76,13 @@
 
 <script>
   const entryId = "{{ entry.id }}";
+  // Cookie-authenticated + CSRF-protected web action routes (not the bearer JSON API):
+  // a browser session carries the cookie, not a bearer token (punch-list P7).
+  const CSRF = "{{ csrf_token }}";
   async function post(action, body) {
-    const res = await fetch(`/api/erpsync/entries/${entryId}/${action}`, {
+    const res = await fetch(`/erpsync/review/entries/${entryId}/${action}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
       body: JSON.stringify(body || {}),
     });
     if (!res.ok) { alert('Failed: ' + res.status); return false; }

@@ -60,8 +60,13 @@
 </section>
 
 <script>
+  // Cookie-authenticated + CSRF-protected: post to the web action route (the browser
+  // carries the session cookie, not a bearer token) with the session-bound token.
+  const CSRF = "{{ csrf_token }}";
   async function release(clientId) {
-    const res = await fetch(`/api/erpsync/clients/${clientId}/release`, { method: 'POST' });
+    const res = await fetch(`/erpsync/review/clients/${clientId}/release`, {
+      method: 'POST', headers: { 'X-CSRF-Token': CSRF },
+    });
     if (!res.ok) { alert('Release failed: ' + res.status); return; }
     window.location.reload();
   }

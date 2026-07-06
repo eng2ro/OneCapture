@@ -27,6 +27,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from core.release import StubSink, StubTSA, canonical_hash
@@ -86,65 +87,76 @@ def release_clean(
     token = StubTSA().stamp(digest)
     total = sum((row.tco2e for row in rows), start=Decimal("0"))
 
-    batch = releases.add_batch(
-        ReleaseBatch(
-            firm_id=firm_id,
-            client_id=client_id,
-            source_type=SOURCE_TYPE,
-            created_by=actor,
-            batch_hash=digest,
-            tsa_token=token,
-            record_count=len(rows),
-            total_tco2e=total,
-            status="released",
-        )
-    )
-
-    for row in rows:
-        idem = _idempotency_key(client_id, row.id)
-        if releases.entry_for(idem) is None:
-            releases.add_entry(
-                EmissionEntry(
+    # Written in a savepoint. Two concurrent release_clean calls read the same clean
+    # rows and compute the same digest; the loser collides on UNIQUE(client_id,
+    # batch_hash) on release_batch. Map that collision to the same idempotent no-op the
+    # e-Claim release path uses — return the winner's batch, not a 500 (punch-list P7).
+    try:
+        with session.begin_nested():
+            batch = releases.add_batch(
+                ReleaseBatch(
                     firm_id=firm_id,
                     client_id=client_id,
                     source_type=SOURCE_TYPE,
-                    source_id=row.id,
-                    scope=_scope_to_int(row.scope),
-                    factor_key=row.factor_ref,
-                    factor_version=_LEDGER_FACTOR_VERSION,
-                    quantity=row.quantity,
-                    unit=row.uom,
-                    basis=row.basis,
-                    tco2e=row.tco2e,
-                    release_batch_id=batch.id,
-                    idempotency_key=idem,
-                    carbon_ref=f"CARB-{idem[:12].upper()}",
+                    created_by=actor,
+                    batch_hash=digest,
+                    tsa_token=token,
+                    record_count=len(rows),
+                    total_tco2e=total,
+                    status="released",
                 )
             )
-        row.status = "released"
-        record_event(
-            audit,
-            firm_id=firm_id,
-            client_id=client_id,
-            entity_type="erpsync_entry",
-            entity_id=row.id,
-            event_type="released",
-            actor=actor,
-            detail={"batch_hash": digest, "release_batch_id": str(batch.id)},
-        )
 
-    # External seams (stubbed): Carbon Next post + the batch-level TSA anchor event.
-    StubSink().post(digest, len(rows))
-    record_event(
-        audit,
-        firm_id=firm_id,
-        client_id=client_id,
-        entity_type="release_batch",
-        entity_id=batch.id,
-        event_type="tsa_anchored",
-        actor="system",
-        detail={"tsa_token": token, "record_count": len(rows)},
-    )
+            for row in rows:
+                idem = _idempotency_key(client_id, row.id)
+                if releases.entry_for(idem) is None:
+                    releases.add_entry(
+                        EmissionEntry(
+                            firm_id=firm_id,
+                            client_id=client_id,
+                            source_type=SOURCE_TYPE,
+                            source_id=row.id,
+                            scope=_scope_to_int(row.scope),
+                            factor_key=row.factor_ref,
+                            factor_version=_LEDGER_FACTOR_VERSION,
+                            quantity=row.quantity,
+                            unit=row.uom,
+                            basis=row.basis,
+                            tco2e=row.tco2e,
+                            release_batch_id=batch.id,
+                            idempotency_key=idem,
+                            carbon_ref=f"CARB-{idem[:12].upper()}",
+                        )
+                    )
+                row.status = "released"
+                record_event(
+                    audit,
+                    firm_id=firm_id,
+                    client_id=client_id,
+                    entity_type="erpsync_entry",
+                    entity_id=row.id,
+                    event_type="released",
+                    actor=actor,
+                    detail={"batch_hash": digest, "release_batch_id": str(batch.id)},
+                )
+
+            # External seams (stubbed): Carbon Next post + batch-level TSA anchor event.
+            StubSink().post(digest, len(rows))
+            record_event(
+                audit,
+                firm_id=firm_id,
+                client_id=client_id,
+                entity_type="release_batch",
+                entity_id=batch.id,
+                event_type="tsa_anchored",
+                actor="system",
+                detail={"tsa_token": token, "record_count": len(rows)},
+            )
+    except IntegrityError:
+        prior = releases.batch_by_hash(client_id, digest)
+        if prior is not None:
+            return prior          # a concurrent release already anchored this batch
+        raise
     session.flush()
     return batch
 

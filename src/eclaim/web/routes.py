@@ -625,11 +625,12 @@ def web_login(
     email_key = (email or "").strip().lower()
     try:
         limiter.check(ip, email_key)
-    except RateLimited:
+    except RateLimited as rl:
         return templates.TemplateResponse(
             request, "login.html",
             {"error": "Too many sign-in attempts. Please wait a few minutes and try again."},
             status_code=429,
+            headers={"Retry-After": str(rl.retry_after)},
         )
 
     provider = DevAuthProvider(

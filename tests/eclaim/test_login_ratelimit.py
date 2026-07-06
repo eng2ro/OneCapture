@@ -67,3 +67,25 @@ def test_web_login_is_generic_and_throttled(browser):
             break
     assert blocked is not None, "login was never rate-limited"
     assert "Too many" in blocked.text
+    # The 429 must tell the client how long to wait (parity with the API; punch-list P7).
+    assert int(blocked.headers["Retry-After"]) > 0
+
+
+# --- API /auth/login wiring -------------------------------------------------
+def test_api_login_is_generic_and_throttled(browser):
+    """The bearer /auth/login path is throttled and generic too — not just the web
+    form. A wrong login is a 401 with no enumeration; the cap trips to a 429 carrying
+    Retry-After."""
+    bad = {"email": "nobody@nowhere.test", "password": "x"}
+    r = browser.post("/auth/login", json=bad)
+    assert r.status_code == 401
+    assert r.json()["detail"] == "invalid email or password"   # generic, no enumeration
+
+    blocked = None
+    for _ in range(15):
+        r = browser.post("/auth/login", json=bad)
+        if r.status_code == 429:
+            blocked = r
+            break
+    assert blocked is not None, "API login was never rate-limited"
+    assert int(blocked.headers["Retry-After"]) > 0

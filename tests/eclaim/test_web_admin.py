@@ -162,6 +162,8 @@ def test_viewer_and_approver_blocked_from_admin(db_session, fake_ocr, tmp_path):
         c = _client_as(db_session, fake_ocr, tmp_path, role)
         assert c.get("/admin/categories").status_code == 403
         assert c.get("/admin/claimants").status_code == 403
+        # The approval-matrix admin is firm-scope only too (punch-list P7).
+        assert c.get("/admin/approvals").status_code == 403
 
 
 # --------------------------------------------------------------------------- #
