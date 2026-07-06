@@ -19,6 +19,10 @@ MAX_IMAGE_PIXELS = 64_000_000
 # One rendered PDF page — clamps a hostile giant MediaBox down before rasterising
 # (a normal page at ~144 dpi is ~2 MP, so this is generous headroom).
 MAX_RENDER_PIXELS = 8_000_000
+# Cap each rendered dimension too, not only the area — an extreme-aspect page (a
+# sliver MediaBox) can pass the area clamp while one side balloons to a huge strip
+# that still stresses memory and downstream image ops (punch-list P4).
+MAX_RENDER_SIDE = 20_000
 # The whole stitched multi-page evidence image. Bounds the strict-provenance path:
 # the render clamp × the page cap (30) stays under this, so a real document passes.
 MAX_STITCH_PIXELS = 250_000_000

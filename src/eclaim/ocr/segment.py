@@ -28,6 +28,7 @@ import logging
 from typing import Protocol
 
 from ..config import get_settings
+from ..imaging import ImageTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +79,17 @@ def _strip_fences(text: str) -> str:
 
 
 def _thumbnail(data: bytes, *, max_side: int = SEG_THUMB_MAX_SIDE) -> bytes:
-    """Downscale a page render to a small JPEG for boundary detection. On any
-    failure the original bytes are returned unchanged (correctness over size)."""
-    try:
-        from ..imaging import open_guarded
+    """Downscale a page render to a small JPEG for boundary detection. On a benign
+    failure (a format PIL can't thumbnail) the original bytes are returned unchanged
+    (correctness over size) — but a decompression bomb (:class:`ImageTooLarge`) is
+    NEVER swallowed: returning the original bytes would ship the bomb straight to the
+    vision API and defeat the guard (punch-list P4). It propagates so the caller can
+    reject the page / fall back safely."""
+    from ..imaging import ImageTooLarge, open_guarded
 
-        # Bomb-guarded open (also arms PIL's global pixel ceiling). Any oversize/decode
-        # failure is caught below and the original bytes are returned unchanged.
+    try:
+        # Bomb-guarded open (also arms PIL's global pixel ceiling). ImageTooLarge is
+        # raised from the header BEFORE the full raster is allocated.
         im = open_guarded(data, what="segmentation thumbnail").convert("RGB")
         w, h = im.size
         scale = min(1.0, max_side / max(w, h))
@@ -93,6 +98,8 @@ def _thumbnail(data: bytes, *, max_side: int = SEG_THUMB_MAX_SIDE) -> bytes:
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=70)
         return buf.getvalue()
+    except ImageTooLarge:
+        raise                       # never hand a bomb's bytes back to the caller
     except Exception:
         return data
 
@@ -182,7 +189,15 @@ class AnthropicPageSegmenter(PageSegmenter):
             )
             return one_per_page(n)
 
-        thumbs = [_thumbnail(p) for p in pages]
+        try:
+            thumbs = [_thumbnail(p) for p in pages]
+        except ImageTooLarge:
+            # A page exceeds the decode cap (likely a bomb). Do NOT send raw page
+            # bytes to the vision API; fall back to one-per-page. The oversize page
+            # is still rejected downstream by the ingestion decode guards.
+            logger.warning(
+                "segmenter: a page exceeds the decode cap; one-per-page fallback")
+            return one_per_page(n)
         ranges = _plan_batches(n, SEG_MAX_PAGES_PER_BATCH)
         partitions: list[list[list[int]] | None] = []
         for start, end in ranges:

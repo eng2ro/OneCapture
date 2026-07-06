@@ -23,6 +23,7 @@ from PIL import Image, ImageOps
 
 from ..imaging import (
     MAX_RENDER_PIXELS,
+    MAX_RENDER_SIDE,
     MAX_STITCH_PIXELS,
     check_pixels,
     open_guarded,
@@ -89,10 +90,16 @@ def render_pdf_pages(data: bytes, *, max_pages: int = PDF_MAX_PAGES) -> list[byt
             # rasterise to a gigapixel image: keep output ≤ MAX_RENDER_PIXELS.
             w_pt, h_pt = page.get_size()
             scale = _RENDER_SCALE
-            if w_pt > 0 and h_pt > 0 and (w_pt * scale) * (h_pt * scale) > MAX_RENDER_PIXELS:
-                # 0.98 leaves headroom for the rasteriser rounding each dimension up,
-                # so the rendered page stays at/under the cap, not a hair over it.
-                scale = math.sqrt(MAX_RENDER_PIXELS * 0.98 / (w_pt * h_pt))
+            if w_pt > 0 and h_pt > 0:
+                if (w_pt * scale) * (h_pt * scale) > MAX_RENDER_PIXELS:
+                    # 0.98 leaves headroom for the rasteriser rounding each dimension
+                    # up, so the rendered page stays at/under the cap, not a hair over.
+                    scale = math.sqrt(MAX_RENDER_PIXELS * 0.98 / (w_pt * h_pt))
+                # Also clamp by longest side: an extreme-aspect page can sit under the
+                # area cap while one dimension balloons into a huge strip (P4).
+                longest = max(w_pt, h_pt) * scale
+                if longest > MAX_RENDER_SIDE:
+                    scale *= MAX_RENDER_SIDE * 0.98 / longest
             pil = page.render(scale=scale).to_pil().convert("RGB")
             buf = io.BytesIO()
             pil.save(buf, format="PNG")
@@ -110,15 +117,23 @@ def stitch_pages(pngs: list[bytes]) -> bytes:
         raise ValueError("no pages to stitch")
     imgs = [open_guarded(p, what="page image").convert("RGB") for p in pngs]
     width = max(im.width for im in imgs)
-    scaled = []
-    for im in imgs:
-        if im.width != width:
-            im = im.resize((width, round(im.height * width / im.width)))
-        scaled.append(im)
-    total_height = sum(im.height for im in scaled)
-    # Bound the canvas before allocating it — a pile of tall pages could still add
-    # up past what we should hold in memory even if each page passed on its own.
+    # Normalising to the widest page scales each narrower page UP; a page with an
+    # extreme aspect ratio (a sliver that passed its own open_guarded) would then
+    # explode in .resize() BEFORE any cap check saw it. So compute every page's
+    # post-normalisation height and bound each one AND the total BEFORE allocating a
+    # single resized raster (punch-list P4: check-before-resize).
+    target_heights = [
+        im.height if im.width == width else round(im.height * width / im.width)
+        for im in imgs
+    ]
+    for h in target_heights:
+        check_pixels(width, h, MAX_STITCH_PIXELS, "stitched page")
+    total_height = sum(target_heights)
     check_pixels(width, total_height, MAX_STITCH_PIXELS, "stitched document")
+    scaled = [
+        im if im.width == width else im.resize((width, h))
+        for im, h in zip(imgs, target_heights)
+    ]
     canvas = Image.new("RGB", (width, total_height), "white")
     y = 0
     for im in scaled:
