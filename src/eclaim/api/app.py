@@ -44,8 +44,17 @@ async def _lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     # Fail fast if a production deployment is misconfigured (default secret,
     # insecure cookie). No-op in dev, so local runs are unaffected.
-    get_settings().assert_production_safe()
+    settings = get_settings()
+    settings.assert_production_safe()
     app = FastAPI(title="OneCapture", version="0.2.0", lifespan=_lifespan)
+    # Per-app login throttle (HIGH). App-scoped (not a module global) so each test's
+    # fresh app starts with a clean limiter — no cross-test bleed.
+    from ..auth.ratelimit import LoginRateLimiter
+
+    app.state.login_limiter = LoginRateLimiter(
+        max_attempts=settings.login_max_attempts,
+        window_seconds=settings.login_window_seconds,
+    )
     app.include_router(auth_router)
     app.include_router(api_router)
     app.include_router(web_router)

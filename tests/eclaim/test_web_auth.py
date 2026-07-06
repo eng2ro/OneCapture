@@ -61,8 +61,10 @@ def test_login_page_renders(browser):
 
 def test_bad_credentials_rerender_with_error_and_no_cookie(browser):
     resp = browser.post("/login", data={"email": "nobody@nowhere.test"}, follow_redirects=False)
-    assert resp.status_code == 200            # re-rendered form, not a redirect
-    assert "unknown user" in resp.text
+    assert resp.status_code == 401            # re-rendered form with an error, no redirect
+    # Generic message — must NOT reveal whether the account exists (no enumeration).
+    assert "Sign in failed" in resp.text
+    assert "unknown user" not in resp.text
     assert "oc_session" not in resp.headers.get("set-cookie", "")   # no session issued
 
 

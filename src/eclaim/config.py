@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
 
+    # Login brute-force throttle (HIGH): block after this many failed attempts per
+    # IP or per email within the rolling window. Settings so a firm can tune them.
+    login_max_attempts: int = 10
+    login_window_seconds: int = 900   # 15 minutes
+
     # "Share gate" — an OUTER HTTP Basic Auth front door for TEMPORARILY exposing a
     # dev instance (e.g. through a tunnel) to a colleague, so a random visitor who
     # finds the public URL can't reach the passwordless app. INACTIVE unless BOTH are

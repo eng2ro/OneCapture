@@ -38,6 +38,7 @@ from ..api import deps
 from ..auth import csrf
 from ..auth.principal import Principal, list_visible_clients
 from ..auth.provider import AuthError, DevAuthProvider
+from ..auth.ratelimit import RateLimited, client_ip
 from ..config import get_settings
 from ..db.models import Category, Claimant, Client, Event, IngestionJob
 from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
@@ -591,17 +592,35 @@ def web_login(
     db: Session = Depends(deps.get_db),
 ):
     """Authenticate via the same DevAuthProvider as POST /auth/login, then set the
-    session cookie and redirect to the inbox. On failure, re-render with an error
-    and set no cookie."""
+    session cookie and redirect to the inbox. On failure, re-render with a GENERIC
+    error and set no cookie; repeated failures are throttled per IP + email."""
     settings = get_settings()
+    limiter = request.app.state.login_limiter
+    ip = client_ip(request)
+    email_key = (email or "").strip().lower()
+    try:
+        limiter.check(ip, email_key)
+    except RateLimited:
+        return templates.TemplateResponse(
+            request, "login.html",
+            {"error": "Too many sign-in attempts. Please wait a few minutes and try again."},
+            status_code=429,
+        )
+
     provider = DevAuthProvider(
         db, secret=settings.jwt_secret, ttl_seconds=settings.jwt_ttl_seconds,
         allow_passwordless=settings.dev_auth_allowed,
     )
     try:
         token = provider.login(email, password or None)
-    except AuthError as exc:
-        return templates.TemplateResponse(request, "login.html", {"error": str(exc)})
+    except AuthError:
+        limiter.record_failure(ip, email_key)
+        return templates.TemplateResponse(
+            request, "login.html",
+            {"error": "Sign in failed — check your email and try again."},
+            status_code=401,
+        )
+    limiter.record_success(ip, email_key)
     resp = RedirectResponse("/claims", status_code=303)
     resp.set_cookie(
         deps.SESSION_COOKIE,
