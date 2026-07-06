@@ -3,6 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <script>
+  /* CSRF: attach the session-bound token to every same-origin state-changing
+     fetch/XHR, so the page's JS calls (receipt OCR, mileage preview, …) pass the
+     server guard without each call having to remember. Native <form> submits carry
+     it as a hidden _csrf field instead. */
+  (function () {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    var token = meta ? meta.getAttribute('content') : '';
+    if (!token || !window.fetch) return;
+    var UNSAFE = { POST: 1, PUT: 1, PATCH: 1, DELETE: 1 };
+    var origFetch = window.fetch;
+    window.fetch = function (input, init) {
+      init = init || {};
+      var method = (init.method || (input && input.method) || 'GET').toUpperCase();
+      var url = (typeof input === 'string') ? input : (input && input.url) || '';
+      var sameOrigin = url.indexOf('://') === -1 || url.indexOf(window.location.origin) === 0;
+      if (sameOrigin && UNSAFE[method]) {
+        var headers = new Headers(init.headers || (input && input.headers) || {});
+        if (!headers.has('X-CSRF-Token')) headers.set('X-CSRF-Token', token);
+        init.headers = headers;
+      }
+      return origFetch.call(this, input, init);
+    };
+  })();
+  </script>
   <title>{% block title %}OneCapture e-Claim{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css?v=20260630c">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
@@ -101,6 +127,7 @@
       <div class="oc-nav-h">ACCOUNT</div>
       <a class="oc-nav-i" href="/"><i class="ti ti-circles-relation"></i><span class="lab">Back to Hub</span></a>
       <form method="post" action="/logout" style="margin:0;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <button class="oc-nav-i" type="submit"><i class="ti ti-logout"></i><span class="lab">Sign out</span></button>
       </form>
     </nav>

@@ -21,6 +21,7 @@
   <div class="card" style="margin-bottom:14px;">
     <div class="card-title" style="margin-bottom:12px;">{{ 'Edit event' if editing else 'Create an event' }}</div>
     <form method="post" action="/admin/events">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       {% if editing %}<input type="hidden" name="event_id" value="{{ editing.id }}">{% endif %}
       <div class="field-row">
         <div><label class="label-tiny">Client</label>

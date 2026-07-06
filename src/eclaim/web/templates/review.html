@@ -241,6 +241,7 @@
     <div style="font-size:11px;color:var(--text-secondary);margin:4px 0 0;"><i class="ti ti-click"></i> Click any line to view its receipt and verify the captured details.{% if allow_split %} Tick two or more lines to <b>merge</b> pages of one invoice; a multi-page line can be <b>split</b> back into pages.{% endif %}</div>
 
     <form method="post" action="/claims/{{ claim.id }}/decide" id="decide-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
     <table class="data" style="margin-top:8px;">
       <thead>
         <tr>
@@ -311,8 +312,10 @@
   {# Merge/split post to their own forms (kept OUTSIDE the decide form above so
      forms never nest). JS fills them from the row checkboxes / Split buttons. #}
   {% if allow_split %}
-  <form id="merge-form" method="post" action="/claims/{{ claim.id }}/lines/merge" hidden></form>
+  <form id="merge-form" method="post" action="/claims/{{ claim.id }}/lines/merge" hidden>
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}"></form>
   <form id="split-form" method="post" action="/claims/{{ claim.id }}/lines/split" hidden>
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
     <input type="hidden" name="line_id" id="split-line-id">
   </form>
   {% endif %}
@@ -336,25 +339,31 @@
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     {% if can_review %}
       <form method="post" action="/claims/{{ claim.id }}/reject" style="flex:1;display:flex;gap:6px;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <input class="field" name="reason" placeholder="Reason" style="flex:1;">
         <button class="btn" type="submit"><i class="ti ti-x"></i>Reject all</button>
       </form>
       <form method="post" action="/claims/{{ claim.id }}/send-back" style="flex:1;display:flex;gap:6px;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <input class="field" name="reason" placeholder="Reason" style="flex:1;">
         <button class="btn" type="submit"><i class="ti ti-arrow-back-up"></i>Send back</button>
       </form>
       <form method="post" action="/claims/{{ claim.id }}/approve" style="flex:1;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;padding:9px 14px;"><i class="ti ti-check"></i>Approve all</button>
       </form>
     {% endif %}
     {% if can_reopen %}
-      <form method="post" action="/claims/{{ claim.id }}/unapprove" style="flex:1;"><button class="btn" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-lock-open"></i>Unapprove &amp; amend</button></form>
+      <form method="post" action="/claims/{{ claim.id }}/unapprove" style="flex:1;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}"><button class="btn" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-lock-open"></i>Unapprove &amp; amend</button></form>
     {% endif %}
     {% if can_resubmit %}
-      <form method="post" action="/claims/{{ claim.id }}/resubmit" style="flex:1;"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-send"></i>Resubmit to review</button></form>
+      <form method="post" action="/claims/{{ claim.id }}/resubmit" style="flex:1;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-send"></i>Resubmit to review</button></form>
     {% endif %}
     {% if can_release %}
-      <form method="post" action="/claims/{{ claim.id }}/release" style="flex:1;"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-check"></i>Release</button></form>
+      <form method="post" action="/claims/{{ claim.id }}/release" style="flex:1;">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-check"></i>Release</button></form>
     {% endif %}
     {% if claim.status == 'released' %}<div class="badge success" style="padding:9px 14px;">Released &amp; anchored — immutable</div>{% endif %}
     {% if claim.status == 'rejected' %}<div class="badge danger" style="padding:9px 14px;">Rejected — terminal</div>{% endif %}
@@ -412,6 +421,7 @@
             {% for ln in lines %}
             <div class="edit-panel" id="edit-{{ ln.id }}" style="{{ '' if loop.first else 'display:none;' }}">
               <form method="post" action="/claims/{{ claim.id }}/category" style="margin-bottom:12px;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <input type="hidden" name="line_id" value="{{ ln.id }}">
                 <label class="label-tiny">Category</label>
                 <div style="display:flex;gap:8px;">
@@ -422,6 +432,7 @@
                 </div>
               </form>
               <form method="post" action="/claims/{{ claim.id }}/edit">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <input type="hidden" name="line_id" value="{{ ln.id }}">
                 <div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;"><i class="ti ti-info-circle"></i> Correct anything the OCR got wrong, then <strong>Save line</strong> (button stays pinned below).</div>
                 <div class="field-row">
@@ -502,6 +513,7 @@
                  Finance can still set the accounting CODING so the claim can post. #}
               {% if can_code %}
               <form method="post" action="/claims/{{ claim.id }}/edit" style="margin-top:14px;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
                 <input type="hidden" name="line_id" value="{{ ln.id }}">
                 <div class="card-title" style="margin:0 0 8px;font-size:12px;">Accounting coding
                   <span style="font-weight:400;color:var(--text-tertiary);font-size:10px;">— required to post · expense is locked after approval</span></div>
@@ -570,6 +582,7 @@
       </div>
       <div class="modal-body">
         <form method="post" action="/claims/{{ claim.id }}/mileage" id="add-mileage-form">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <input type="hidden" name="waypoints" id="am-waypoints" value="[]">
           <input type="hidden" name="route_index" id="am-route-index" value="0">
           <div class="field-row">
@@ -601,6 +614,7 @@
       </div>
       <div class="modal-body">
         <form method="post" action="/claims/{{ claim.id }}/header">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <div class="field-row">
             <div><label class="label-tiny">Title</label><input class="field" name="title" value="{{ claim.title or '' }}" placeholder="e.g. KL client trip — Mar"></div>
             <div><label class="label-tiny">Posting date</label><input class="field" type="date" name="posting_date" value="{{ claim.posting_date if claim.posting_date else '' }}"></div>

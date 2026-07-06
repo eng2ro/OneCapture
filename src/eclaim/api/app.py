@@ -18,7 +18,7 @@ from erpsync.review.routes import web_router as erpsync_web_router
 from ..auth.routes import router as auth_router
 from ..config import get_settings
 from ..web.routes import WEB_DIR, router as web_router
-from .deps import NeedsLogin, WebForbidden
+from .deps import CsrfError, NeedsLogin, WebForbidden
 from .routes import router as api_router
 
 
@@ -103,6 +103,24 @@ def create_app() -> FastAPI:
 
         return templates.TemplateResponse(
             request, "_forbidden.html", {"detail": str(exc) or None}, status_code=403
+        )
+
+    # A cookie-authenticated state-changing request without a valid CSRF token:
+    # blocked as a 403 with a readable page (a forged cross-site POST, or a stale
+    # form after the session rotated). The browser can reload and retry.
+    @app.exception_handler(CsrfError)
+    async def _csrf_failed(request: Request, exc: CsrfError) -> Response:
+        from ..web.routes import templates
+
+        return templates.TemplateResponse(
+            request,
+            "_forbidden.html",
+            {
+                "heading": "Please reload and try again",
+                "detail": "Your security token was missing or has expired. "
+                "Reload the page and try again.",
+            },
+            status_code=403,
         )
 
     return app

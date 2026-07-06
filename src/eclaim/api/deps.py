@@ -123,6 +123,54 @@ def get_web_repos(
     return Repos.for_session(db)
 
 
+class CsrfError(Exception):
+    """A cookie-authenticated state-changing web request arrived without the
+    matching CSRF token — a cross-site forgery, or a stale/expired form. The app
+    renders it as a friendly 403 page."""
+
+
+# Unsafe (state-changing) HTTP methods that must carry a CSRF token when the
+# request is authenticated by the session cookie.
+_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# Pre-session routes: there is no session cookie to bind a token to yet, so CSRF
+# does not apply (login CSRF is a distinct, low-severity concern handled by the
+# SameSite=Lax cookie and is out of scope here).
+_CSRF_EXEMPT_PATHS = frozenset({"/login"})
+
+
+async def csrf_protect(request: Request) -> None:
+    """Fail-closed CSRF guard for the cookie-authenticated web surface, wired as a
+    router-level dependency so every current and future web route is covered.
+
+    It enforces only when a request is actually cookie-authenticated: safe methods
+    and requests with no ``oc_session`` cookie pass through untouched. The latter
+    are either unauthenticated (the route's own auth redirects them to /login) or
+    bearer API calls on a separate router (CSRF-immune — a browser never sends an
+    ``Authorization`` header cross-site), so this never fires on them.
+
+    The token may ride in the ``X-CSRF-Token`` header (fetch/XHR) or the ``_csrf``
+    form field (native form submits). The form is only parsed when needed and is
+    cached on the request, so the handler's own ``Form()``/``request.form()`` reads
+    reuse it — no double-consume of the body."""
+    if request.method not in _UNSAFE_METHODS:
+        return
+    if request.url.path in _CSRF_EXEMPT_PATHS:
+        return
+    session_token = request.cookies.get(SESSION_COOKIE)
+    if not session_token:
+        return
+    submitted: object | None = request.headers.get("x-csrf-token")
+    if submitted is None:
+        ctype = request.headers.get("content-type", "")
+        if ctype.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+            form = await request.form()
+            submitted = form.get("_csrf")
+    from ..auth import csrf
+
+    if not csrf.valid(session_token, submitted, secret=get_settings().jwt_secret):
+        raise CsrfError()
+
+
 def require_firm_scope(
     principal: Principal = Depends(get_session_principal),
 ) -> Principal:

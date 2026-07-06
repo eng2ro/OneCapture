@@ -35,6 +35,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..api import deps
+from ..auth import csrf
 from ..auth.principal import Principal, list_visible_clients
 from ..auth.provider import AuthError, DevAuthProvider
 from ..config import get_settings
@@ -67,12 +68,20 @@ def _nav_context(request: Request) -> dict:
     mockup placeholders. Reads the principal + session stashed on request.state
     by get_session_principal (unauthenticated pages → bare defaults)."""
     principal = getattr(request.state, "principal", None)
+    # Session-bound CSRF token for every rendered form / fetch on the page (bound to
+    # the presented session cookie; empty on unauthenticated pages like /login).
+    session_token = request.cookies.get(deps.SESSION_COOKIE)
     ctx: dict = {
         "principal": principal,
         "is_firm_scoped": bool(principal and principal.is_firm_scoped),
         "nav_counts": {},
         "nav_total": 0,
         "scope_name": None,
+        "csrf_token": (
+            csrf.issue(session_token, secret=get_settings().jwt_secret)
+            if session_token
+            else ""
+        ),
     }
     db = getattr(request.state, "db", None)
     if principal is None or db is None:
@@ -98,7 +107,10 @@ templates = Jinja2Templates(
     directory=str(WEB_DIR / "templates"), context_processors=[_nav_context]
 )
 
-router = APIRouter(tags=["web"])
+# Every state-changing web route is CSRF-guarded by this router-level dependency
+# (fail-closed: covers current and future routes without per-handler wiring). It
+# no-ops on safe methods and on non-cookie requests — see deps.csrf_protect.
+router = APIRouter(tags=["web"], dependencies=[Depends(deps.csrf_protect)])
 _service = ClaimService()
 
 CLAIM_STATUSES = [

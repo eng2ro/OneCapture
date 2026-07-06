@@ -178,6 +178,7 @@
   {% endif %}
 
   <form method="post" action="/capture" enctype="multipart/form-data" id="capture-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
     <input type="hidden" name="items" id="f-items" value="[]">
     <input type="hidden" name="mileage" id="f-mileage" value="[]">
 

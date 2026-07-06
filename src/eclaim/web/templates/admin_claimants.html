@@ -24,6 +24,7 @@
   <div class="card" style="margin-bottom:14px;">
     <div class="card-title" style="margin-bottom:12px;">{{ 'Edit claimant' if editing else 'Add a claimant' }}</div>
     <form method="post" action="/admin/claimants">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       {% if editing %}<input type="hidden" name="claimant_id" value="{{ editing.id }}">{% endif %}
       <div class="field-row">
         <div><label class="label-tiny">Client</label>
