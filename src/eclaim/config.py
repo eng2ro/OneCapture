@@ -71,6 +71,19 @@ class Settings(BaseSettings):
 
     image_dir: Path = DEFAULT_IMAGE_DIR
 
+    # Upload guards (blocker B7): the whole request body is buffered in memory
+    # (UploadFile.read / request.form), so an unbounded upload OOMs the single
+    # host. Cap the request body size and the number of files per capture. Both
+    # are settings (Appendix B: configuration, not customization) — a firm with
+    # heavy bulk/PDF batches can raise them. Default 50 MB comfortably fits a
+    # multi-page PDF or a modest receipt ZIP while bounding worst-case memory.
+    max_upload_mb: int = 50
+    max_upload_files: int = 100
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.max_upload_mb * 1024 * 1024
+
     # "Share gate" — an OUTER HTTP Basic Auth front door for TEMPORARILY exposing a
     # dev instance (e.g. through a tunnel) to a colleague, so a random visitor who
     # finds the public URL can't reach the passwordless app. INACTIVE unless BOTH are

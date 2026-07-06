@@ -19,6 +19,7 @@ from ..auth.routes import router as auth_router
 from ..config import get_settings
 from ..web.routes import WEB_DIR, router as web_router
 from .deps import CsrfError, NeedsLogin, WebForbidden
+from .limits import BodySizeLimitMiddleware
 from .routes import router as api_router
 
 
@@ -52,6 +53,9 @@ def create_app() -> FastAPI:
     app.include_router(erpsync_api_router)
     app.include_router(erpsync_web_router)
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
+    # Cap the request body before any handler buffers it in memory (blocker B7).
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=get_settings().max_upload_bytes)
 
     # Server-rendered HTML is always live (auth-gated, per-request state) and its
     # behaviour ships as INLINE script — so a cached page silently runs stale JS.

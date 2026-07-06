@@ -308,18 +308,6 @@ async def web_capture(
     _client = repos.session.get(Client, client_id)
     split_docs = bool(_client and (_client.modules or {}).get("allow_document_split"))
 
-    # Slurp the uploads into memory once (skip empty file parts — an empty selection
-    # posts a part with no filename, e.g. a mileage-only claim).
-    staged: list[dict] = []
-    for f in files:
-        if not (f.filename or "").strip():
-            continue
-        staged.append({
-            "name": f.filename,
-            "media_type": f.content_type or "application/octet-stream",
-            "bytes": await f.read(),
-        })
-
     header = {
         "title": title, "purpose": purpose, "remarks": remarks,
         "posting_date": posting_date, "claim_type": claim_type,
@@ -333,6 +321,28 @@ async def web_capture(
         "remarks": remarks, "posting_date": posting_date,
         "start_date": start_date, "end_date": end_date, "event_id": event_id,
     }
+
+    # Reject an unreasonable number of file parts up front (blocker B7) — the byte
+    # cap bounds total size, this bounds fan-out (each file is a slow vision read).
+    max_files = get_settings().max_upload_files
+    named_files = [f for f in files if (f.filename or "").strip()]
+    if len(named_files) > max_files:
+        return _render_capture(
+            request, _capture_categories(repos), _events_for(repos),
+            f"Too many files — please upload at most {max_files} at once "
+            f"(you selected {len(named_files)}).",
+            form,
+        )
+
+    # Slurp the uploads into memory once (skip empty file parts — an empty selection
+    # posts a part with no filename, e.g. a mileage-only claim).
+    staged: list[dict] = []
+    for f in named_files:
+        staged.append({
+            "name": f.filename,
+            "media_type": f.content_type or "application/octet-stream",
+            "bytes": await f.read(),
+        })
 
     # Large batches read too slowly to do in the request — stage + enqueue for the
     # background worker and send the browser to the progress page.
