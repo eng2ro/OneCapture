@@ -535,6 +535,7 @@ def web_capture_mileage(
     trip_date: str = Form(""),
     title: str = Form(""),
     event_id: str = Form(""),
+    attested: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ):
@@ -542,7 +543,11 @@ def web_capture_mileage(
     Directions provider (authoritative for reimbursement — never trust client km),
     prices it at the per-km rate, and lands on the review screen. ``route_index``
     selects the alternative the claimant picked; the recommended distance is kept so
-    a longer-than-recommended route is flagged to the approver."""
+    a longer-than-recommended route is flagged to the approver.
+
+    A mileage line is out-of-pocket reimbursement, so — like the main /capture form —
+    the claimant must attest before it is saved (punch-list P3); the attestation is
+    stamped on the claim so it clears the release gate."""
     from ..maps import MapError
 
     client_id = deps.default_client_id(repos.session)
@@ -557,6 +562,10 @@ def web_capture_mileage(
     if not trip_date.strip():
         return _render_capture(request, _capture_categories(repos), _events_for(repos),
                                "A trip date is required for a mileage claim.", form)
+    if not attested.strip():
+        return _render_capture(request, _capture_categories(repos), _events_for(repos),
+                               "Please confirm the out-of-pocket declaration to submit "
+                               "a mileage claim.", form)
     try:
         route, shortest_km = _resolve_route(
             origin.strip(), destination.strip(), wps, _parse_int(route_index))
@@ -587,7 +596,8 @@ def web_capture_mileage(
         set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
         return _render_capture(request, _capture_categories(repos), _events_for(repos),
                                str(exc), form)
-    _service.submit(repos=repos, claim=claim, actor=_actor(principal), line_count=1)
+    _service.submit(repos=repos, claim=claim, actor=_actor(principal), line_count=1,
+                    attested=True)
     return RedirectResponse(f"/claims/{claim.id}/review", status_code=303)
 
 

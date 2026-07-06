@@ -24,7 +24,8 @@ from eclaim.services.evidence import EvidenceService
 def _upload(client, fake_ocr, extraction: Extraction):
     fake_ocr.extraction = extraction
     files = {"file": ("receipt.png", b"\x89PNG\r\n fake-bytes", "image/png")}
-    return client.post("/api/claims/upload", files=files)
+    # Attest — an out-of-pocket claim can't release without it (P3 gate).
+    return client.post("/api/claims/upload", files=files, data={"attested": "true"})
 
 
 def _release(client, fake_ocr, extraction: Extraction) -> str:

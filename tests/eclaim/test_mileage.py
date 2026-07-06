@@ -79,6 +79,7 @@ def test_mileage_claim_priced_from_server_distance(client, db_session, monkeypat
 
     resp = client.post("/capture/mileage", data={
         "origin": "KL Sentral", "destination": "Cyberjaya", "trip_date": "2026-03-12",
+        "attested": "yes",
     }, follow_redirects=False)
     assert resp.status_code == 303
 
@@ -86,6 +87,7 @@ def test_mileage_claim_priced_from_server_distance(client, db_session, monkeypat
     line = db_session.execute(
         select(ClaimLine).filter_by(claim_id=claim.id)
     ).scalar_one()
+    assert claim.attested_by is not None            # mileage attestation recorded
     assert line.expense_type == "mileage"
     assert line.quantity == Decimal("38.200") and line.unit == "km"
     assert line.total_amount == Decimal("22.92")   # 38.200 km × RM 0.60/km
@@ -117,6 +119,7 @@ def test_chosen_longer_route_is_reimbursed_and_flagged(client, db_session, monke
 
     resp = client.post("/capture/mileage", data={
         "origin": "A", "destination": "B", "route_index": "1", "trip_date": "2026-03-12",
+        "attested": "yes",
     }, follow_redirects=False)
     assert resp.status_code == 303
 
@@ -133,7 +136,8 @@ def test_recommended_route_not_flagged(client, db_session, monkeypatch):
     monkeypatch.setattr(deps, "get_directions", lambda: _FakeAltDirections())
     _mileage_category(db_session)
     client.post("/capture/mileage",
-                data={"origin": "A", "destination": "B", "trip_date": "2026-03-12"},
+                data={"origin": "A", "destination": "B", "trip_date": "2026-03-12",
+                      "attested": "yes"},
                 follow_redirects=False)   # route_index defaults to 0 (recommended)
     line = db_session.execute(select(ClaimLine)).scalar_one()
     assert line.quantity == Decimal("38.200")
@@ -161,6 +165,21 @@ def test_mileage_requires_trip_date(client, db_session, monkeypatch):
                        follow_redirects=False)
     assert resp.status_code == 200
     assert "trip date is required" in resp.text
+    assert db_session.execute(select(Claim)).scalars().first() is None
+
+
+def test_mileage_requires_attestation(client, db_session, monkeypatch):
+    """A mileage claim is out-of-pocket reimbursement, so the legacy /capture/mileage
+    route must require the attestation (punch-list P3) exactly like the main capture
+    form — no attested checkbox, nothing saved. Fails if the guard is removed."""
+    from eclaim.api import deps
+    monkeypatch.setattr(deps, "get_directions", lambda: _FakeDirections())
+    _mileage_category(db_session)
+    resp = client.post("/capture/mileage",
+                       data={"origin": "A", "destination": "B", "trip_date": "2026-03-12"},
+                       follow_redirects=False)   # no attested
+    assert resp.status_code == 200
+    assert "out-of-pocket declaration" in resp.text
     assert db_session.execute(select(Claim)).scalars().first() is None
 
 
@@ -198,7 +217,8 @@ def test_cannot_add_mileage_to_released_claim(client, db_session, monkeypatch):
     monkeypatch.setattr(deps, "get_directions", lambda: _FakeDirections())
     _mileage_category(db_session)
     client.post("/capture/mileage",
-                data={"origin": "A", "destination": "B", "trip_date": "2026-03-12"},
+                data={"origin": "A", "destination": "B", "trip_date": "2026-03-12",
+                      "attested": "yes"},
                 follow_redirects=False)
     claim = db_session.execute(select(Claim)).scalars().one()
     assert client.post(f"/api/claims/{claim.id}/approve").status_code == 200
@@ -217,6 +237,7 @@ def test_review_shows_route_map_for_mileage(client, db_session, monkeypatch):
     _mileage_category(db_session)
     client.post("/capture/mileage", data={
         "origin": "KL Sentral", "destination": "Cyberjaya", "trip_date": "2026-03-12",
+        "attested": "yes",
     }, follow_redirects=False)
     claim = db_session.execute(select(Claim)).scalars().one()
     page = client.get(f"/claims/{claim.id}/review").text

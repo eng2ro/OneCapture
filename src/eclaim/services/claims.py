@@ -108,6 +108,12 @@ class IllegalTransition(ClaimError):
     """An operation not allowed from the claim's current status."""
 
 
+class AttestationRequired(ClaimError):
+    """A claim that reimburses out-of-pocket expense cannot be released until the
+    claimant has attested (Appendix A / punch-list P3). The downstream gate that
+    closes the hole for every capture path, not just the web form."""
+
+
 class ClaimService:
     """Stateless: all state is in the repositories passed per call."""
 
@@ -534,10 +540,16 @@ class ClaimService:
         claimant_ref: str | None = None,
         submitted_by_claimant_id: uuid.UUID | None = None,
         category_id: uuid.UUID | None = None,
+        attested: bool = False,
     ) -> Claim:
         """Single-receipt convenience: a claim with exactly one line, then
         'submitted' (the API/back-compat entry point). The web capture path builds
-        a multi-line claim directly via :meth:`start_claim` + :meth:`add_line`."""
+        a multi-line claim directly via :meth:`start_claim` + :meth:`add_line`.
+
+        ``attested`` records the claimant's out-of-pocket declaration (Appendix A):
+        when the line is out-of-pocket and ``attested`` is set, the claim is stamped
+        (who + when), same as the web capture path. Without it an out-of-pocket claim
+        is blocked at release by the attestation gate (punch-list P3)."""
         claim = self.start_claim(
             repos=repos,
             firm_id=firm_id,
@@ -554,6 +566,9 @@ class ClaimService:
             image_dir=image_dir,
             category_id=category_id,
         )
+        if attested and line.payment_method == "out_of_pocket":
+            claim.attested_by = actor
+            claim.attested_at = dt.datetime.now(dt.timezone.utc)
         record_event(
             repos.audit,
             firm_id=firm_id,
@@ -562,7 +577,10 @@ class ClaimService:
             entity_id=claim.id,
             event_type="submitted",
             actor=actor,
-            detail={"image_sha256": line.image_sha256, "expense_type": line.expense_type},
+            detail={
+                "image_sha256": line.image_sha256, "expense_type": line.expense_type,
+                "attested": bool(claim.attested_by),
+            },
         )
         return claim
 
@@ -1197,6 +1215,21 @@ class ClaimService:
         # so the approved portion still forwards to CarbonNext and exports to the ERP.
         if claim.status not in ("approved", "partially_approved"):
             raise IllegalTransition(f"cannot release a claim in status {claim.status!r}")
+
+        # Attestation gate (Appendix A / punch-list P3): a claim that reimburses an
+        # employee for out-of-pocket spend cannot be released until they have attested
+        # they paid it themselves and won't double-claim. This is the downstream
+        # chokepoint — it closes the hole for EVERY capture path (web capture, JSON
+        # API upload, legacy mileage), present and future, not just the web form that
+        # happens to collect the checkbox.
+        if claim.attested_by is None and any(
+            ln.line_status == "approved" and ln.payment_method == "out_of_pocket"
+            for ln in lines
+        ):
+            raise AttestationRequired(
+                "cannot release: this claim reimburses out-of-pocket expense but has "
+                "no attestation on file — the claimant must attest before release"
+            )
 
         # Posting gate (per-client policy): a claim cannot be released to accounting
         # until every approved line is fully coded (GL + cost centre).

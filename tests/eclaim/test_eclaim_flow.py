@@ -24,10 +24,13 @@ from eclaim.services.claims import ClaimService, Repos
 from eclaim.services.sod import SoDViolation
 
 
-def _upload(client, fake_ocr, extraction: Extraction):
+def _upload(client, fake_ocr, extraction: Extraction, *, attested: bool = True):
     fake_ocr.extraction = extraction
     files = {"file": ("receipt.png", b"\x89PNG\r\n fake-bytes", "image/png")}
-    return client.post("/api/claims/upload", files=files)
+    # Attest by default — an out-of-pocket claim is blocked at release without it
+    # (P3 attestation gate); tests that exercise the gate pass attested=False.
+    data = {"attested": "true"} if attested else None
+    return client.post("/api/claims/upload", files=files, data=data)
 
 
 def _release(client, claim_id):
@@ -250,7 +253,8 @@ def test_non_relevant_category_is_not_forwarded(client, fake_ocr, db_session):
     fake_ocr.extraction = Extraction(vendor="Wilson Parking", expense_type="other",
                                      total_amount=Decimal("12"))
     files = {"file": ("r.png", b"\x89PNG\r\n fake", "image/png")}
-    cid = client.post("/api/claims/upload", files=files).json()["id"]
+    cid = client.post("/api/claims/upload", files=files,
+                      data={"attested": "true"}).json()["id"]
     claim = client.get(f"/api/claims/{cid}").json()
     assert claim["carbon_relevant"] is False     # merchant 'parking' → non-relevant
 

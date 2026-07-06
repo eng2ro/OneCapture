@@ -32,6 +32,16 @@ def _lines(db_session, claim_id):
     ).scalars().all()
 
 
+def _attest(db_session, claim):
+    """Stamp the out-of-pocket attestation so the claim clears the release gate
+    (P3) — the service-built equivalent of ticking the capture checkbox."""
+    import datetime as dt
+
+    claim.attested_by = "claimant@seed.test"
+    claim.attested_at = dt.datetime.now(dt.timezone.utc)
+    db_session.flush()
+
+
 def _add_line(svc, repos, claim, fake_ocr, tmp_path, *, category_id=None, expense_type="fuel_diesel",
               total=Decimal("100")):
     fake_ocr.extraction = Extraction(expense_type=expense_type, total_amount=total,
@@ -73,6 +83,7 @@ def test_partially_approved_claim_can_release(client, fake_ocr, db_session, tmp_
     claim = svc.start_claim(repos=repos, firm_id=ids["firm"], client_id=ids["client"])
     l1 = _add_line(svc, repos, claim, fake_ocr, tmp_path)   # carbon (fuel_diesel)
     l2 = _add_line(svc, repos, claim, fake_ocr, tmp_path)
+    _attest(db_session, claim)
 
     svc.decide(
         repos=repos, claim_id=claim.id, reviewer=_partner(db_session),
@@ -99,6 +110,7 @@ def test_release_idempotent_for_zero_carbon_claim(client, fake_ocr, db_session, 
 
     claim = svc.start_claim(repos=repos, firm_id=ids["firm"], client_id=ids["client"])
     _add_line(svc, repos, claim, fake_ocr, tmp_path, category_id=noncarbon.id, expense_type="other")
+    _attest(db_session, claim)
     svc.approve(repos=repos, claim_id=claim.id, actor="reviewer", approver=_partner(db_session))
 
     first = svc.release(repos=repos, claim_id=claim.id, actor="reviewer", principal=_partner(db_session))

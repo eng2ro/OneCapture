@@ -66,6 +66,7 @@ def list_clients(
 async def upload_claim(
     file: UploadFile = File(...),
     claimant_ref: str | None = Form(default=None),
+    attested: bool = Form(default=False),
     repos: Repos = Depends(deps.get_repos),
     principal: Principal = Depends(deps.get_principal),
     ocr: OcrProvider = Depends(deps.get_ocr),
@@ -89,6 +90,7 @@ async def upload_claim(
             image_dir=image_dir,
             actor=actor,
             claimant_ref=claimant_ref,
+            attested=attested,
         )
     except (OcrError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"could not read receipt: {exc}")

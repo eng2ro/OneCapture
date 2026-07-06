@@ -67,6 +67,9 @@ def test_release_collision_resolves_to_idempotent_no_op(client, fake_ocr, db_ses
         repos=repos, claim=claim, image_bytes=b"\x89PNG\r\n fake", media_type="image/png",
         ocr=fake_ocr, image_dir=tmp_path, category_id=noncarbon.id,
     )
+    # Attest so the out-of-pocket claim clears the release gate (P3).
+    claim.attested_by = "claimant@seed.test"
+    db_session.flush()
     svc.approve(repos=repos, claim_id=claim.id, actor="reviewer", approver=_partner(db_session))
 
     # A concurrent winner: the batch this release will compute already exists, while

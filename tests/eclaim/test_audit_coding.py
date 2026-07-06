@@ -12,7 +12,8 @@ from eclaim.ocr.base import Extraction
 def _upload(client, fake_ocr, extraction):
     fake_ocr.extraction = extraction
     files = {"file": ("r.png", b"\x89PNG\r\n fake", "image/png")}
-    return client.post("/api/claims/upload", files=files)
+    # Attest — an out-of-pocket claim can't release without it (P3 gate).
+    return client.post("/api/claims/upload", files=files, data={"attested": "true"})
 
 
 def _enable_coding_policy(db_session):
