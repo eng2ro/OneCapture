@@ -86,7 +86,7 @@
             {% else %}RM {{ '%.2f' | format(r.min_amount) }} – {{ '%.2f' | format(r.max_amount) }}{% endif %}
           </td>
           <td>{{ r.approver_role | capitalize if r.approver_role else 'Any approver' }}{% if r.step_order != 1 %} · step {{ r.step_order }}{% endif %}</td>
-          <td>{{ r.approvals_required }}{% if r.approvals_required > 1 %} <span class="page-sub" title="Multi-approval counting arrives in a later release">(Phase-2)</span>{% endif %}</td>
+          <td>1{% if r.approvals_required > 1 %} <span class="page-sub" title="Multi-approval counting is not enforced yet — a single sign-off releases this band until Phase-2">(shows {{ r.approvals_required }}, not yet enforced)</span>{% endif %}</td>
           <td>{{ 'Active' if r.active else 'Off' }}</td>
           <td style="text-align:right;">
             <form method="post" action="/admin/approvals/delete" onsubmit="return confirm('Delete this rule?');" style="display:inline;">
@@ -122,7 +122,7 @@
             {% for role in roles %}<option value="{{ role }}">{{ role | capitalize }}</option>{% endfor %}
           </select>
         </div>
-        <div><label class="label-tiny">Approvals required</label><input class="field" name="approvals_required" value="1"></div>
+        <div><label class="label-tiny">Approvals required</label><input class="field" value="1 (single sign-off)" disabled title="Multi-approval counting arrives in Phase-2"></div>
       </div>
       <div style="margin-top:12px;"><button class="btn btn-accent" type="submit" {{ 'disabled' if not selected_client_id else '' }}><i class="ti ti-plus"></i> Add band</button></div>
     </form>

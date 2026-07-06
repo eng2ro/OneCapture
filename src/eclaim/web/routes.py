@@ -1644,8 +1644,13 @@ def admin_save_event(
 # Starter row-sets the wizard/template picker writes. Bands are non-overlapping to
 # the cent (numeric(14,2)): each next band's floor is the previous ceiling + 0.01,
 # so exactly one rule ever governs an amount. Amounts are editable defaults (MYR).
-# Enterprise adds per-department + multi-step in Phase-2 (same engine, more rows);
-# at launch it seeds the Growing set.
+#
+# Every template seeds exactly ONE approval per band (``approvals_required = 1``).
+# Multi-approval counting ("two partners above 10k") needs the partial-approval
+# state machine that arrives in Phase-2; until the engine actually *enforces* a
+# count, seeding ``> 1`` would be a promised-but-unenforced control (punch-list
+# P1), which is worse than none. Enterprise adds per-department + multi-step in
+# Phase-2 (same engine, more rows); at launch it seeds the Growing set.
 APPROVAL_TEMPLATES = {
     "starter": {
         "label": "Starter", "profile": "Micro team, under 20 staff",
@@ -1659,11 +1664,11 @@ APPROVAL_TEMPLATES = {
     },
     "growing": {
         "label": "Growing", "profile": "100–500 staff",
-        "summary": "≤ 1,000 → manager; 1,000–10,000 → partner; above → two partners.",
+        "summary": "≤ 1,000 → manager; 1,000–10,000 → partner; above → a partner.",
         "rules": [
             (None, "1000", "manager", 1),
             ("1000.01", "10000", "partner", 1),
-            ("10000.01", None, "partner", 2),
+            ("10000.01", None, "partner", 1),
         ],
     },
     "enterprise": {
@@ -1672,11 +1677,17 @@ APPROVAL_TEMPLATES = {
         "rules": [
             (None, "1000", "manager", 1),
             ("1000.01", "10000", "partner", 1),
-            ("10000.01", None, "partner", 2),
+            ("10000.01", None, "partner", 1),
         ],
     },
 }
 APPROVER_ROLES = ["manager", "partner", "approver"]
+
+# Phase-1 enforces a single approval per band. The engine does not yet count
+# multiple sign-offs, so we clamp every write path to 1 rather than let the UI or
+# a crafted POST persist an ``approvals_required > 1`` control that nothing
+# enforces (punch-list P1). Lift this when the partial-approval state machine lands.
+PHASE1_APPROVALS_REQUIRED = 1
 
 
 def _render_approvals(request, repos, principal, *, client_id=None, error=None) -> HTMLResponse:
@@ -1731,12 +1742,13 @@ def admin_apply_template(
         return _render_approvals(request, repos, principal, client_id=cid,
                                  error="Unknown template or client.")
     repos.approvals.delete_for_client(cid)
-    for mn, mx, role, req in APPROVAL_TEMPLATES[template]["rules"]:
+    for mn, mx, role, _req in APPROVAL_TEMPLATES[template]["rules"]:
         repos.approvals.add(ApprovalMatrixRule(
             firm_id=principal.firm_id, client_id=cid,
             min_amount=Decimal(mn) if mn else None,
             max_amount=Decimal(mx) if mx else None,
-            step_order=1, approver_role=role, approvals_required=req, active=True,
+            step_order=1, approver_role=role,
+            approvals_required=PHASE1_APPROVALS_REQUIRED, active=True,
         ))
     return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
 
@@ -1748,16 +1760,19 @@ def admin_add_rule(
     min_amount: str = Form(""),
     max_amount: str = Form(""),
     approver_role: str = Form(""),
-    approvals_required: str = Form("1"),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.require_firm_scope),
 ):
-    """Add a single-tier (step 1) rule to a client's matrix."""
+    """Add a single-tier (step 1) rule to a client's matrix.
+
+    ``approvals_required`` is fixed at :data:`PHASE1_APPROVALS_REQUIRED` (1) and not
+    taken from the form: the engine enforces a single sign-off per band in Phase-1,
+    so accepting a caller-supplied count would let a crafted POST persist an
+    unenforced multi-approval control (punch-list P1)."""
     try:
         cid = uuid.UUID(client_id)
         mn = Decimal(min_amount) if min_amount.strip() else None
         mx = Decimal(max_amount) if max_amount.strip() else None
-        req = int(approvals_required) if approvals_required.strip() else 1
     except (ValueError, InvalidOperation):
         return _render_approvals(request, repos, principal, error="Invalid amount or count.")
     if not _visible_client(repos, principal, cid):
@@ -1768,7 +1783,8 @@ def admin_add_rule(
     role = approver_role if approver_role in APPROVER_ROLES else None
     repos.approvals.add(ApprovalMatrixRule(
         firm_id=principal.firm_id, client_id=cid, min_amount=mn, max_amount=mx,
-        step_order=1, approver_role=role, approvals_required=max(req, 1), active=True,
+        step_order=1, approver_role=role,
+        approvals_required=PHASE1_APPROVALS_REQUIRED, active=True,
     ))
     return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
 

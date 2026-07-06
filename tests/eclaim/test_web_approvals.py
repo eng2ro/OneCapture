@@ -63,6 +63,36 @@ def test_add_then_delete_band(client, db_session):
     assert repos.approvals.rules_for_client(cid) == []
 
 
+@pytest.mark.parametrize("template", ["starter", "small", "growing", "enterprise"])
+def test_launch_templates_seed_single_approval(client, db_session, template):
+    """P1: no launch template may seed an ``approvals_required > 1`` band — the engine
+    enforces a single sign-off in Phase-1, so a >1 row would be a fake control. Fails
+    if any template row is reverted to a multi-approval count."""
+    cid = _cid(db_session)
+    client.post("/admin/approvals/template",
+                data={"client_id": str(cid), "template": template}, follow_redirects=False)
+    rules = Repos.for_session(db_session).approvals.rules_for_client(cid)
+    assert rules, "template seeded no rules"
+    assert all(r.approvals_required == 1 for r in rules), \
+        f"{template} seeds an unenforced multi-approval band: " \
+        f"{[r.approvals_required for r in rules]}"
+
+
+def test_add_band_ignores_supplied_count(client, db_session):
+    """P1: the add-band route must clamp ``approvals_required`` to 1 regardless of what
+    the caller posts — a crafted POST must not persist an unenforced >1 control. Fails
+    if the route ever reads the count from the form again."""
+    cid = _cid(db_session)
+    client.post("/admin/approvals/add", data={
+        "client_id": str(cid), "min_amount": "10000", "max_amount": "",
+        "approver_role": "partner", "approvals_required": "5",
+    }, follow_redirects=False)
+    rules = Repos.for_session(db_session).approvals.rules_for_client(cid)
+    assert len(rules) == 1
+    assert rules[0].approvals_required == 1, \
+        "crafted POST persisted an unenforced multi-approval control"
+
+
 def test_applied_template_governs_approval(client, fake_ocr, db_session, tmp_path):
     cid = _cid(db_session)
     ids = db_session.info["principal"]
