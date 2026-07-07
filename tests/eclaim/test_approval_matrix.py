@@ -8,16 +8,24 @@ personal authority_limit).
 
 from __future__ import annotations
 
+import importlib.util
 import uuid
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 
 from eclaim.auth.principal import Principal
 from eclaim.db.models import ApprovalMatrixRule
 from eclaim.ocr.base import Extraction
 from eclaim.services.claims import ClaimService, Repos
-from eclaim.services.sod import SoDViolation, check_can_approve, matrix_rule_for
+from eclaim.services.sod import (
+    SoDViolation,
+    _describe_rule,
+    check_can_approve,
+    matrix_rule_for,
+)
 
 
 def _p(ids, role, *, user_id=None):
@@ -111,3 +119,63 @@ def test_service_approve_enforces_matrix(client, fake_ocr, db_session, tmp_path)
         svc.approve(repos=repos, claim_id=claim.id, actor="m", approver=_p(ids, "manager"))
     svc.approve(repos=repos, claim_id=claim.id, actor="p", approver=_p(ids, "partner"))
     assert db_session.get(type(claim), claim.id).status == "approved"
+
+
+# --------------------------------------------------------------------------- #
+# R1 — approvals_required is a Phase-1 no-op: never described, never left > 1
+# --------------------------------------------------------------------------- #
+def test_describe_rule_never_renders_unenforced_count():
+    """``_describe_rule`` must not surface ``approvals_required`` — Phase-1 enforces
+    exactly one approval per band, so an "N×" count would promise a control the
+    engine ignores. Pins the R1 fix: a re-added ``{n}× …`` prefix fails here."""
+    rule = ApprovalMatrixRule(approver_role="partner", approvals_required=2)
+    described = _describe_rule(rule)
+    assert described == "a partner"
+    assert "×" not in described and "2" not in described
+
+
+def test_matrix_denial_message_carries_no_count(client, fake_ocr, db_session, tmp_path):
+    """The live denial path (not just the helper) must be count-free too: a band that
+    still carries a legacy ``approvals_required = 2`` denies a too-junior approver with
+    a message that never claims "2×"."""
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    _rule(
+        db_session, ids, min_amount=Decimal("1000"), max_amount=None,
+        approver_role="partner", approvals_required=2,
+    )
+    claim = _claim_of(svc, repos, fake_ocr, tmp_path, ids, "1500")
+    rule = matrix_rule_for(repos, claim)
+    with pytest.raises(SoDViolation) as exc:
+        check_can_approve(claim, _p(ids, "manager"), matrix_rule=rule)
+    assert "a partner" in str(exc.value)
+    assert "×" not in str(exc.value) and "2×" not in str(exc.value)
+
+
+def _clamp_sql() -> str:
+    """The exact ``CLAMP`` UPDATE from migration 0024, loaded from the migration file
+    so this test pins the migration's own SQL (not a copy) — reverting the migration
+    to a no-op breaks this test."""
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src" / "eclaim" / "alembic" / "versions"
+        / "0024_clamp_legacy_approvals.py"
+    )
+    spec = importlib.util.spec_from_file_location("_mig_0024", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.CLAMP
+
+
+def test_migration_0024_clamps_legacy_approvals_required(db_session):
+    """A legacy rule with ``approvals_required > 1`` is clamped to 1 by the migration's
+    UPDATE, and an already-compliant row is untouched (idempotent)."""
+    ids = db_session.info["principal"]
+    legacy = _rule(db_session, ids, approver_role="partner", approvals_required=3)
+    compliant = _rule(db_session, ids, approver_role="manager", approvals_required=1)
+
+    db_session.execute(text(_clamp_sql()))
+    db_session.expire_all()
+
+    assert db_session.get(ApprovalMatrixRule, legacy.id).approvals_required == 1
+    assert db_session.get(ApprovalMatrixRule, compliant.id).approvals_required == 1

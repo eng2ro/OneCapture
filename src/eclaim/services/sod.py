@@ -80,15 +80,16 @@ def matrix_rule_for(repos, claim: Claim) -> ApprovalMatrixRule | None:
 
 
 def _describe_rule(rule: ApprovalMatrixRule) -> str:
+    # Phase-1 enforces exactly ONE approval per band. ``approvals_required`` is not
+    # yet honoured (multi-approval chains are Phase-2), so we never render an "N×"
+    # count here — it would promise a control the engine does not enforce, the exact
+    # mismatch punch-list R1 closes (legacy >1 rows are also clamped to 1 by
+    # migration 0024). Restore the count wording when Phase-2 lands the real chain.
     if rule.approver_user_id is not None:
-        who = "a specific approver"
-    elif rule.approver_role:
-        who = f"a {rule.approver_role}"
-    else:
-        who = "an authorised approver"
-    if rule.approvals_required > 1:
-        who = f"{rule.approvals_required}× {who}"
-    return who
+        return "a specific approver"
+    if rule.approver_role:
+        return f"a {rule.approver_role}"
+    return "an authorised approver"
 
 
 def check_can_approve(
