@@ -26,6 +26,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from eclaim.db.models import (
+    ApInvoice,
+    ApInvoiceLine,
     ApprovalMatrixRule,
     AuditEvent,
     Claim,
@@ -34,6 +36,7 @@ from eclaim.db.models import (
     EmissionEntry,
     Firm,
     ReleaseBatch,
+    Vendor,
 )
 
 # The firm + allowed-client gated tables. (claimant is in the same policy class
@@ -43,7 +46,7 @@ from eclaim.db.models import (
 # GUC off (as here) it must still default-deny with no context and firm-scope with it.
 DATA_TABLES = [
     "claim", "release_batch", "emission_entry", "audit_event", "approval_matrix_rule",
-    "document_intake",
+    "document_intake", "vendor", "ap_invoice", "ap_invoice_line",
 ]
 
 
@@ -95,6 +98,22 @@ def _seed_firm(session: Session, label: str) -> dict:
         ),
     ])
     session.flush()
+
+    # AP domain (C2): vendor → invoice → line, all firm+client scoped.
+    vendor = Vendor(firm_id=firm.id, client_id=client.id, name=f"Vendor {tag}")
+    session.add(vendor)
+    session.flush()
+    invoice = ApInvoice(
+        firm_id=firm.id, client_id=client.id, vendor_id=vendor.id,
+        doc_no=f"INV-{tag}", total_amount=Decimal("100.00"), idempotency_key=f"idem-ap-{tag}",
+    )
+    session.add(invoice)
+    session.flush()
+    session.add(ApInvoiceLine(
+        firm_id=firm.id, client_id=client.id, ap_invoice_id=invoice.id,
+        line_no=1, description="seed", line_total=Decimal("100.00"),
+    ))
+    session.flush()
     return {"firm": firm.id, "client": client.id}
 
 
@@ -112,7 +131,8 @@ def two_firms(db_engine):
         for entry in made.values():
             fid = entry["firm"]
             for tbl in ["emission_entry", "audit_event", "release_batch",
-                        "approval_matrix_rule", "document_intake", "claim", "client"]:
+                        "approval_matrix_rule", "document_intake",
+                        "ap_invoice_line", "ap_invoice", "vendor", "claim", "client"]:
                 owner.execute(text(f"DELETE FROM {tbl} WHERE firm_id = :f"), {"f": fid})
             owner.execute(text("DELETE FROM firm WHERE id = :f"), {"f": fid})
         owner.commit()

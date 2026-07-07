@@ -46,19 +46,28 @@ def _in_band(amount: Decimal, rule: ApprovalMatrixRule) -> bool:
     )
 
 
-def select_matrix_rule(rules, *, amount, department, category_ids) -> ApprovalMatrixRule | None:
+def select_matrix_rule(
+    rules, *, amount, department, category_ids, module: str = "eclaim"
+) -> ApprovalMatrixRule | None:
     """The most specific active ``step_order = 1`` rule whose amount band and scope
-    fit this claim, or None. Phase-1 rules carry NULL scopes (apply to all); the
-    scope checks are here so Phase-2 per-department / per-category rows just work.
-    A more specific rule (category, then department) wins over a general one."""
+    fit this claim/invoice, or None. Phase-1 rules carry NULL scopes (apply to all);
+    the scope checks are here so Phase-2 per-department / per-category rows just work.
+    A more specific rule (module, then category, then department) wins over a general
+    one. ``module`` ('eclaim' | 'ap', C2) selects the channel: a rule with NULL
+    ``scope_module`` applies to every module, a set one only to its own."""
     matches = [
         r for r in rules
         if r.active and r.step_order == 1 and _in_band(amount, r)
+        and (r.scope_module is None or r.scope_module == module)
         and (r.scope_department is None or r.scope_department == department)
         and (r.scope_category_id is None or r.scope_category_id in category_ids)
     ]
     matches.sort(
-        key=lambda r: (r.scope_category_id is not None, r.scope_department is not None),
+        key=lambda r: (
+            r.scope_module is not None,
+            r.scope_category_id is not None,
+            r.scope_department is not None,
+        ),
         reverse=True,
     )
     return matches[0] if matches else None

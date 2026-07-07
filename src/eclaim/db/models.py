@@ -562,6 +562,10 @@ class ApprovalMatrixRule(Base):
             "min_amount IS NULL OR max_amount IS NULL OR max_amount >= min_amount",
             name="ck_amr_band",
         ),
+        CheckConstraint(
+            "scope_module IS NULL OR scope_module IN ('eclaim','ap')",
+            name="ck_amr_scope_module",
+        ),
         Index("ix_amr_firm_client", "firm_id", "client_id"),
         Index("ix_amr_client_active", "client_id", "active", "step_order"),
     )
@@ -573,6 +577,9 @@ class ApprovalMatrixRule(Base):
     # Scope (NULL = applies to all) — Phase-2 overrides; the launch UI writes NULL.
     scope_department: Mapped[str | None] = mapped_column(String)
     scope_category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("category.id"))
+    # Which module a rule governs: NULL = every module, else 'eclaim' | 'ap' (C2). Lets
+    # one matrix carry different bands for staff claims vs vendor bills.
+    scope_module: Mapped[str | None] = mapped_column(String)
     # Amount band: min NULL = 0; max NULL = unlimited.
     min_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     max_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
@@ -909,6 +916,136 @@ class DocumentIntake(Base):
     doc_no: Mapped[str | None] = mapped_column(String)
     total_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     currency: Mapped[str | None] = mapped_column(String)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Vendor(Base):
+    """Supplier master for the AP module (C2, migration 0026). One per client; the
+    ERP vendor code is filled once the vendor is mapped to the customer's ERP."""
+
+    __tablename__ = "vendor"
+    __table_args__ = (
+        CheckConstraint("status IN ('active','inactive')", name="ck_vendor_status"),
+        Index("ix_vendor_firm_client", "firm_id", "client_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    tax_id: Mapped[str | None] = mapped_column(String)
+    bank_account: Mapped[str | None] = mapped_column(String)
+    erp_vendor_code: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'active'"))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ApInvoice(Base):
+    """AP invoice header — a vendor bill finance pays (C2, migration 0026).
+
+    Lifecycle: ``captured → coded → pending_approval → approved → posted → paid``
+    (plus ``held`` / ``rejected``). Separation of duties is enforced at BOTH the DB
+    (``ck_ap_invoice_sod``: coder ≠ approver) and the service layer. ``erp_doc_entry``
+    is the ERP's key once posted; ERP posting itself is a stub in this phase (a CSV
+    export). ``idempotency_key`` blocks a double-insert of the same source document."""
+
+    __tablename__ = "ap_invoice"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('captured','coded','pending_approval','approved','posted','paid','held','rejected')",
+            name="ck_ap_invoice_status",
+        ),
+        CheckConstraint(
+            "coded_by_user_id IS NULL OR approved_by_user_id IS NULL "
+            "OR coded_by_user_id <> approved_by_user_id",
+            name="ck_ap_invoice_sod",
+        ),
+        Index("ix_ap_invoice_firm_client", "firm_id", "client_id"),
+        Index("ix_ap_invoice_status", "client_id", "status", "created_at"),
+        Index("ix_ap_invoice_dup", "client_id", "vendor_id", "doc_no"),
+        UniqueConstraint("client_id", "idempotency_key", name="uq_ap_invoice_idem"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    vendor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vendor.id"), nullable=False)
+
+    doc_no: Mapped[str | None] = mapped_column(String)
+    doc_date: Mapped[dt.date | None] = mapped_column(Date)
+    due_date: Mapped[dt.date | None] = mapped_column(Date)
+    payment_terms: Mapped[str | None] = mapped_column(String)
+    currency: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'MYR'"))
+    subtotal: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    total_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    po_ref: Mapped[str | None] = mapped_column(String)
+    do_ref: Mapped[str | None] = mapped_column(String)
+
+    image_sha256: Mapped[str | None] = mapped_column(String)
+    image_path: Mapped[str | None] = mapped_column(String)
+    intake_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("document_intake.id"))
+
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'captured'"))
+    erp_doc_entry: Mapped[str | None] = mapped_column(String)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
+
+    coded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    approved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    hold_reason: Mapped[str | None] = mapped_column(String)
+
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ApInvoiceLine(Base):
+    """One line of an :class:`ApInvoice` (C2). ``category_id`` carries carbon relevance
+    — AP lines flow raw activity data to CarbonNext through the same category pattern
+    as e-Claim; cost dims (department / project) code the spend for finance."""
+
+    __tablename__ = "ap_invoice_line"
+    __table_args__ = (
+        UniqueConstraint("ap_invoice_id", "line_no", name="uq_ap_invoice_line_no"),
+        Index("ix_ap_invoice_line_invoice", "ap_invoice_id"),
+        Index("ix_ap_invoice_line_firm_client", "firm_id", "client_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    ap_invoice_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ap_invoice.id", ondelete="CASCADE"), nullable=False
+    )
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+
+    description: Mapped[str | None] = mapped_column(String)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    uom: Mapped[str | None] = mapped_column(String)
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    line_total: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+
+    gl_code: Mapped[str | None] = mapped_column(String)
+    tax_code: Mapped[str | None] = mapped_column(String)
+    category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("category.id"))
+    department: Mapped[str | None] = mapped_column(String)
+    project_code: Mapped[str | None] = mapped_column(String)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

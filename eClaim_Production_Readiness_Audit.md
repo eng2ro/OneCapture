@@ -436,6 +436,12 @@ Everything below the inbox REUSES the existing core: tenancy/RLS, audit chain,
 image store (sha256), OCR pipeline, ingestion worker, category/carbon config,
 CarbonNext handoff, and the Appendix-B approval engine (scoped per module).
 
+> **STATUS 2026-07-07: C1 ✅ and C2 ✅ implemented** on `production-readiness-blockers`
+> (migrations 0025/0026; `services/routing.py`, `intake.py`, `ap.py`, `erp.py`; intake
+> holding queue + AP invoice workflow + CSV export; 427 tests pass). ERP posting is a
+> CSV stub (C3 seam defined, no live connector yet). Carbon handoff for AP lines: the
+> `category_id` is captured on each AP line, the release/handoff wiring is a follow-on.
+
 ## C1. Classifier + router (build FIRST — independent of any ERP work)
 
 Extend the existing Claude-vision OCR extraction (`ocr/base.py` Extraction,

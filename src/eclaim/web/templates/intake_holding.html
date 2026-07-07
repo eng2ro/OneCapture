@@ -36,18 +36,23 @@
         <td class="muted" style="font-size:12px;">{{ (r.type_signals or []) | join(', ') }}</td>
         {% if can_act %}
         <td>
-          <form method="post" action="/intake/{{ r.id }}/reroute" style="display:flex;gap:6px;flex-wrap:wrap;">
-            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-            <button class="btn" type="submit" name="to" value="eclaim"
-                    title="This is actually a staff expense — file it in e-Claim"
-                    onclick="return confirm('Re-file this as a staff expense claim in e-Claim?');">
-              <i class="ti ti-user-dollar"></i> Staff expense
-            </button>
-            {% if r.document_type != 'vendor_invoice' %}
-            <button class="btn" type="submit" name="to" value="ap_holding"
-                    title="Keep as a vendor bill">Vendor bill</button>
-            {% endif %}
-          </form>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <form method="post" action="/intake/{{ r.id }}/file-ap">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button class="btn btn-accent" type="submit"
+                      title="File this vendor bill as an AP invoice for finance to pay">
+                <i class="ti ti-file-invoice"></i> File as AP invoice
+              </button>
+            </form>
+            <form method="post" action="/intake/{{ r.id }}/reroute">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button class="btn" type="submit" name="to" value="eclaim"
+                      title="This is actually a staff expense — file it in e-Claim"
+                      onclick="return confirm('Re-file this as a staff expense claim in e-Claim?');">
+                <i class="ti ti-user-dollar"></i> Staff expense
+              </button>
+            </form>
+          </div>
         </td>
         {% endif %}
       </tr>

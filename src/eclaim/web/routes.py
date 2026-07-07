@@ -44,11 +44,13 @@ from ..db.models import ApprovalMatrixRule, Category, Claimant, Client, Event, I
 from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
 from ..ocr.segment import PageSegmenter
 from ..repositories import ClaimRepository, LedgerRepository
+from ..services import ap as ap_service
+from ..services import erp as erp_service
 from ..services import ingestion, routing
 from ..services import intake as intake_service
 from ..services.documents import normalize_image
 from ..services.claims import CLAIM_TYPES, ClaimError, ClaimService, Repos
-from ..services.sod import can_approve
+from ..services.sod import SoDViolation, can_approve
 from ..tenancy import set_tenant_context
 
 WEB_DIR = Path(__file__).parent
@@ -556,6 +558,207 @@ def intake_reroute(
     if claim_id is not None:
         return RedirectResponse(f"/claims/{claim_id}/review", status_code=303)
     return RedirectResponse("/intake/holding", status_code=303)
+
+
+@router.post("/intake/{intake_id}/file-ap")
+def intake_file_ap(
+    request: Request,
+    intake_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """File a held vendor bill as an AP invoice (C1 → C2): resolve the vendor, seed the
+    invoice + a line, and consume the intake. Viewers cannot."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot file invoices")
+    try:
+        intake = intake_service.get_intake(repos.session, intake_id)
+        if not principal.can_access_client(intake.client_id):
+            raise HTTPException(status_code=403, detail="no grant to this client")
+        if intake.status == "consumed":
+            raise HTTPException(status_code=409, detail="this page has already been processed")
+        invoice = ap_service.create_from_intake(
+            repos.session, intake=intake, actor=_actor(principal)
+        )
+        repos.session.commit()
+    except ap_service.ApError as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        raise HTTPException(status_code=400, detail=str(exc))
+    return RedirectResponse(f"/ap/{invoice.id}", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# AP invoices (C2): the vendor-bill workflow — capture → code → approve → export.
+# --------------------------------------------------------------------------- #
+@router.get("/ap", response_class=HTMLResponse)
+def ap_list(
+    request: Request,
+    status: str = "",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse:
+    invoices = ap_service.list_invoices(
+        repos.session, principal.allowed_client_ids, status=status or None
+    )
+    vendors = {v.id: v for v in _ap_vendors(repos, principal)}
+    return templates.TemplateResponse(
+        request, "ap_list.html",
+        {"invoices": invoices, "vendors": vendors, "status": status,
+         "can_act": principal.base_role != "viewer"},
+    )
+
+
+@router.get("/ap/export.csv")
+def ap_export_csv(
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Download approved AP invoices as a CSV an accountant posts manually (C2 stub)."""
+    invoices = ap_service.list_invoices(
+        repos.session, principal.allowed_client_ids, status="approved"
+    )
+    csv_text = erp_service.export_ap_csv(repos.session, invoices)
+    from fastapi.responses import Response as _Response
+    return _Response(
+        content=csv_text, media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ap_invoices.csv"'},
+    )
+
+
+@router.get("/ap/{invoice_id}", response_class=HTMLResponse)
+def ap_detail(
+    request: Request,
+    invoice_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse:
+    try:
+        invoice = ap_service.get_invoice(repos.session, invoice_id)
+    except ap_service.ApNotFound:
+        raise HTTPException(status_code=404, detail="invoice not found")
+    if not principal.can_access_client(invoice.client_id):
+        raise HTTPException(status_code=404, detail="invoice not found")
+    lines = ap_service.lines(repos.session, invoice_id)
+    vendor = repos.session.get(ap_service.Vendor, invoice.vendor_id)
+    # Whether THIS principal could approve it (drives the button + SoD explanation).
+    rule = ap_service.matrix_rule_for_invoice(repos.session, invoice)
+    approve_block = None
+    if invoice.status in ("coded", "pending_approval"):
+        try:
+            ap_service.check_can_approve_invoice(invoice, principal, matrix_rule=rule)
+        except SoDViolation as exc:
+            approve_block = str(exc)
+    return templates.TemplateResponse(
+        request, "ap_detail.html",
+        {
+            "invoice": invoice, "lines": lines, "vendor": vendor,
+            "categories": repos.categories.list_for_client(invoice.client_id),
+            "events": repos.audit.chain("ap_invoice", invoice_id),
+            "can_act": principal.base_role != "viewer"
+            and principal.can_access_client(invoice.client_id),
+            "approve_block": approve_block,
+        },
+    )
+
+
+@router.post("/ap/{invoice_id}/code")
+def ap_code(
+    request: Request,
+    invoice_id: uuid.UUID,
+    line_id: str = Form(...),
+    gl_code: str = Form(""),
+    tax_code: str = Form(""),
+    category_id: str = Form(""),
+    department: str = Form(""),
+    project_code: str = Form(""),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.code_line(
+            repos.session, line_id=uuid.UUID(line_id), coder=principal,
+            actor=_actor(principal),
+            gl_code=gl_code.strip() or None, tax_code=tax_code.strip() or None,
+            category_id=uuid.UUID(category_id) if category_id.strip() else None,
+            department=department.strip() or None, project_code=project_code.strip() or None,
+        ),
+    )
+
+
+@router.post("/ap/{invoice_id}/submit")
+def ap_submit(
+    request: Request, invoice_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.submit_for_approval(
+            repos.session, invoice_id=invoice_id, actor=_actor(principal)
+        ),
+    )
+
+
+@router.post("/ap/{invoice_id}/approve")
+def ap_approve(
+    request: Request, invoice_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.approve(
+            repos.session, invoice_id=invoice_id, approver=principal, actor=_actor(principal)
+        ),
+    )
+
+
+@router.post("/ap/{invoice_id}/reject")
+def ap_reject(
+    request: Request, invoice_id: uuid.UUID,
+    reason: str = Form(""),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.reject(
+            repos.session, invoice_id=invoice_id, actor=_actor(principal),
+            reason=reason.strip() or None,
+        ),
+    )
+
+
+def _ap_vendors(repos: Repos, principal: Principal):
+    from sqlalchemy import select as _select
+    if not principal.allowed_client_ids:
+        return []
+    return list(repos.session.execute(
+        _select(ap_service.Vendor).where(
+            ap_service.Vendor.client_id.in_(principal.allowed_client_ids)
+        )
+    ).scalars())
+
+
+def _ap_action(request, repos, principal, invoice_id, fn):
+    """Run an AP mutation and re-render the detail page on error (mirrors _action)."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot modify invoices")
+    try:
+        fn()
+        repos.session.commit()
+    except SoDViolation as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ap_service.ApError as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        status = 404 if isinstance(exc, ap_service.ApNotFound) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+    return RedirectResponse(f"/ap/{invoice_id}", status_code=303)
 
 
 def _parse_int(value: str, default: int = 0) -> int:

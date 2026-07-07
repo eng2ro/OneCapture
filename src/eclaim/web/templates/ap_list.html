@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}AP invoices — OneCapture{% endblock %}
+{% block content %}
+<section class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+    <h1>AP invoices</h1>
+    <a class="btn" href="/ap/export.csv"><i class="ti ti-download"></i> Export approved (CSV)</a>
+  </div>
+  <p class="muted">Vendor bills finance pays. ERP posting ships with the connector;
+    until then, approve here and export the CSV to post manually.</p>
+
+  {% if invoices %}
+  <table class="ledger">
+    <thead>
+      <tr><th>Vendor</th><th>Doc no</th><th>Total</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for inv in invoices %}
+      <tr>
+        <td>{{ vendors[inv.vendor_id].name if inv.vendor_id in vendors else '—' }}</td>
+        <td class="mono">{{ inv.doc_no or '—' }}</td>
+        <td>{% if inv.total_amount is not none %}{{ inv.currency }} {{ '%.2f' | format(inv.total_amount) }}{% else %}—{% endif %}</td>
+        <td>
+          <span class="pill pill-{{ inv.status }}">{{ inv.status.replace('_', ' ') }}</span>
+          {% if inv.status == 'held' and inv.hold_reason %}<span class="page-sub" title="{{ inv.hold_reason }}">· {{ inv.hold_reason }}</span>{% endif %}
+        </td>
+        <td><a href="/ap/{{ inv.id }}">Open →</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No AP invoices yet. File a vendor bill from
+    <a href="/intake/holding">Vendor bills</a>.</p>
+  {% endif %}
+</section>
+{% endblock %}
