@@ -880,6 +880,13 @@ class DocumentIntake(Base):
         Index("ix_document_intake_firm_client", "firm_id", "client_id"),
         Index("ix_document_intake_queue", "client_id", "routed_to", "status", "created_at"),
         Index("ix_document_intake_link", "client_id", "link_key"),
+        Index("ix_document_intake_job", "ingestion_job_id"),
+        # No re-diverting the same page for the same async job (F3, migration 0028).
+        # Partial: inline captures leave ingestion_job_id NULL and are unconstrained.
+        Index(
+            "uq_document_intake_job_sha", "ingestion_job_id", "image_sha256",
+            unique=True, postgresql_where=text("ingestion_job_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
@@ -918,6 +925,9 @@ class DocumentIntake(Base):
         ForeignKey("document_intake.id")
     )
     claim_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("claim.id"))
+    # The async ingestion job this page was diverted by (NULL for inline captures);
+    # keys the dedup that stops a re-claimed job double-recording bills (F3).
+    ingestion_job_id: Mapped[uuid.UUID | None] = mapped_column()
 
     vendor: Mapped[str | None] = mapped_column(String)
     doc_no: Mapped[str | None] = mapped_column(String)

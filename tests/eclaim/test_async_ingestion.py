@@ -16,7 +16,7 @@ from decimal import Decimal
 from fpdf import FPDF
 from sqlalchemy import select, text
 
-from eclaim.db.models import Claim, ClaimLine, Client, IngestionJob
+from eclaim.db.models import Claim, ClaimLine, Client, DocumentIntake, IngestionJob
 from eclaim.ingest import worker
 from eclaim.ocr.base import Extraction
 from eclaim.services import ingestion
@@ -212,6 +212,74 @@ def test_reclaimed_job_does_not_duplicate_claim(client, db_session, fake_ocr, fa
     assert claims[0].id == first_claim         # same claim recovered
     job = db_session.get(IngestionJob, job_id)
     assert job.status == "done" and job.claim_id == first_claim
+
+
+def _intakes_for(db_session, job_id):
+    return db_session.execute(
+        select(DocumentIntake).where(DocumentIntake.ingestion_job_id == job_id)
+    ).scalars().all()
+
+
+def test_reclaimed_all_diverted_job_does_not_duplicate_intake(
+    client, db_session, fake_ocr, fake_segmenter, tmp_path
+):
+    """F3 (B3 bug class, intake edition): an ALL-diverted job builds no claim, so the
+    claim-based idempotency check can't detect its prior completion. A reclaim must NOT
+    rebuild and double-record the vendor bills."""
+    _enable_split(db_session)                 # each page → its own diverted page
+    fake_ocr.extraction = Extraction(
+        vendor="Acme", total_amount=Decimal("100"),
+        document_type="vendor_invoice", type_confidence=Decimal("0.95"),
+    )
+    job_id = _enqueue_via_http(client, 4)
+    provs = _providers(fake_ocr, fake_segmenter, tmp_path)
+
+    assert worker.process_one(db_session, provs) == job_id
+    db_session.expire_all()
+    job = db_session.get(IngestionJob, job_id)
+    assert job.status == "done" and job.claim_id is None      # all diverted, no claim
+    assert len(_intakes_for(db_session, job_id)) == 4         # 4 bills captured
+    assert db_session.execute(select(Claim)).scalars().all() == []
+
+    # Simulate a crash before completion: job back to running, heartbeat stale.
+    db_session.execute(
+        text("UPDATE ingestion_job SET status='running', "
+             "heartbeat_at = now() - interval '10 minutes' WHERE id = :i"),
+        {"i": str(job_id)},
+    )
+    db_session.commit()
+
+    assert worker.process_one(db_session, provs) == job_id    # recovered, not rebuilt
+    db_session.expire_all()
+    assert len(_intakes_for(db_session, job_id)) == 4         # NOT duplicated
+    assert db_session.get(IngestionJob, job_id).status == "done"
+
+
+def test_intake_job_sha_unique_blocks_redivert_but_allows_inline(client, db_session):
+    """The partial UNIQUE(ingestion_job_id, image_sha256) blocks a re-divert of the same
+    page for one job, while inline captures (NULL job) stay unconstrained (F3)."""
+    from sqlalchemy.exc import IntegrityError
+
+    ids = db_session.info["principal"]
+    jid = uuid.uuid4()
+
+    def _row(job, sha):
+        return DocumentIntake(
+            firm_id=ids["firm"], client_id=ids["client"], document_type="vendor_invoice",
+            routed_to="ap_holding", ingestion_job_id=job, image_sha256=sha, type_signals=[],
+        )
+
+    db_session.add(_row(jid, "sha-1")); db_session.flush()
+    db_session.add(_row(jid, "sha-1"))                        # same job + sha → blocked
+    try:
+        db_session.flush()
+        raise AssertionError("expected the UNIQUE to block a re-divert")
+    except IntegrityError:
+        db_session.rollback()
+
+    # NULL job (inline) → the partial index doesn't apply; two identical shas are fine.
+    db_session.add(_row(None, "sha-x")); db_session.flush()
+    db_session.add(_row(None, "sha-x")); db_session.flush()   # no error
 
 
 def test_staged_files_are_cleaned_up_after_success(client, db_session, fake_ocr, fake_segmenter, tmp_path):

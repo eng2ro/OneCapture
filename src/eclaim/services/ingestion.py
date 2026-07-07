@@ -32,6 +32,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from ..config import get_settings
@@ -498,9 +499,13 @@ def build_claim(
                             sha256=sha, path=path,
                             media_type=r["media_type"], name=r["name"],
                         ),
-                        actor=actor,
+                        actor=actor, ingestion_job_id=ingestion_job_id,
                     )
                 diverted.append(row.id)
+            except IntegrityError:
+                # This page was already diverted for this job by a prior/concurrent run
+                # (uq_document_intake_job_sha) — idempotent skip, no duplicate bill (F3).
+                pass
             except (ClaimError, ValueError) as exc:
                 errors.append(f"{r['name']}: {exc}")
 

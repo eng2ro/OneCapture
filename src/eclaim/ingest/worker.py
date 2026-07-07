@@ -131,6 +131,17 @@ def _existing_claim_id(session: Session, job_id) -> uuid.UUID | None:
     ).scalar()
 
 
+def _job_has_intakes(session: Session, job_id) -> bool:
+    """Whether a prior run of this job already diverted pages to the intake holding
+    queue (F3). An ALL-diverted job builds no claim, so ``_existing_claim_id`` can't
+    detect its prior completion — without this check a re-claimed all-diverted job would
+    rebuild and double-record the vendor bills (the B3 bug class, intake edition)."""
+    return session.execute(
+        text("SELECT 1 FROM document_intake WHERE ingestion_job_id = :j LIMIT 1"),
+        {"j": str(job_id)},
+    ).scalar() is not None
+
+
 def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID | None:
     """Claim and run at most one job on ``session``. Returns the job id it handled,
     or None if the queue was empty. Never raises — a failing job is marked failed."""
@@ -164,6 +175,13 @@ def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID |
         prior = _existing_claim_id(session, job_id)
         if prior is not None:
             _finish(session, job_id, "done", claim_id=prior)
+            ingestion.cleanup_staging(providers.image_dir, job_id)
+            return job_id
+        # No claim, but a prior run may have diverted every page to the holding queue
+        # (an all-vendor-bills upload). Those intakes are already committed — re-mark
+        # done rather than rebuild and duplicate them (F3).
+        if _job_has_intakes(session, job_id):
+            _finish(session, job_id, "done")
             ingestion.cleanup_staging(providers.image_dir, job_id)
             return job_id
 

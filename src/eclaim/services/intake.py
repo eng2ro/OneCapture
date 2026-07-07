@@ -63,6 +63,7 @@ def record_intake(
     provenance: Provenance,
     actor: str,
     claim_id: uuid.UUID | None = None,
+    ingestion_job_id: uuid.UUID | None = None,
     threshold=None,
 ) -> tuple[DocumentIntake, routing.Route]:
     """Classify + route one captured page, persist the intake record, audit it, and
@@ -92,6 +93,7 @@ def record_intake(
         status="consumed" if (to_eclaim and claim_id is not None) else "open",
         link_key=routing.link_key(extraction.vendor, extraction.po_ref),
         claim_id=claim_id if to_eclaim else None,
+        ingestion_job_id=ingestion_job_id,
         vendor=extraction.vendor,
         doc_no=extraction.doc_no,
         total_amount=extraction.total_amount,
