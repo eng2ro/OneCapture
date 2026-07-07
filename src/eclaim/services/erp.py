@@ -22,14 +22,21 @@ from ..db.models import ApInvoice, Vendor
 from . import ap as ap_service
 
 
+class ErpError(RuntimeError):
+    """An illegal ERP-posting operation (wrong status, or a double-post attempt)."""
+
+
 @dataclass(frozen=True)
 class PostResult:
     """The outcome of pushing one invoice to an ERP: the ERP's key on success, or an
-    error to land the invoice in a visible retry queue (never silently lost)."""
+    error to land the invoice in a visible retry queue (never silently lost). The
+    ``idempotency_key`` echoes the source doc's key so a retry can recognise an
+    already-pushed invoice (F8)."""
 
     ok: bool
     erp_doc_entry: str | None = None
     error: str | None = None
+    idempotency_key: str | None = None
 
 
 class ERPConnector(Protocol):
@@ -52,12 +59,27 @@ CSV_COLUMNS = [
 ]
 
 
+# Leading characters a spreadsheet treats as the start of a FORMULA — a cell like
+# ``=1+CMD(...)`` or ``@SUM(...)`` becomes executable on open (CSV/formula injection).
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: str) -> str:
+    """Neutralise a TEXT cell that could be read as a formula by prefixing a single
+    quote (F8). Applied only to free-text fields (vendor names, codes, descriptions),
+    never to the numeric columns — those are formatted from Decimal and a leading '-'
+    is a legitimate negative sign, not an injection."""
+    if value and value[0] in _FORMULA_LEAD:
+        return "'" + value
+    return value
+
+
 def export_ap_csv(session: Session, invoices: list[ApInvoice]) -> str:
     """Render approved AP invoices to a CSV an accountant posts manually (C2 stub).
 
     One row per line; a headers-only invoice (no lines) still emits a single row so it
     isn't silently dropped from the export. Money/quantities are formatted from Decimal
-    without float drift."""
+    without float drift; free-text cells are defused against CSV formula injection."""
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="ignore")
     writer.writeheader()
@@ -65,16 +87,16 @@ def export_ap_csv(session: Session, invoices: list[ApInvoice]) -> str:
         vendor = session.get(Vendor, inv.vendor_id)
         header = {
             "invoice_id": str(inv.id),
-            "vendor": vendor.name if vendor else "",
-            "vendor_erp_code": (vendor.erp_vendor_code if vendor else "") or "",
-            "doc_no": inv.doc_no or "",
+            "vendor": _csv_safe(vendor.name if vendor else ""),
+            "vendor_erp_code": _csv_safe((vendor.erp_vendor_code if vendor else "") or ""),
+            "doc_no": _csv_safe(inv.doc_no or ""),
             "doc_date": inv.doc_date.isoformat() if inv.doc_date else "",
             "due_date": inv.due_date.isoformat() if inv.due_date else "",
-            "payment_terms": inv.payment_terms or "",
-            "currency": inv.currency or "",
+            "payment_terms": _csv_safe(inv.payment_terms or ""),
+            "currency": _csv_safe(inv.currency or ""),
             "invoice_total": _num(inv.total_amount),
-            "po_ref": inv.po_ref or "",
-            "do_ref": inv.do_ref or "",
+            "po_ref": _csv_safe(inv.po_ref or ""),
+            "do_ref": _csv_safe(inv.do_ref or ""),
             "status": inv.status,
         }
         rows = ap_service.lines(session, inv.id)
@@ -85,28 +107,38 @@ def export_ap_csv(session: Session, invoices: list[ApInvoice]) -> str:
             writer.writerow({
                 **header,
                 "line_no": ln.line_no,
-                "description": ln.description or "",
+                "description": _csv_safe(ln.description or ""),
                 "quantity": _num(ln.quantity),
-                "uom": ln.uom or "",
+                "uom": _csv_safe(ln.uom or ""),
                 "unit_price": _num(ln.unit_price),
                 "line_total": _num(ln.line_total),
-                "gl_code": ln.gl_code or "",
-                "tax_code": ln.tax_code or "",
-                "department": ln.department or "",
-                "project_code": ln.project_code or "",
+                "gl_code": _csv_safe(ln.gl_code or ""),
+                "tax_code": _csv_safe(ln.tax_code or ""),
+                "department": _csv_safe(ln.department or ""),
+                "project_code": _csv_safe(ln.project_code or ""),
             })
     return buf.getvalue()
 
 
 def mark_posted(session: Session, invoice: ApInvoice, result: PostResult) -> None:
-    """Record a successful ERP post (or a manual export acknowledgement): stamp the
-    ERP's key and flip ``approved → posted``. A failure leaves the invoice approved for
-    the retry queue rather than losing it."""
+    """Record a successful ERP post: stamp the ERP's key and flip ``approved → posted``.
+    A failed push leaves the invoice approved for the retry queue rather than losing it.
+
+    Hardened (F8): only an APPROVED invoice may be posted (never a captured/held/coded
+    one), and an invoice that already carries an ``erp_doc_entry`` is NOT overwritten —
+    a double-post would silently re-pay a bill. Both raise :class:`ErpError`."""
     if not result.ok:
         return
+    if invoice.status != "approved":
+        raise ErpError(
+            f"only an approved invoice can be posted (status {invoice.status!r})"
+        )
+    if invoice.erp_doc_entry is not None:
+        raise ErpError(
+            f"invoice already posted as {invoice.erp_doc_entry!r} — refusing to overwrite"
+        )
     invoice.erp_doc_entry = result.erp_doc_entry
-    if invoice.status == "approved":
-        invoice.status = "posted"
+    invoice.status = "posted"
     session.flush()
 
 
@@ -120,7 +152,10 @@ class ManualCsvConnector:
     accountant imports :func:`export_ap_csv`. A real connector swaps in here unchanged."""
 
     def push_ap_invoice(self, invoice: ApInvoice) -> PostResult:
-        return PostResult(ok=True, erp_doc_entry=f"CSV-{str(invoice.id)[:8].upper()}")
+        return PostResult(
+            ok=True, erp_doc_entry=f"CSV-{str(invoice.id)[:8].upper()}",
+            idempotency_key=invoice.idempotency_key,   # F8: receipt carries the source key
+        )
 
     def pull_vendors(self) -> list:
         return []
