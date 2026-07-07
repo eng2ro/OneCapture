@@ -278,6 +278,28 @@ def resubmit_claim(
         raise _handle(exc)
 
 
+@router.post("/claims/{claim_id}/attest", response_model=ClaimOut)
+def attest_claim(
+    claim_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_repos),
+    principal: Principal = Depends(deps.get_principal),
+    actor: str = Depends(deps.get_actor),
+) -> ClaimOut:
+    """Record the claimant's out-of-pocket attestation on an existing claim so a
+    pre-P3 claim carrying NULL attestation can clear the release gate (punch-list
+    R2). Idempotency: attesting an already-attested claim is a 409, not a silent
+    overwrite of the original declaration."""
+    try:
+        return _claim_out(
+            repos,
+            _service.attest(
+                repos=repos, claim_id=claim_id, actor=actor, principal=principal
+            ),
+        )
+    except ClaimError as exc:
+        raise _handle(exc)
+
+
 @router.post("/claims/{claim_id}/release", response_model=BatchOut)
 def release_claim(
     claim_id: uuid.UUID,

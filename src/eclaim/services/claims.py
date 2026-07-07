@@ -1179,6 +1179,62 @@ class ClaimService:
         )
         return claim
 
+    def attest(
+        self, *, repos: "Repos", claim_id: uuid.UUID, actor: str,
+        principal: "Principal | None" = None,
+    ) -> Claim:
+        """Record the claimant's out-of-pocket attestation on an EXISTING claim
+        (Appendix A / punch-list R2) — the after-the-fact re-attest path.
+
+        Attestation is normally stamped at capture (the web checkbox) or submit
+        (``attested=True``). A claim created before that gate existed, or through a
+        channel that couldn't collect it (pre-P3 API upload / legacy mileage), carries
+        NULL attestation and is then PERMANENTLY blocked at release by
+        :class:`AttestationRequired`. This lets the claimant declare after the fact so a
+        legitimate stuck claim can proceed — WITHOUT a backfill migration stamping an
+        attestation nobody actually made (that would forge the very evidence the
+        control exists to capture).
+
+        Guards:
+        * a Viewer / non-grant-holder may not attest (``_require_writer``);
+        * the claim must reimburse out-of-pocket spend (otherwise there is nothing to
+          attest to);
+        * it must not already be attested — the original attester + timestamp are
+          evidence and are never silently overwritten;
+        * it must not have left for release (released/exported/paid) or be terminal
+          (rejected): attestation must PRECEDE release.
+
+        Locks the row (``FOR UPDATE``) so it serialises with a concurrent release."""
+        claim = self._lock(repos, claim_id)
+        self._require_writer(claim, principal)
+        if claim.status in ("released", "exported", "paid", "rejected"):
+            raise IllegalTransition(
+                f"cannot attest a claim in status {claim.status!r} — attestation must "
+                "precede release"
+            )
+        lines = repos.claims.lines(claim_id)
+        if not any(ln.payment_method == "out_of_pocket" for ln in lines):
+            raise ClaimError(
+                "nothing to attest: this claim has no out-of-pocket lines"
+            )
+        if claim.attested_by is not None:
+            raise IllegalTransition("this claim is already attested")
+
+        claim.attested_by = actor
+        claim.attested_at = dt.datetime.now(dt.timezone.utc)
+        record_event(
+            repos.audit,
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            entity_type="claim",
+            entity_id=claim.id,
+            event_type="attested",
+            actor=actor,
+            detail={"reattest": True, "status": claim.status},
+        )
+        repos.session.flush()
+        return claim
+
     def _category_of(self, repos: "Repos", line: ClaimLine):
         return repos.categories.get_by_id(line.category_id) if line.category_id else None
 

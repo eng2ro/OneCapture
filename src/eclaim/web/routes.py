@@ -907,6 +907,18 @@ def _render_review(
             "can_resubmit": can_edit and claim.status in ("submitted", "sent_back"),
             "can_release": claim.status in ("approved", "partially_approved")
             and principal.base_role != "viewer",
+            # Re-attest affordance (punch-list R2): a claim that reimburses
+            # out-of-pocket spend but was captured without the attestation can be
+            # attested after the fact — otherwise it is permanently stuck at the
+            # release gate. Only before release, only for a writer, only when there is
+            # out-of-pocket spend to attest to and it isn't already attested.
+            "can_attest": (
+                claim.attested_by is None
+                and principal.base_role != "viewer"
+                and principal.can_access_client(claim.client_id)
+                and claim.status not in ("released", "exported", "paid", "rejected")
+                and any(ln.payment_method == "out_of_pocket" for ln in lines)
+            ),
             # Reopen for amendment — only before the claim has left for another
             # system (released/exported/paid are locked).
             "can_reopen": claim.status in ("approved", "partially_approved")
@@ -1343,6 +1355,24 @@ def web_resubmit(
     return _action(
         request, repos, principal, claim_id,
         lambda: _service.resubmit(
+            repos=repos, claim_id=claim_id, actor=_actor(principal), principal=principal
+        ),
+    )
+
+
+@router.post("/claims/{claim_id}/attest")
+def web_attest(
+    request: Request,
+    claim_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Record the claimant's out-of-pocket attestation after the fact, so a claim that
+    was captured without it (pre-P3 rows / API upload) can clear the release gate
+    (punch-list R2) instead of being permanently stuck."""
+    return _action(
+        request, repos, principal, claim_id,
+        lambda: _service.attest(
             repos=repos, claim_id=claim_id, actor=_actor(principal), principal=principal
         ),
     )

@@ -200,6 +200,12 @@
         <div class="fk">Out-of-pocket attestation</div>
         {% if claim.attested_by %}
         <div class="fv" title="Attested at {{ claim.attested_at }}"><i class="ti ti-shield-check" style="color:var(--pine);"></i> {{ claim.attested_by }}{% if claim.attested_at %} · {{ claim.attested_at.strftime('%d %b %Y') }}{% endif %}</div>
+        {% elif can_attest %}
+        <div class="fv muted">Not attested — required before release.</div>
+        <form method="post" action="/claims/{{ claim.id }}/attest" style="margin-top:6px;" onsubmit="return confirm('I attest I paid this out-of-pocket myself and have not been, and will not be, reimbursed elsewhere.');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn" type="submit" style="padding:6px 12px;"><i class="ti ti-shield-check"></i> Attest out-of-pocket</button>
+        </form>
         {% else %}
         <div class="fv muted">Not attested</div>
         {% endif %}
