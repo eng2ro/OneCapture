@@ -12,6 +12,16 @@ ExpenseType = Literal[
 ]
 Unit = Literal["L", "kWh", "m3", "km"]
 
+# What KIND of document this is — the classifier output that the router (C1) uses to
+# send a captured page to the right queue: a staff-paid ``expense_receipt`` into
+# e-Claim, a ``vendor_invoice`` (a bill finance pays) or its ``delivery_order`` into
+# the AP side, or ``unknown`` when the model can't tell. Defaults to
+# ``expense_receipt`` so a provider that predates the classifier (and the fake OCR in
+# tests) keeps the existing e-Claim behaviour unchanged.
+DocumentType = Literal[
+    "expense_receipt", "vendor_invoice", "delivery_order", "unknown"
+]
+
 
 class OcrError(RuntimeError):
     """Raised when a document can't be read (parse or transport failure).
@@ -39,6 +49,17 @@ class Extraction(BaseModel):
     quantity: Decimal | None = None
     unit: Unit | None = None
     confidence: Decimal | None = None
+    # Document classification (C1): what kind of document this is, how sure the model
+    # is (0..1), and the human-readable cues it used (shown in the review UI + audit).
+    # ``document_type`` defaults to ``expense_receipt`` so nothing that predates the
+    # classifier changes behaviour; ``type_confidence`` None means "unclassified".
+    document_type: DocumentType = "expense_receipt"
+    type_confidence: Decimal | None = None
+    type_signals: list[str] = []
+    # The PO / DO reference PRINTED on the document (not its own doc_no) — the key that
+    # links a delivery_order to its matching vendor_invoice (same vendor + po_ref). None
+    # when no such cross-reference is present (a plain receipt).
+    po_ref: str | None = None
     # Per-field bounding boxes on the receipt image, NORMALIZED to 0..1 as
     # ``[x, y, w, h]`` (origin top-left). Field name -> box. Optional and
     # provider-agnostic: the vision OCR returns approximate boxes; a precise

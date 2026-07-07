@@ -44,7 +44,8 @@ from ..db.models import ApprovalMatrixRule, Category, Claimant, Client, Event, I
 from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
 from ..ocr.segment import PageSegmenter
 from ..repositories import ClaimRepository, LedgerRepository
-from ..services import ingestion
+from ..services import ingestion, routing
+from ..services import intake as intake_service
 from ..services.documents import normalize_image
 from ..services.claims import CLAIM_TYPES, ClaimError, ClaimService, Repos
 from ..services.sod import can_approve
@@ -91,6 +92,10 @@ def _nav_context(request: Request) -> dict:
         set_tenant_context(db, principal.firm_id, principal.allowed_client_ids)
         counts = ClaimRepository(db).status_counts(principal.allowed_client_ids)
         ctx["scope_name"] = _scope_name(list_visible_clients(db, principal))
+        # Vendor-bills badge: pages the classifier parked in the holding queue (C1).
+        ctx["intake_holding_count"] = len(
+            intake_service.holding_queue(db, principal.allowed_client_ids)
+        )
     except Exception:  # nav chrome must never break a page render
         return ctx
     ctx["nav_total"] = sum(counts.values())   # total claims — sum BEFORE deriving group keys
@@ -391,10 +396,17 @@ async def web_capture(
         return _render_capture(
             request, _capture_categories(repos), _events_for(repos), result.header_error, form
         )
+    if result.added == 0 and result.diverted:
+        # Every page was a vendor bill / delivery order — the classifier routed them to
+        # the "Vendor bills (coming soon)" holding queue instead of forcing a claim.
+        return RedirectResponse("/intake/holding?routed=1", status_code=303)
     if result.added == 0:
         msg = "Could not add any line. " + ingestion.summarize_errors(result.errors)
         return _render_capture(request, _capture_categories(repos), _events_for(repos), msg)
-    return RedirectResponse(f"/claims/{result.claim_id}/review", status_code=303)
+    dest = f"/claims/{result.claim_id}/review"
+    if result.diverted:
+        dest += f"?diverted={result.diverted}"      # some pages went to the holding queue
+    return RedirectResponse(dest, status_code=303)
 
 
 # --------------------------------------------------------------------------- #
@@ -430,10 +442,17 @@ def ingest_status(
 def _job_status_dict(job: IngestionJob | None) -> dict:
     if job is None:
         return {"state": "unknown"}
+    redirect = None
+    if job.status == "done":
+        # A done job with no claim means every page was a vendor bill / DO that the
+        # classifier diverted to the intake holding queue (C1) — send them there.
+        redirect = (
+            f"/claims/{job.claim_id}/review" if job.claim_id
+            else "/intake/holding?routed=1"
+        )
     return {
         "state": job.status, "done": job.done_units, "total": job.total_units,
-        "error": job.error,
-        "redirect": f"/claims/{job.claim_id}/review" if job.status == "done" and job.claim_id else None,
+        "error": job.error, "redirect": redirect,
     }
 
 
@@ -465,6 +484,78 @@ def ingest_events(
             session.close()
 
     return StreamingResponse(_events(), media_type="text/event-stream")
+
+
+# --------------------------------------------------------------------------- #
+# Intake holding queue (C1): vendor bills / delivery orders the classifier routed
+# off the e-Claim path, captured now and processed when the AP module ships. A
+# reviewer can correct a mis-route ("this is actually a …").
+# --------------------------------------------------------------------------- #
+@router.get("/intake/holding", response_class=HTMLResponse)
+def intake_holding(
+    request: Request,
+    routed: str = "",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse:
+    """The 'Vendor bills (coming soon)' queue: AP-side + still-undecided pages awaiting
+    the AP module or a manual route. Capture now, process later — never silently forced
+    into e-Claim."""
+    rows = intake_service.holding_queue(repos.session, principal.allowed_client_ids)
+    return templates.TemplateResponse(
+        request, "intake_holding.html",
+        {"rows": rows, "just_routed": bool(routed), "can_act": principal.base_role != "viewer"},
+    )
+
+
+@router.post("/intake/{intake_id}/reroute")
+def intake_reroute(
+    request: Request,
+    intake_id: uuid.UUID,
+    to: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+    image_dir: Path = Depends(deps.get_image_dir),
+    ocr: OcrProvider = Depends(deps.get_ocr),
+):
+    """A reviewer's correction of a route (C1). Re-routing to e-Claim re-runs the
+    e-Claim builder from the stored image (a single-line claim) and marks the intake
+    consumed; the correction is audited either way. Viewers cannot re-route."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot re-route documents")
+    try:
+        row = intake_service.get_intake(repos.session, intake_id)
+        if not principal.can_access_client(row.client_id):
+            raise HTTPException(status_code=403, detail="no grant to this client")
+
+        claim_id = None
+        if to == routing.QUEUE_ECLAIM:
+            if not row.image_path or not Path(row.image_path).exists():
+                raise ClaimError("the captured image is no longer available to re-file")
+            image_bytes = Path(row.image_path).read_bytes()
+            claim = _service.upload(
+                repos=repos, firm_id=principal.firm_id, client_id=row.client_id,
+                image_bytes=image_bytes, media_type=row.media_type or "image/jpeg",
+                ocr=ocr, image_dir=image_dir, actor=_actor(principal),
+            )
+            claim_id = claim.id
+        intake_service.reroute(
+            repos.session, intake_id=intake_id, to=to,
+            actor=_actor(principal), claim_id=claim_id,
+        )
+        repos.session.commit()
+    except intake_service.IntakeError as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        status = 404 if isinstance(exc, intake_service.IntakeNotFound) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+    except ClaimError as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        raise HTTPException(status_code=400, detail=str(exc))
+    if claim_id is not None:
+        return RedirectResponse(f"/claims/{claim_id}/review", status_code=303)
+    return RedirectResponse("/intake/holding", status_code=303)
 
 
 def _parse_int(value: str, default: int = 0) -> int:

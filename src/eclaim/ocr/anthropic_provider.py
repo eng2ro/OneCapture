@@ -18,15 +18,34 @@ from ..config import get_settings
 from .base import Extraction, OcrError, OcrProvider
 
 _INSTRUCTION = """\
-Extract this receipt as JSON with exactly these keys:
+Extract this document as JSON with exactly these keys:
 vendor (string), doc_no (string|null), date (string|null), currency (string|null),
 total_amount (number|null), expense_type ("fuel_diesel"|"fuel_petrol"|"electricity"|
 "natural_gas"|"air_travel"|"other"), quantity (number|null), unit ("L"|"kWh"|"m3"|"km"|null),
 confidence (number 0..1),
+document_type ("expense_receipt"|"vendor_invoice"|"delivery_order"|"unknown"),
+type_confidence (number 0..1),
+type_signals (array of short strings),
+po_ref (string|null),
 boxes (object|null).
 Rules: fuel pump receipt -> fuel_diesel/fuel_petrol by product (RON95/97=petrol; diesel/B7/B10=diesel),
 quantity = litres. Electricity bill (e.g. Tenaga Nasional/TNB) -> electricity, quantity = kWh.
 Strip thousands separators. Use null where a value is not printed.
+
+Classify document_type by these cues, and list the ones you actually saw in type_signals:
+- expense_receipt: a paid receipt / card slip / cash sale (has "Receipt", "Cash", "Change",
+  a card approval code); something a person paid and would claim back.
+- vendor_invoice: a bill addressed TO the customer company from an external vendor —
+  a letterhead + "Bill To" naming the company, "Tax Invoice", "Payment Terms", "Due Date",
+  "Bank Account"/remittance details, a PO reference. A bill finance still has to PAY.
+- delivery_order: a "Delivery Order"/"DO" or goods-received note listing quantities
+  delivered, usually with a DO/PO reference and NO amount due.
+- unknown: you genuinely cannot tell.
+Payment terms / a due date / remittance bank details => vendor_invoice (a receipt is
+already paid). A PO or DO reference present => AP side (vendor_invoice or delivery_order).
+Set type_confidence to how sure you are (0..1). Set po_ref to the referenced PO/DO
+number if the document cites one (e.g. "PO No: 4500012345", "Your DO: DO-778"), else null.
+
 "boxes" maps each non-null field above (vendor, doc_no, date, total_amount, quantity, ...)
 to the bounding box of the EXACT printed text you took that value from, as [x, y, w, h]
 NORMALIZED to 0..1, origin TOP-LEFT (x right, y down). The box must TIGHTLY enclose only
@@ -36,6 +55,31 @@ NOT the price, unit price, or pump number. Double-check each box visually covers
 you reported. Omit a field from "boxes" if you cannot confidently locate it; use null if
 you cannot produce boxes at all.
 Return ONLY the JSON object, no prose, no code fences."""
+
+_VALID_DOC_TYPES = {"expense_receipt", "vendor_invoice", "delivery_order", "unknown"}
+
+
+def _coerce_classification(data: dict) -> None:
+    """Normalize the classifier fields IN PLACE so a stray value degrades gracefully
+    instead of failing the whole read (mirrors the tolerant ``boxes`` handling):
+
+    * an unrecognised/absent ``document_type`` becomes ``"unknown"`` — never a
+      validation error, and never a wrong confident class;
+    * ``type_signals`` is coerced to a list of short strings (or dropped);
+    * ``type_confidence`` is left for the Decimal validator, but a non-numeric value
+      is dropped to ``None`` rather than raising.
+    """
+    dt = data.get("document_type")
+    if dt not in _VALID_DOC_TYPES:
+        data["document_type"] = "unknown"
+    signals = data.get("type_signals")
+    if isinstance(signals, (list, tuple)):
+        data["type_signals"] = [str(s)[:120] for s in signals if str(s).strip()][:12]
+    elif signals is not None:
+        data.pop("type_signals", None)
+    tc = data.get("type_confidence")
+    if tc is not None and not isinstance(tc, (int, float, str)):
+        data["type_confidence"] = None
 
 
 # The SDK retries transient failures (429 rate-limit, 529 overloaded, 5xx, and
@@ -114,6 +158,8 @@ class AnthropicVisionProvider(OcrProvider):
             # Pull boxes out and re-attach after tolerant coercion, so a malformed
             # box object can never fail the field extraction itself.
             boxes = _coerce_boxes(data.pop("boxes", None)) if isinstance(data, dict) else None
+            if isinstance(data, dict):
+                _coerce_classification(data)
             extraction = Extraction.model_validate(data)
             return extraction.model_copy(update={"boxes": boxes}) if boxes else extraction
         except (json.JSONDecodeError, ValidationError) as exc:

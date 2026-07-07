@@ -183,10 +183,14 @@ def process_one(session: Session, providers: ingestion.Providers) -> uuid.UUID |
         set_tenant_context(session, firm_id, allowed)
         if result.header_error:
             _finish(session, job_id, "failed", error=result.header_error)
-        elif result.added == 0:
+        elif result.added == 0 and not result.diverted:
             _finish(session, job_id, "failed",
                     error="Could not add any line. " + ingestion.summarize_errors(result.errors))
         else:
+            # Success — a claim was built, and/or pages were diverted to the intake
+            # holding queue (C1). ``result.claim_id`` is None when every page diverted;
+            # the diverted intakes committed in THIS same transaction, so the job's
+            # completion and the captured bills are atomic (a retry rebuilds cleanly).
             _finish(session, job_id, "done", claim_id=result.claim_id,
                     error=(ingestion.summarize_errors(result.errors) or None))
         ingestion.cleanup_staging(providers.image_dir, job_id)

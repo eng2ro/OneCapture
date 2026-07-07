@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Vendor bills — OneCapture{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Vendor bills <span class="badge">coming soon</span></h1>
+  <p class="muted">
+    Pages the classifier read as a <strong>vendor invoice</strong> or
+    <strong>delivery order</strong> (a bill finance pays), or wasn't sure about, are
+    captured here — not forced into an expense claim. Accounts-payable processing
+    ships with the AP module; until then they wait here, safe and auditable.
+  </p>
+  {% if just_routed %}
+  <div class="hint-ok" style="margin:10px 0;"><i class="ti ti-inbox"></i>
+    Captured to the vendor-bills queue. Nothing was filed as a staff expense.</div>
+  {% endif %}
+
+  {% if rows %}
+  <table class="ledger">
+    <thead>
+      <tr><th>Document</th><th>Vendor</th><th>Doc no</th><th>PO/DO link</th>
+          <th>Amount</th><th>Confidence</th><th>Signals</th>
+          {% if can_act %}<th>Correct</th>{% endif %}</tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>
+          <span class="pill pill-{{ r.document_type }}">{{ r.document_type.replace('_', ' ') }}</span>
+          {% if r.needs_manual %}<span class="page-sub" title="Low confidence — please confirm the type">· needs a check</span>{% endif %}
+        </td>
+        <td>{{ r.vendor or '—' }}</td>
+        <td class="mono">{{ r.doc_no or '—' }}</td>
+        <td>{% if r.linked_intake_id %}<span title="Linked to its matching {{ 'invoice' if r.document_type == 'delivery_order' else 'delivery order' }}"><i class="ti ti-link"></i> linked</span>{% else %}—{% endif %}</td>
+        <td>{% if r.total_amount is not none %}{{ r.currency or '' }} {{ '%.2f' | format(r.total_amount) }}{% else %}—{% endif %}</td>
+        <td>{% if r.type_confidence is not none %}{{ (r.type_confidence * 100) | round(0, 'floor') | int }}%{% else %}—{% endif %}</td>
+        <td class="muted" style="font-size:12px;">{{ (r.type_signals or []) | join(', ') }}</td>
+        {% if can_act %}
+        <td>
+          <form method="post" action="/intake/{{ r.id }}/reroute" style="display:flex;gap:6px;flex-wrap:wrap;">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button class="btn" type="submit" name="to" value="eclaim"
+                    title="This is actually a staff expense — file it in e-Claim"
+                    onclick="return confirm('Re-file this as a staff expense claim in e-Claim?');">
+              <i class="ti ti-user-dollar"></i> Staff expense
+            </button>
+            {% if r.document_type != 'vendor_invoice' %}
+            <button class="btn" type="submit" name="to" value="ap_holding"
+                    title="Keep as a vendor bill">Vendor bill</button>
+            {% endif %}
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No vendor bills waiting — every captured page was filed as an expense.</p>
+  {% endif %}
+</section>
+{% endblock %}

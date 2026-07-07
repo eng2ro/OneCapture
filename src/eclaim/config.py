@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # value (decision D14); lives here so the carbon lead can revise it.
     spend_factor: str = "0.35"
 
+    # Document-classifier routing (C1): a captured page whose type_confidence is at or
+    # above this threshold is auto-routed to its queue (expense_receipt → e-Claim,
+    # vendor_invoice/delivery_order → the AP holding queue); below it the page is held
+    # for a one-tap manual "paid it / vendor bill?" decision at review. A setting
+    # (Appendix B: configuration, not customization) so a firm can tune the cut-over.
+    route_confidence_threshold: str = "0.85"
+
     image_dir: Path = DEFAULT_IMAGE_DIR
 
     # Upload guards (blocker B7): the whole request body is buffered in memory

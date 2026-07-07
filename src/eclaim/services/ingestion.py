@@ -32,10 +32,15 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
+from sqlalchemy.orm import sessionmaker
+
 from ..config import get_settings
 from ..db.models import Event
 from ..ocr.base import Extraction, OcrError, OcrProvider
 from ..ocr.segment import PageSegmenter, one_per_page
+from ..tenancy import set_tenant_context
+from . import intake as intake_service
+from . import routing
 from .claims import CLAIM_TYPES, DATED_CLAIM_TYPES, ClaimError, ClaimService, Repos
 from .documents import is_pdf, normalize_image, render_pdf_pages, stitch_pages
 
@@ -339,6 +344,10 @@ class IngestResult:
     # A header/validation failure means no claim was created at all (distinct from a
     # batch where the header was fine but every receipt failed to read).
     header_error: str | None = None
+    # Pages the classifier routed OFF the e-Claim path into the intake holding queue
+    # (vendor bills / delivery orders / low-confidence) instead of onto this claim (C1).
+    diverted: int = 0
+    diverted_ids: list[uuid.UUID] = field(default_factory=list)
 
 
 def _resolve_header(header: dict) -> dict:
@@ -427,97 +436,163 @@ def build_claim(
     # 3. Build the claim atomically. Any total failure rolls the whole thing back so
     #    no empty/partial claim is ever persisted.
     added = 0
+    diverted: list[uuid.UUID] = []
+    actor = _capture_actor(created_by_user_id, header)
     try:
-        if resolved["mode"] == "new_event":
-            ev = repos.events.add(Event(
-                firm_id=firm_id, client_id=client_id,
-                title=(header.get("new_event_title") or "").strip(),
-                event_type="travel", start_date=resolved["sd"], end_date=resolved["ed"],
-                organiser_user_id=created_by_user_id, status="active",
-            ))
-            event_id = ev.id
-            start_date = end_date = None   # claim inherits the trip's dates
-        else:
-            event_id = resolved.get("event_id")
-            start_date, end_date = resolved["sd"], resolved["ed"]
-
-        claim = _service.start_claim(
-            repos=repos, firm_id=firm_id, client_id=client_id,
-            title=(header.get("title") or "").strip() or None,
-            purpose=(header.get("purpose") or "").strip() or None,
-            remarks=(header.get("remarks") or "").strip() or None,
-            posting_date=parse_date(header.get("posting_date") or ""),
-            claim_type=resolved["ctype"], start_date=start_date, end_date=end_date,
-            event_id=event_id, created_by_user_id=created_by_user_id,
-        )
-
+        # 3a. Classify every receipt first (pure — no DB writes). The router (C1) sends
+        #     an ``expense_receipt`` onto the claim and diverts anything else (vendor
+        #     bill / delivery order / low-confidence) to the intake holding queue. A
+        #     manually-keyed item is always an e-Claim line — the user entered it as an
+        #     expense they are claiming, so it is never re-routed.
+        classified: list[tuple] = []   # (r, extraction, cat_uuid, pay, decision)
         for i, r in enumerate(receipts):
             item = r["item"]
             try:
-                with repos.session.begin_nested():
-                    if item_has_data(item):
-                        provider: OcrProvider = _FormOcr(extraction_from_item(item))
-                        cat_uuid = uuid.UUID(item["category_id"]) if item.get("category_id") else None
-                        pay = item.get("payment_method") or "out_of_pocket"
-                    else:
-                        pre = ocr_results.get(i)
-                        if isinstance(pre, Exception):
-                            raise pre if isinstance(pre, OcrError) else OcrError(str(pre))
-                        provider, cat_uuid, pay = _FormOcr(pre), None, "out_of_pocket"
-                    _service.add_line(
-                        repos=repos, claim=claim, image_bytes=r["bytes"],
-                        media_type=r["media_type"], ocr=provider,
-                        image_dir=providers.image_dir, category_id=cat_uuid,
-                        payment_method=pay, page_images=r.get("page_images"),
-                    )
-                added += 1
+                if item_has_data(item):
+                    extraction = extraction_from_item(item)
+                    cat_uuid = uuid.UUID(item["category_id"]) if item.get("category_id") else None
+                    pay = item.get("payment_method") or "out_of_pocket"
+                    decision = routing.Route(routing.QUEUE_ECLAIM, needs_manual=False)
+                else:
+                    pre = ocr_results.get(i)
+                    if isinstance(pre, Exception):
+                        raise pre if isinstance(pre, OcrError) else OcrError(str(pre))
+                    extraction, cat_uuid, pay = pre, None, "out_of_pocket"
+                    decision = routing.route(extraction.document_type, extraction.type_confidence)
             except (OcrError, ClaimError, ValueError) as exc:
                 errors.append(f"{r['name']}: {exc}")
+                continue
+            classified.append((r, extraction, cat_uuid, pay, decision))
 
-        for spec in mileage_specs:
-            if not isinstance(spec, dict):
+        # 3b. Record diverted pages in THIS transaction but OUTSIDE the claim savepoint
+        #     below, so they survive even when the upload has no e-Claim line and the
+        #     empty claim is rolled back. Atomic with the whole capture, so an async
+        #     worker retry rebuilds them cleanly rather than duplicating.
+        for r, extraction, _cat, _pay, decision in classified:
+            if decision.queue == routing.QUEUE_ECLAIM:
                 continue
-            origin = str(spec.get("origin") or "").strip()
-            destination = str(spec.get("destination") or "").strip()
-            sdate = str(spec.get("trip_date") or "").strip()
-            if not origin or not destination:
-                errors.append("mileage: a trip is missing From/To")
-                continue
-            if not sdate:
-                errors.append(f"mileage {origin} → {destination}: a trip date is required")
-                continue
-            wps = [w for w in (spec.get("waypoints") or []) if isinstance(w, str) and w.strip()]
-            try:
-                ridx = int(spec.get("route_index") or 0)
-            except (TypeError, ValueError):
-                ridx = 0
             try:
                 with repos.session.begin_nested():
-                    route, shortest_km = resolve_route(providers.directions, origin, destination, wps, ridx)
-                    _service.add_mileage_line(
-                        repos=repos, claim=claim, origin=origin, destination=destination,
-                        waypoints=wps, route=route, date=sdate or None,
-                        rate=providers.mileage_rate, shortest_km=shortest_km,
+                    path, sha = _service._store_image(
+                        providers.image_dir, r["bytes"], r["media_type"]
                     )
-                added += 1
+                    row, _ = intake_service.record_intake(
+                        repos.session, firm_id=firm_id, client_id=client_id,
+                        created_by_user_id=created_by_user_id, extraction=extraction,
+                        provenance=intake_service.Provenance(
+                            sha256=sha, path=path,
+                            media_type=r["media_type"], name=r["name"],
+                        ),
+                        actor=actor,
+                    )
+                diverted.append(row.id)
             except (ClaimError, ValueError) as exc:
-                errors.append(f"mileage {origin} → {destination}: {exc}")
-            except Exception as exc:   # MapError etc. — never abort the whole capture
-                errors.append(f"mileage {origin} → {destination}: {exc}")
+                errors.append(f"{r['name']}: {exc}")
 
-        if added == 0:
-            repos.session.rollback()          # no lines → persist nothing
+        eclaim_receipts = [
+            (r, e, c, p) for (r, e, c, p, d) in classified if d.queue == routing.QUEUE_ECLAIM
+        ]
+
+        # 3c. Build the claim inside its OWN savepoint, so an upload with no e-Claim line
+        #     (every page diverted, or every line failed) rolls back the empty claim and
+        #     any freshly-created trip WITHOUT discarding the diverted intakes above.
+        claim = None
+        if eclaim_receipts or mileage_specs:
+            claim_sp = repos.session.begin_nested()
+            try:
+                if resolved["mode"] == "new_event":
+                    ev = repos.events.add(Event(
+                        firm_id=firm_id, client_id=client_id,
+                        title=(header.get("new_event_title") or "").strip(),
+                        event_type="travel", start_date=resolved["sd"], end_date=resolved["ed"],
+                        organiser_user_id=created_by_user_id, status="active",
+                    ))
+                    event_id = ev.id
+                    start_date = end_date = None   # claim inherits the trip's dates
+                else:
+                    event_id = resolved.get("event_id")
+                    start_date, end_date = resolved["sd"], resolved["ed"]
+                claim = _service.start_claim(
+                    repos=repos, firm_id=firm_id, client_id=client_id,
+                    title=(header.get("title") or "").strip() or None,
+                    purpose=(header.get("purpose") or "").strip() or None,
+                    remarks=(header.get("remarks") or "").strip() or None,
+                    posting_date=parse_date(header.get("posting_date") or ""),
+                    claim_type=resolved["ctype"], start_date=start_date, end_date=end_date,
+                    event_id=event_id, created_by_user_id=created_by_user_id,
+                )
+
+                for r, extraction, cat_uuid, pay in eclaim_receipts:
+                    try:
+                        with repos.session.begin_nested():
+                            _service.add_line(
+                                repos=repos, claim=claim, image_bytes=r["bytes"],
+                                media_type=r["media_type"], ocr=_FormOcr(extraction),
+                                image_dir=providers.image_dir, category_id=cat_uuid,
+                                payment_method=pay, page_images=r.get("page_images"),
+                            )
+                        added += 1
+                    except (OcrError, ClaimError, ValueError) as exc:
+                        errors.append(f"{r['name']}: {exc}")
+
+                for spec in mileage_specs:
+                    if not isinstance(spec, dict):
+                        continue
+                    origin = str(spec.get("origin") or "").strip()
+                    destination = str(spec.get("destination") or "").strip()
+                    sdate = str(spec.get("trip_date") or "").strip()
+                    if not origin or not destination:
+                        errors.append("mileage: a trip is missing From/To")
+                        continue
+                    if not sdate:
+                        errors.append(f"mileage {origin} → {destination}: a trip date is required")
+                        continue
+                    wps = [w for w in (spec.get("waypoints") or []) if isinstance(w, str) and w.strip()]
+                    try:
+                        ridx = int(spec.get("route_index") or 0)
+                    except (TypeError, ValueError):
+                        ridx = 0
+                    try:
+                        with repos.session.begin_nested():
+                            route, shortest_km = resolve_route(providers.directions, origin, destination, wps, ridx)
+                            _service.add_mileage_line(
+                                repos=repos, claim=claim, origin=origin, destination=destination,
+                                waypoints=wps, route=route, date=sdate or None,
+                                rate=providers.mileage_rate, shortest_km=shortest_km,
+                            )
+                        added += 1
+                    except (ClaimError, ValueError) as exc:
+                        errors.append(f"mileage {origin} → {destination}: {exc}")
+                    except Exception as exc:   # MapError etc. — never abort the whole capture
+                        errors.append(f"mileage {origin} → {destination}: {exc}")
+
+                if added == 0:
+                    claim_sp.rollback()        # empty claim → drop it (keep the diversions)
+                    claim = None
+                else:
+                    _service.submit(repos=repos, claim=claim, actor=actor,
+                                    line_count=added, attested=bool(header.get("attested")))
+                    if ingestion_job_id is not None:
+                        claim.ingestion_job_id = ingestion_job_id
+                    claim_sp.commit()
+            except Exception:
+                if claim_sp.is_active:
+                    claim_sp.rollback()
+                raise
+
+        # Nothing landed at all — no e-Claim line AND no diverted page → persist nothing.
+        if added == 0 and not diverted:
+            repos.session.rollback()
             _reset_ctx()
             return IngestResult(added=0, errors=errors)
 
-        _service.submit(repos=repos, claim=claim, actor=_capture_actor(created_by_user_id, header),
-                        line_count=added, attested=bool(header.get("attested")))
-        if ingestion_job_id is not None:
-            claim.ingestion_job_id = ingestion_job_id
-        repos.session.flush()            # assign claim.id; make the job link durable-on-commit
+        repos.session.flush()   # assign ids; make the job link durable-on-commit
         if commit:
             repos.session.commit()
-        return IngestResult(claim_id=claim.id, added=added, errors=errors)
+        return IngestResult(
+            claim_id=(claim.id if claim is not None else None),
+            added=added, diverted=len(diverted), diverted_ids=diverted, errors=errors,
+        )
     except Exception:
         repos.session.rollback()
         _reset_ctx()

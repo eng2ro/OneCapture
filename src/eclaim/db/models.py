@@ -22,6 +22,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -828,6 +829,87 @@ class IngestionJob(Base):
     error: Mapped[str | None] = mapped_column(String)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class DocumentIntake(Base):
+    """Classification + routing record for one captured page (C1, migration 0025).
+
+    Every captured page is classified (``document_type``) and routed (``routed_to``)
+    before it becomes an e-Claim line or, later, an AP invoice. This is the durable,
+    auditable record of that decision: an ``ap_holding`` row is a vendor bill parked in
+    the "Vendor bills (coming soon)" queue; a reviewer's correction re-routes it (and
+    re-runs the right builder); ``link_key`` ties a delivery order to its matching
+    invoice. See migration 0025 for the worker-inclusive RLS policy."""
+
+    __tablename__ = "document_intake"
+    __table_args__ = (
+        CheckConstraint(
+            "document_type IN ('expense_receipt','vendor_invoice','delivery_order','unknown')",
+            name="ck_document_intake_type",
+        ),
+        CheckConstraint(
+            "routed_to IN ('eclaim','ap_holding','pending')",
+            name="ck_document_intake_routed_to",
+        ),
+        CheckConstraint(
+            "routed_by IN ('system','user')", name="ck_document_intake_routed_by"
+        ),
+        CheckConstraint(
+            "status IN ('open','consumed')", name="ck_document_intake_status"
+        ),
+        Index("ix_document_intake_firm_client", "firm_id", "client_id"),
+        Index("ix_document_intake_queue", "client_id", "routed_to", "status", "created_at"),
+        Index("ix_document_intake_link", "client_id", "link_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+
+    image_sha256: Mapped[str | None] = mapped_column(String)
+    image_path: Mapped[str | None] = mapped_column(String)
+    media_type: Mapped[str | None] = mapped_column(String)
+    source_name: Mapped[str | None] = mapped_column(String)
+
+    document_type: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'unknown'")
+    )
+    type_confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    type_signals: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    routed_to: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'pending'")
+    )
+    routed_by: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'system'")
+    )
+    needs_manual: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default=text("'open'")
+    )
+
+    link_key: Mapped[str | None] = mapped_column(String)
+    linked_intake_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("document_intake.id")
+    )
+    claim_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("claim.id"))
+
+    vendor: Mapped[str | None] = mapped_column(String)
+    doc_no: Mapped[str | None] = mapped_column(String)
+    total_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String)
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

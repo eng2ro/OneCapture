@@ -30,6 +30,7 @@ from eclaim.db.models import (
     AuditEvent,
     Claim,
     Client,
+    DocumentIntake,
     EmissionEntry,
     Firm,
     ReleaseBatch,
@@ -38,8 +39,11 @@ from eclaim.db.models import (
 # The firm + allowed-client gated tables. (claimant is in the same policy class
 # but we seed no claimants.) approval_matrix_rule carries the same firm+client RLS
 # policy (migration 0023) and must be proven isolated too (punch-list P7).
+# document_intake (migration 0025) uses the worker-inclusive policy — with the worker
+# GUC off (as here) it must still default-deny with no context and firm-scope with it.
 DATA_TABLES = [
     "claim", "release_batch", "emission_entry", "audit_event", "approval_matrix_rule",
+    "document_intake",
 ]
 
 
@@ -85,6 +89,10 @@ def _seed_firm(session: Session, label: str) -> dict:
             firm_id=firm.id, client_id=client.id, step_order=1,
             approver_role="manager", approvals_required=1, active=True,
         ),
+        DocumentIntake(
+            firm_id=firm.id, client_id=client.id,
+            document_type="vendor_invoice", routed_to="ap_holding",
+        ),
     ])
     session.flush()
     return {"firm": firm.id, "client": client.id}
@@ -104,7 +112,7 @@ def two_firms(db_engine):
         for entry in made.values():
             fid = entry["firm"]
             for tbl in ["emission_entry", "audit_event", "release_batch",
-                        "approval_matrix_rule", "claim", "client"]:
+                        "approval_matrix_rule", "document_intake", "claim", "client"]:
                 owner.execute(text(f"DELETE FROM {tbl} WHERE firm_id = :f"), {"f": fid})
             owner.execute(text("DELETE FROM firm WHERE id = :f"), {"f": fid})
         owner.commit()
