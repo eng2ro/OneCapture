@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Carbon coverage — OneCapture{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Carbon coverage</h1>
+  <p class="muted">
+    What was <strong>captured</strong> (the full document spend) vs what was
+    <strong>forwarded</strong> to CarbonNext (its carbon-relevant lines only). The
+    carbon unit is the line, so a bill with non-carbon lines forwards less than its
+    total — that gap is shown here on purpose, reconcilable by document reference.
+  </p>
+
+  {% if not periods %}
+  <p class="muted">Nothing forwarded yet — release a claim with carbon-relevant lines
+    to populate this view.</p>
+  {% endif %}
+
+  {% for p in periods %}
+  <div class="client-group" style="margin-top:14px;">
+    <div class="client-head" style="align-items:baseline;">
+      <h2>{{ p.period }}</h2>
+      <span class="muted">
+        captured {{ '%.2f' | format(p.captured) }} ·
+        forwarded {{ '%.2f' | format(p.forwarded) }} ·
+        {{ p.coverage_pct }}% covered · {{ p.doc_count }} doc(s), {{ p.line_count }} line(s)
+      </span>
+    </div>
+    <table class="ledger">
+      <thead>
+        <tr><th>Document</th><th>Captured</th><th>Forwarded</th><th>Uncovered</th>
+            <th>Coverage</th><th>Lines</th></tr>
+      </thead>
+      <tbody>
+        {% for d in p.documents %}
+        <tr>
+          <td class="mono">{{ d.doc_no or '(no doc no)' }}</td>
+          <td>{{ d.currency or '' }} {{ '%.2f' | format(d.captured) }}</td>
+          <td>{{ d.currency or '' }} {{ '%.2f' | format(d.forwarded) }}</td>
+          <td>{{ d.currency or '' }} {{ '%.2f' | format(d.uncovered) }}</td>
+          <td>{{ d.coverage_pct }}%</td>
+          <td>
+            <details>
+              <summary>{{ d.line_count }} line(s)</summary>
+              <table class="ledger" style="margin-top:6px;">
+                <thead><tr><th>Category</th><th>Type</th><th>Vendor</th><th>Amount</th></tr></thead>
+                <tbody>
+                  {% for ln in d.lines %}
+                  <tr>
+                    <td>{{ ln.category_name or '—' }}</td>
+                    <td>{{ ln.expense_type or '—' }}</td>
+                    <td>{{ ln.vendor or '—' }}</td>
+                    <td>{{ '%.2f' | format(ln.amount) }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </details>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

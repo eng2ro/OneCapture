@@ -45,6 +45,7 @@ from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
 from ..ocr.segment import PageSegmenter
 from ..repositories import ClaimRepository, LedgerRepository
 from ..services import ap as ap_service
+from ..services import coverage as coverage_service
 from ..services import erp as erp_service
 from ..services import ingestion, routing
 from ..services import intake as intake_service
@@ -728,6 +729,24 @@ def ap_reject(
             repos.session, invoice_id=invoice_id, actor=_actor(principal),
             reason=reason.strip() or None,
         ),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Carbon coverage (F-B): captured spend vs carbon-forwarded, per document/period.
+# --------------------------------------------------------------------------- #
+@router.get("/coverage", response_class=HTMLResponse)
+def coverage_page(
+    request: Request,
+    period: str = "",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse:
+    periods = coverage_service.coverage_report(
+        repos.session, principal.allowed_client_ids, period=period or None
+    )
+    return templates.TemplateResponse(
+        request, "coverage.html", {"periods": periods, "selected_period": period},
     )
 
 

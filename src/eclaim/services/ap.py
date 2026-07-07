@@ -346,6 +346,18 @@ def list_invoices(session: Session, client_ids, *, status: str | None = None) ->
     return list(session.execute(q.order_by(ApInvoice.created_at.desc())).scalars())
 
 
+def handoff_doc_fields(invoice: ApInvoice) -> tuple[str | None, Decimal | None]:
+    """The parent-document reference fields (F-B) the AP carbon handoff will stamp onto
+    every forwarded line — the SAME contract as the e-Claim handoff
+    (``carbon_handoff.doc_no`` + ``doc_gross_total``), so both channels reconcile by
+    reference. For an AP invoice the document IS the invoice: its ``doc_no`` and its
+    gross ``total_amount`` (each ap_invoice_line forwards only its own carbon share, so
+    the forwarded amount is legitimately ≤ this). Kept pure + here so the handoff wiring
+    (deferred) has one source of truth. See :func:`eclaim.services.claims._doc_gross_totals`
+    for the e-Claim equivalent (a claim can hold several documents; an invoice is one)."""
+    return invoice.doc_no, invoice.total_amount
+
+
 def _lines(session: Session, invoice_id: uuid.UUID) -> list[ApInvoiceLine]:
     return list(session.execute(
         select(ApInvoiceLine).where(ApInvoiceLine.ap_invoice_id == invoice_id)

@@ -126,6 +126,7 @@
       <a class="oc-nav-i {{ 'active' if request.url.path.startswith('/ap') else '' }}" href="/ap"><i class="ti ti-cash-banknote"></i><span class="lab">AP invoices</span></a>
       {% endif %}
       <a class="oc-nav-i {{ 'active' if request.url.path == '/ledger' else '' }}" href="/ledger"><i class="ti ti-leaf"></i><span class="lab">CarbonNext handoff</span></a>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/coverage' else '' }}" href="/coverage"><i class="ti ti-chart-pie"></i><span class="lab">Carbon coverage</span></a>
 
       <div class="oc-nav-h">ACCOUNT</div>
       <a class="oc-nav-i" href="/"><i class="ti ti-circles-relation"></i><span class="lab">Back to Hub</span></a>

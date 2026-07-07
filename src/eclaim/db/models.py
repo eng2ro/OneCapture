@@ -682,6 +682,13 @@ class CarbonHandoff(Base):
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     unit: Mapped[str | None] = mapped_column(String)
     cost_centre: Mapped[str | None] = mapped_column(String)
+    # Parent-document reference (F-B): which document this line came from, and that
+    # document's GROSS total (across ALL its lines, carbon + non-carbon). The forwarded
+    # ``amount`` is this line only, so ``doc_gross_total`` explains why it can be less
+    # than the bill total — reconcile by reference, never by totals. The AP handoff
+    # populates the same two fields (ap_invoice.doc_no + total_amount).
+    doc_no: Mapped[str | None] = mapped_column(String)
+    doc_gross_total: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
 
     direction: Mapped[str] = mapped_column(
         String, nullable=False, server_default=text("'forward'")

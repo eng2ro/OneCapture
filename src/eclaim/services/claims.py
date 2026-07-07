@@ -1309,6 +1309,9 @@ class ClaimService:
         digest = canonical_hash(payloads or [{"claim_id": str(claim.id)}])
         carbon_ref = f"CARB-{digest[:12].upper()}"
         token = StubTSA().stamp(digest)
+        # Parent-document gross per source document (F-B): computed over ALL lines
+        # (carbon + non-carbon) so a forwarded line carries the whole bill's total.
+        doc_totals = _doc_gross_totals(lines)
 
         # The whole release is written in a savepoint. Concurrent transitions on this
         # claim already serialise on the FOR UPDATE lock above, so the loser normally
@@ -1349,6 +1352,8 @@ class ClaimService:
                             quantity=ln.quantity,
                             unit=ln.unit,
                             cost_centre=ln.cost_centre_override,
+                            doc_no=ln.doc_no,
+                            doc_gross_total=doc_totals.get(_doc_key(ln)),
                             direction="forward",
                             idempotency_key=_idempotency_key(claim.client_id, ln.id),
                             carbon_ref=f"CARB-{canonical_hash([self._payload(ln, cat)])[:12].upper()}",
@@ -1413,6 +1418,9 @@ class ClaimService:
             self._payload(ln, cat) | {"reversal_of": str(ln.id)} for ln, cat in items
         ]
         digest = canonical_hash(payloads or [{"reversal_of": str(claim.id)}])
+        # Same parent-doc gross as the forward rows carried — direction-independent
+        # context (NOT negated), so a reversal reconciles to the same bill (F-B).
+        doc_totals = _doc_gross_totals(lines)
 
         # Same savepoint + idempotent-recovery pattern as release(): the FOR UPDATE
         # lock serialises, and UNIQUE(client_id, batch_hash) is the backstop that
@@ -1451,6 +1459,8 @@ class ClaimService:
                             quantity=None if ln.quantity is None else -ln.quantity,
                             unit=ln.unit,
                             cost_centre=ln.cost_centre_override,
+                            doc_no=ln.doc_no,
+                            doc_gross_total=doc_totals.get(_doc_key(ln)),
                             direction="reversal",
                             idempotency_key=idem,
                             carbon_ref=f"CARB-REV-{digest[:12].upper()}",
@@ -1515,3 +1525,25 @@ class Repos:
 def _idempotency_key(client_id: uuid.UUID, claim_id: uuid.UUID, suffix: str = "") -> str:
     raw = f"{client_id}{claim_id}{suffix}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _doc_key(line: ClaimLine) -> str:
+    """The identity of the source DOCUMENT a line came from (F-B). Lines split from one
+    receipt share its ``doc_no`` (split copies the field), so they group together; a
+    line with no ``doc_no`` is its own document, keyed by its id so two blank-doc lines
+    never merge into one phantom document."""
+    return line.doc_no if line.doc_no else f"__line__{line.id}"
+
+
+def _doc_gross_totals(lines: list[ClaimLine]) -> dict[str, Decimal]:
+    """Gross total per source document across ALL of a claim's lines — carbon AND
+    non-carbon (F-B). Stamped onto every forwarded/reversed handoff row so the forwarded
+    amount (carbon lines only) can be reconciled against the whole bill by reference.
+    Sums ``total_amount`` (gross); a line with no amount contributes nothing."""
+    totals: dict[str, Decimal] = {}
+    for ln in lines:
+        if ln.total_amount is None:
+            totals.setdefault(_doc_key(ln), Decimal("0"))
+            continue
+        totals[_doc_key(ln)] = totals.get(_doc_key(ln), Decimal("0")) + ln.total_amount
+    return totals
