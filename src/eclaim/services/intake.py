@@ -76,6 +76,23 @@ def record_intake(
         extraction.document_type, extraction.type_confidence, threshold=threshold
     )
     to_eclaim = decision.queue == routing.QUEUE_ECLAIM
+
+    # De-dup the holding queue: re-capturing the SAME image (identical bytes → same
+    # sha256) must not pile up identical rows — a common case when someone uploads the
+    # same bill twice. If an OPEN holding intake for this image already exists for the
+    # client, return it (idempotent) instead of adding a duplicate. Only for diverted
+    # pages; an e-Claim page becomes a claim line, not a holding row.
+    if not to_eclaim and provenance.sha256:
+        existing = session.execute(
+            select(DocumentIntake).where(
+                DocumentIntake.client_id == client_id,
+                DocumentIntake.image_sha256 == provenance.sha256,
+                DocumentIntake.status == "open",
+            ).order_by(DocumentIntake.created_at).limit(1)
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing, decision
+
     intake = DocumentIntake(
         firm_id=firm_id,
         client_id=client_id,

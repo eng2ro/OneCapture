@@ -105,8 +105,12 @@ def test_coerce_trims_and_caps_signals():
 # --------------------------------------------------------------------------- #
 # End-to-end: capture diverts vendor bills; correction re-files them
 # --------------------------------------------------------------------------- #
-def _capture(client, *, n=1, attested=True):
-    files = [("files", (f"v{i}.png", b"\x89PNG\r\n bill", "image/png")) for i in range(n)]
+def _capture(client, *, n=1, attested=True, marker=b""):
+    # ``marker`` distinguishes the image bytes so distinct uploads don't dedup by sha.
+    files = [
+        ("files", (f"v{i}.png", b"\x89PNG\r\n bill" + marker + bytes([i]), "image/png"))
+        for i in range(n)
+    ]
     data = {"items": "[]"}
     if attested:
         data["attested"] = "yes"
@@ -195,12 +199,25 @@ def test_holding_count_matches_the_queue(client, db_session, fake_ocr):
     """F9: the nav badge uses a COUNT that matches the holding queue length."""
     ids = db_session.info["principal"]
     fake_ocr.extraction = _bill()
-    _capture(client)
-    _capture(client)
+    _capture(client, marker=b"A")           # two DISTINCT images (else they'd dedup)
+    _capture(client, marker=b"B")
     cids = frozenset({ids["client"]})
     assert intake_service.holding_count(db_session, cids) == len(
         intake_service.holding_queue(db_session, cids)
     ) == 2
+
+
+def test_reuploading_the_same_bill_does_not_duplicate_the_holding_row(client, db_session, fake_ocr):
+    """Re-capturing the IDENTICAL file (same image sha256) must not pile up duplicate
+    holding rows — the queue de-dups on the image. Fixes the '6 identical rows' case."""
+    fake_ocr.extraction = _bill()
+    _capture(client)
+    _capture(client)                        # same bytes → same sha → deduped
+    _capture(client)
+    rows = db_session.execute(
+        select(DocumentIntake).where(DocumentIntake.status == "open")
+    ).scalars().all()
+    assert len(rows) == 1
 
 
 def test_holding_queue_excludes_eclaim_rows(db_session):
