@@ -327,6 +327,25 @@ def approve(
     return invoice
 
 
+def release_hold(session: Session, *, invoice_id: uuid.UUID, actor: str) -> ApInvoice:
+    """Clear a duplicate hold on a false positive (F6): ``held`` → ``coded`` if the
+    invoice was already coded, else ``captured``, so the bill re-enters the normal
+    flow instead of being a dead end that could only be rejected. Audited, and it
+    clears the hold reason. Only a held invoice can have its hold released."""
+    invoice = get_invoice(session, invoice_id)
+    if invoice.status != "held":
+        raise IllegalApTransition(
+            f"only a held invoice can have its hold released (status {invoice.status!r})"
+        )
+    invoice.status = "coded" if invoice.coded_by_user_id is not None else "captured"
+    prior_reason = invoice.hold_reason
+    invoice.hold_reason = None
+    _audit(session, invoice, "ap_hold_released", actor,
+           {"to": invoice.status, "cleared_reason": prior_reason})
+    session.flush()
+    return invoice
+
+
 def reject(session: Session, *, invoice_id: uuid.UUID, actor: str, reason: str | None = None) -> ApInvoice:
     invoice = get_invoice(session, invoice_id)
     if invoice.status in ("posted", "paid"):

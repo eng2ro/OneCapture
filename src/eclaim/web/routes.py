@@ -716,6 +716,21 @@ def ap_approve(
     )
 
 
+@router.post("/ap/{invoice_id}/release-hold")
+def ap_release_hold(
+    request: Request, invoice_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Clear a false-positive duplicate hold so the bill can proceed (F6)."""
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.release_hold(
+            repos.session, invoice_id=invoice_id, actor=_actor(principal)
+        ),
+    )
+
+
 @router.post("/ap/{invoice_id}/reject")
 def ap_reject(
     request: Request, invoice_id: uuid.UUID,

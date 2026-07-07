@@ -26,6 +26,12 @@
     {% endif %}
     {% if can_act %}
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      {% if invoice.status == 'held' %}
+      <form method="post" action="/ap/{{ invoice.id }}/release-hold">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn" type="submit" title="This is not a duplicate — let it proceed"><i class="ti ti-lock-open"></i> Not a duplicate</button>
+      </form>
+      {% endif %}
       {% if invoice.status == 'coded' %}
       <form method="post" action="/ap/{{ invoice.id }}/submit">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">

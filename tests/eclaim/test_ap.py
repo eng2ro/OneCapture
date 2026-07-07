@@ -82,6 +82,48 @@ def test_same_vendor_docno_amount_is_held_as_duplicate(client, db_session):
     assert "duplicate" in (second.hold_reason or "").lower()
 
 
+def test_release_hold_lets_a_false_positive_proceed(client, db_session):
+    """F6: a duplicate hold is no longer a dead end — releasing the hold returns the
+    bill to the normal flow (not just reject), audited."""
+    ids = db_session.info["principal"]
+    ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    dup = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    assert dup.status == "held"
+
+    released = ap.release_hold(db_session, invoice_id=dup.id, actor="mgr")
+    assert released.status == "captured" and released.hold_reason is None
+    chain = Repos.for_session(db_session).audit.chain("ap_invoice", dup.id)
+    assert any(e.event_type == "ap_hold_released" for e in chain)
+
+    # and it now flows through to approval instead of dead-ending.
+    coder = _principal(ids, _user(db_session, ids, "hc@seed.test").id, email="hc@seed.test")
+    approver = _principal(ids, _user(db_session, ids, "ha@seed.test").id, email="ha@seed.test")
+    ap.code_line(db_session, line_id=ap.lines(db_session, dup.id)[0].id, coder=coder, actor="hc")
+    ap.submit_for_approval(db_session, invoice_id=dup.id, actor="hc")
+    ap.approve(db_session, invoice_id=dup.id, approver=approver, actor="ha")
+    assert db_session.get(ApInvoice, dup.id).status == "approved"
+
+
+def test_release_hold_only_applies_to_held(client, db_session):
+    ids = db_session.info["principal"]
+    inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")   # captured
+    with pytest.raises(ap.IllegalApTransition):
+        ap.release_hold(db_session, invoice_id=inv.id, actor="x")
+
+
+def test_web_release_hold_action(client, db_session):
+    ids = db_session.info["principal"]
+    ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    dup = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    db_session.commit()
+
+    assert "Not a duplicate" in client.get(f"/ap/{dup.id}").text
+    r = client.post(f"/ap/{dup.id}/release-hold", follow_redirects=False)
+    assert r.status_code == 303
+    db_session.expire_all()
+    assert db_session.get(ApInvoice, dup.id).status == "captured"
+
+
 def test_different_amount_is_not_a_duplicate(client, db_session):
     ids = db_session.info["principal"]
     ap.create_from_intake(db_session, intake=_intake(db_session, ids, total="300"), actor="t")
