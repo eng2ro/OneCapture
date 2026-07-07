@@ -109,12 +109,26 @@ def test_attest_stamps_and_writes_an_audit_event(client, db_session):
     client.post(f"/api/claims/{cid}/attest")
 
     claim = db_session.get(Claim, cid)
-    # Attributed to the API actor (``system`` in the test harness, the caller's email
-    # on the web path); the point is the stamp is now recorded, not who exactly.
-    assert claim.attested_by is not None
+    # Attributed to the AUTHENTICATED principal, never the anonymous default_releaser
+    # (F1) — a personal declaration must name a real person.
+    assert claim.attested_by == "partner@seed.test"
     assert claim.attested_at is not None
     chain = Repos.for_session(db_session).audit.chain("claim", cid)
-    assert any(e.event_type == "attested" for e in chain)
+    attested = [e for e in chain if e.event_type == "attested"]
+    assert attested and attested[0].actor == "partner@seed.test"
+
+
+def test_attest_is_not_attributed_to_system(client, db_session):
+    """F1 pin: the API attest path must NOT stamp the config default_releaser
+    ('system') — that would be an anonymous, forgeable declaration. Fails if the route
+    reverts to Depends(get_actor)."""
+    from eclaim.config import get_settings
+
+    cid = _upload_receipt(client, attested=False)
+    client.post(f"/api/claims/{cid}/attest")
+    attested_by = db_session.get(Claim, cid).attested_by
+    assert attested_by == "partner@seed.test"
+    assert attested_by != get_settings().default_releaser
 
 
 def test_cannot_reattest_an_already_attested_claim(client):

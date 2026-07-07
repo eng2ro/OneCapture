@@ -283,12 +283,17 @@ def attest_claim(
     claim_id: uuid.UUID,
     repos: Repos = Depends(deps.get_repos),
     principal: Principal = Depends(deps.get_principal),
-    actor: str = Depends(deps.get_actor),
 ) -> ClaimOut:
     """Record the claimant's out-of-pocket attestation on an existing claim so a
     pre-P3 claim carrying NULL attestation can clear the release gate (punch-list
     R2). Idempotency: attesting an already-attested claim is a 409, not a silent
-    overwrite of the original declaration."""
+    overwrite of the original declaration.
+
+    Attestation is a personal declaration, so it is attributed to the AUTHENTICATED
+    principal — NEVER the anonymous ``default_releaser`` (punch-list F1): a forgeable
+    "system" attester would defeat the whole control. The service's writer gate (no
+    viewers, must hold the client grant) decides who MAY attest."""
+    actor = principal.email or str(principal.user_id)
     try:
         return _claim_out(
             repos,
