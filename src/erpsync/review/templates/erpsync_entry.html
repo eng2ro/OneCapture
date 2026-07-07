@@ -47,7 +47,11 @@
           <label>Scope <input name="scope" value="{{ entry.scope }}"></label>
           <label>Basis <input name="basis" value="{{ entry.basis }}"></label>
           <label>Factor ref <input name="factor_ref" value="{{ entry.factor_ref }}"></label>
-          <label>Factor value <input name="factor_value" value=""></label>
+          {# factor_value drives the recomputed tCO2e and has no default on RemapBody —
+             an empty submit is dropped by the JS below and 422s server-side. Require it
+             (and constrain it to a non-negative number) so the browser blocks the
+             submit with a field prompt instead of a bare "Failed: 422" alert (R5). #}
+          <label>Factor value <input name="factor_value" type="number" step="any" min="0" value="" required></label>
           <label>Quantity <input name="quantity" value="{{ entry.quantity or '' }}"></label>
           <label>UoM <input name="uom" value="{{ entry.uom or '' }}"></label>
           <button type="submit">Remap &amp; recompute</button>

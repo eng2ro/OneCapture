@@ -70,6 +70,19 @@ class BodySizeLimitMiddleware:
             # turns it into its OWN 400 "error parsing the body" response; if we let
             # that through, the client sees a misleading 400 instead of the intended
             # 413. We swallow it and synthesize the 413 after the app unwinds.
+            #
+            # Latent edge (not reachable on today's routes): if a handler were to BEGIN
+            # streaming its response (emit http.response.start) BEFORE it finished
+            # reading the body, and the cap then tripped, we could not send a 413 — the
+            # status line has already gone to the client. ``forwarded_start`` records
+            # that so we DON'T also emit a second, conflicting 413 (the final guard
+            # below is ``exceeded and not forwarded_start``); the client just gets the
+            # response truncated at the cap. Every current body-reading route
+            # (upload/capture, the CSRF form parse) reads the whole body before it
+            # responds, so response.start never precedes the trip and the 413 always
+            # wins. If a streaming-while-reading endpoint is ever added, it must do its
+            # own size accounting — this middleware can only fail it closed, not
+            # re-status it after headers are on the wire.
             nonlocal forwarded_start
             if exceeded:
                 return

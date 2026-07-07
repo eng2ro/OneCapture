@@ -17,6 +17,7 @@ reverted/removed — mutation-proof, not just "renders without error".
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -211,3 +212,19 @@ def test_erpsync_entry_approved_unmapped_is_not_a_silent_dash(client, db_session
     page = client.get(f"/erpsync/entries/{row.id}/review").text
     assert DASH in page
     assert "posts to the ledger" in page
+
+
+def test_erpsync_remap_form_requires_factor_value(client, db_session, config, tmp_path):
+    """R5: the flagged-row remap form marks factor_value client-side ``required`` so an
+    empty submit gets a browser field prompt, not the bare "Failed: 422" the missing
+    (no-default) field would otherwise trigger. Pins the attribute on the input."""
+    ids = _stage_month(db_session, config, tmp_path)
+    flagged = db_session.execute(
+        select(ErpsyncEntry).where(
+            ErpsyncEntry.client_id == ids["client"], ErpsyncEntry.status == "flagged"
+        ).limit(1)
+    ).scalar_one()
+    page = client.get(f"/erpsync/entries/{flagged.id}/review").text
+    match = re.search(r'<input[^>]*name="factor_value"[^>]*>', page)
+    assert match, "factor_value input not rendered on the remap form"
+    assert "required" in match.group(0), "factor_value input is not client-side required"
