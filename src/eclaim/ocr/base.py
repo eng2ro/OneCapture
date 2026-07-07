@@ -47,6 +47,11 @@ class Extraction(BaseModel):
     date: str | None = None
     currency: str | None = None
     total_amount: Decimal | None = None
+    # Tax read off the document: the GST/SST amount shown, and its code (Malaysia: SR
+    # standard-rated, ZR zero-rated, ES exempt). Both None when the document prints no
+    # separate tax — the reviewer can still key them. ``total_amount`` stays the GROSS.
+    tax_amount: Decimal | None = None
+    tax_code: str | None = None
     expense_type: ExpenseType = "other"
     quantity: Decimal | None = None
     unit: Unit | None = None

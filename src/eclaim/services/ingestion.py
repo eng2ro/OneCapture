@@ -151,6 +151,8 @@ def extraction_from_item(item: dict) -> Extraction:
         doc_no=item.get("doc_no") or None,
         date=item.get("date") or None,
         total_amount=Decimal(item["total_amount"]) if item.get("total_amount") else None,
+        tax_amount=Decimal(item["tax_amount"]) if item.get("tax_amount") else None,
+        tax_code=item.get("tax_code") or None,
         expense_type=item.get("expense_type") or "other",
         quantity=Decimal(item["quantity"]) if item.get("quantity") else None,
         unit=item.get("unit") or None,

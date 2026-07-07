@@ -462,6 +462,8 @@
         payment_method: "out_of_pocket",
         vendor: x.vendor || null, doc_no: x.doc_no || null, date: x.date || null,
         total_amount: x.total_amount != null ? String(x.total_amount) : null,
+        tax_amount: x.tax_amount != null ? String(x.tax_amount) : null,
+        tax_code: x.tax_code || null,
         quantity: x.quantity != null ? String(x.quantity) : null, unit: x.unit || null,
         boxes: x.boxes || null,   // carry OCR field positions through to the line
         // Carry the classifier verdict so the server routes a vendor bill to the AP

@@ -21,7 +21,8 @@ from .base import Extraction, OcrError, OcrProvider
 _INSTRUCTION = """\
 Extract this document as JSON with exactly these keys:
 vendor (string), doc_no (string|null), date (string|null), currency (string|null),
-total_amount (number|null), expense_type ("fuel_diesel"|"fuel_petrol"|"electricity"|
+total_amount (number|null), tax_amount (number|null), tax_code (string|null),
+expense_type ("fuel_diesel"|"fuel_petrol"|"electricity"|
 "natural_gas"|"air_travel"|"other"), quantity (number|null), unit ("L"|"kWh"|"m3"|"km"|null),
 confidence (number 0..1),
 document_type ("expense_receipt"|"vendor_invoice"|"delivery_order"|"quotation"|"purchase_order"|"unknown"),
@@ -32,6 +33,10 @@ boxes (object|null).
 Rules: fuel pump receipt -> fuel_diesel/fuel_petrol by product (RON95/97=petrol; diesel/B7/B10=diesel),
 quantity = litres. Electricity bill (e.g. Tenaga Nasional/TNB) -> electricity, quantity = kWh.
 Strip thousands separators. Use null where a value is not printed.
+total_amount is the GROSS total (tax included). tax_amount is the GST/SST tax shown on
+the document (a separate "SST"/"GST"/"Tax" line), or null if none is printed. tax_code
+is the Malaysian tax code if determinable: "SR" (standard-rated, e.g. 6% SST), "ZR"
+(zero-rated), "ES" (exempt), else null. Do NOT invent tax that isn't printed.
 
 Classify document_type by these cues, and list the ones you actually saw in type_signals:
 - expense_receipt: a paid receipt / card slip / cash sale (has "Receipt", "Cash", "Change",

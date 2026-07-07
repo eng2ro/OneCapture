@@ -89,6 +89,37 @@ def test_expense_edit_still_blocked_after_approval(client, fake_ocr, db_session)
     assert "only accounting coding" in blocked.json()["detail"]
 
 
+# --- OCR-extracted tax ------------------------------------------------------
+def test_ocr_tax_prefills_the_line(client, fake_ocr, db_session):
+    """Tax read off the document (GST/SST amount + code) is stored on the line at
+    capture and its net is derived — so the reviewer doesn't start from a blank tax
+    field. Fails if add_line stops carrying extraction.tax_amount/tax_code."""
+    from sqlalchemy import select
+
+    from eclaim.db.models import ClaimLine
+
+    cid = _upload(client, fake_ocr, Extraction(
+        expense_type="other", total_amount=Decimal("106.00"),
+        tax_amount=Decimal("6.00"), tax_code="SR",
+    )).json()["id"]
+    line = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == uuid.UUID(cid))
+    ).scalars().one()
+    assert line.tax_amount == Decimal("6.00")
+    assert line.tax_code == "SR"
+    assert line.net_amount == Decimal("100.00")     # gross 106 − tax 6, tax-inclusive
+
+
+def test_extraction_from_item_carries_tax():
+    """The pre-read capture path (item payload) carries the tax fields too."""
+    from eclaim.services.ingestion import extraction_from_item
+
+    ex = extraction_from_item(
+        {"vendor": "V", "total_amount": "106", "tax_amount": "6.00", "tax_code": "SR"}
+    )
+    assert ex.tax_amount == Decimal("6.00") and ex.tax_code == "SR"
+
+
 # --- derived money ---------------------------------------------------------
 def test_edit_derives_net_from_tax_inclusive(client, fake_ocr, db_session):
     cid = _upload(client, fake_ocr, Extraction(

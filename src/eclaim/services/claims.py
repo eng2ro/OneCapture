@@ -359,6 +359,8 @@ class ClaimService:
             posting_date=parse_receipt_date(extraction.date),
             currency=extraction.currency,
             total_amount=extraction.total_amount,
+            tax_amount=extraction.tax_amount,
+            tax_code=extraction.tax_code,
             expense_type=extraction.expense_type,
             quantity=extraction.quantity,
             unit=extraction.unit,
