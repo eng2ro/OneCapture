@@ -26,6 +26,7 @@ from eclaim.services.claims import Repos
 from eclaim.web.routes import _nav_context
 from erpsync.release.service import release_clean
 from erpsync.review import service
+from erpsync.review.leaf import carbon_leaf_state
 from erpsync.review.service import (
     EntryNotFound,
     IllegalReviewState,
@@ -44,6 +45,10 @@ templates = Jinja2Templates(
     directory=[str(ERPSYNC_TEMPLATES), str(ECLAIM_WEB_TEMPLATES)],
     context_processors=[_nav_context],
 )
+# The carbon leaf is derived from BOTH the row's mapping and its releasability
+# (punch-list R3), so both templates call this single source of truth rather than
+# testing ``category != 'UNMAPPED'`` inline.
+templates.env.globals["carbon_leaf_state"] = carbon_leaf_state
 
 
 # --------------------------------------------------------------------------- #

@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}ERP Sync review — OneCapture{% endblock %}
 {# Appendix D — carbon-related leaf. OneCapture does not compute CO2e; it flags which
-   staged rows post to CarbonNext on release. A staged row is carbon-related iff a
-   mapping rule matched (category != 'UNMAPPED'); green leaf = carbon-related, muted
-   dash = not. The tCO₂e column is an internal estimate, not the product output. #}
-{% macro carbon_leaf(on) -%}
-{%- if on -%}
-<span class="carbon-leaf" data-carbon="1" title="Carbon-related — posts to CarbonNext on release" aria-label="Carbon-related — posts to CarbonNext on release"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1f5d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg></span>
+   staged rows post to CarbonNext on release. The state (carbon-related AND whether it
+   actually posts, given the row's status) is resolved by carbon_leaf_state (R3), not
+   category alone. The tCO₂e column is an internal estimate, not the product output. #}
+{% macro carbon_leaf(s) -%}
+{%- if s.carbon -%}
+<span class="carbon-leaf{% if s.muted %} muted{% endif %}" data-carbon="1" title="{{ s.tooltip }}" aria-label="{{ s.tooltip }}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1f5d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg></span>
 {%- else -%}
-<span class="carbon-none muted" data-carbon="0" title="Not carbon-related" aria-label="Not carbon-related">–</span>
+<span class="carbon-none muted" data-carbon="0" title="{{ s.tooltip }}" aria-label="{{ s.tooltip }}">–</span>
 {%- endif -%}
 {%- endmacro %}
 {% block content %}
@@ -37,7 +37,7 @@
           <td class="mono">{{ e.doc_number or e.doc_entry }}</td>
           <td>{{ e.line_num }}</td>
           <td>{{ e.category }}</td>
-          <td>{{ carbon_leaf(e.category != 'UNMAPPED') }}</td>
+          <td>{{ carbon_leaf(carbon_leaf_state(e.status, e.category)) }}</td>
           <td>{{ e.scope }}</td>
           <td>{{ e.basis }}</td>
           <td>{{ e.tco2e }}</td>
@@ -54,7 +54,7 @@
   {% if groups %}
   <p class="muted" style="display:flex;align-items:center;gap:6px;margin-top:10px;">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1f5d44" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6"/></svg>
-    Carbon-related — a mapped row (category not <span class="mono">UNMAPPED</span>) posts to CarbonNext on release.
+    Carbon-related — a mapped row (category not <span class="mono">UNMAPPED</span>) posts to CarbonNext once approved &amp; released; a dismissed row never posts.
   </p>
   {% endif %}
 </section>
