@@ -218,6 +218,37 @@ def test_holding_queue_lists_the_bill(client, fake_ocr):
     assert "vendor invoice" in page.text
 
 
+def test_quotation_only_capture_needs_no_attestation(client, db_session):
+    """A quotation (or PO) creates NO reimbursement — demanding the 'paid with my own
+    money' tick for it would compel a false declaration. A pre-read quotation-only
+    capture must divert without the tick."""
+    import json
+
+    files = [("files", ("q.png", b"\x89PNG\r\n quote", "image/png"))]
+    items = [{
+        "vendor": "Acme Supplies", "doc_no": "Q-77", "total_amount": "1200",
+        "document_type": "quotation", "type_confidence": "0.95",
+        "type_signals": ["Quotation", "Valid until"],
+    }]
+    resp = client.post("/capture", files=files, data={"items": json.dumps(items)},
+                       follow_redirects=False)          # note: NO attested field
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/intake/holding")
+    intake = db_session.execute(select(DocumentIntake)).scalars().one()
+    assert intake.document_type == "quotation"
+    assert db_session.execute(select(Claim)).scalars().first() is None
+
+
+def test_capture_page_js_carries_verdict_and_exempts_non_expense_types(client):
+    """Template pin (F2 residual): the capture page's item payload must carry the
+    classifier verdict, and its attestation gate must key on expense_receipt — not a
+    denylist that forgets new types (quotation/PO forced a false tick)."""
+    page = client.get("/capture")
+    assert page.status_code == 200
+    assert "document_type" in page.text            # verdict rides the items payload
+    assert 'dt === "expense_receipt"' in page.text  # allowlist gate, not a denylist
+
+
 def test_reroute_to_eclaim_builds_claim_and_consumes_intake(client, db_session, fake_ocr):
     fake_ocr.extraction = _bill(total_amount=Decimal("120"))
     _capture(client)

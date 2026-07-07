@@ -641,14 +641,16 @@ window.updateSubmitBar = function () {
   if (submit) submit.disabled = n === 0 || rs.reading;
   if (label) label.textContent = n > 0 ? "Submit claim (" + n + ")" : "Submit claim";
   // Show/require the out-of-pocket declaration ONLY when there's genuine out-of-pocket
-  // expense: a mileage trip, or a receipt NOT classified as a vendor bill. An all-
-  // vendor-bill upload (every read entry is vendor_invoice/delivery_order) diverts to
-  // Vendor bills and needs no declaration. An unread/manual entry is treated as expense
-  // (the server makes the final call from the same classification).
+  // expense: a mileage trip, or a page classified as an expense receipt (or unread/
+  // manual — the server treats those as potential expense). Every OTHER classified
+  // type (vendor_invoice, delivery_order, quotation, purchase_order, unknown) diverts
+  // to the holding queues and creates no reimbursement — forcing the "paid with my own
+  // money" tick for a quotation would compel a false declaration. Mirrors the
+  // server-side _submission_needs_attestation, which makes the final call.
   var needsAttest = mileageLines.length > 0 || entries.some(function (e) {
     if (e.status !== "read" || !e.ext) return true;
     var dt = e.ext.document_type;
-    return dt !== "vendor_invoice" && dt !== "delivery_order";
+    return !dt || dt === "expense_receipt";
   });
   var attestRow = document.getElementById("attest-row");
   var attestBox = document.getElementById("f-attested");
