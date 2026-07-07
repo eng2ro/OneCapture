@@ -120,6 +120,9 @@ def test_erpsync_queue_shows_leaf_and_dash(client, db_session, config, tmp_path)
     assert page.status_code == 200
     assert LEAF in page.text, "mapped staged row shows no leaf"
     assert DASH in page.text, "UNMAPPED staged row shows no dash"
+    # F9: the queue shows only held/flagged (pending) rows, so the carbon column header
+    # must say "once approved & released", never a bare "posts on release".
+    assert "once approved" in page.text
 
 
 # 4 — ERP Sync entry detail -------------------------------------------------- #

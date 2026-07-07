@@ -191,6 +191,18 @@ def test_consumed_intake_cannot_be_rerouted_again(client, db_session, fake_ocr):
     assert again.status_code == 409
 
 
+def test_holding_count_matches_the_queue(client, db_session, fake_ocr):
+    """F9: the nav badge uses a COUNT that matches the holding queue length."""
+    ids = db_session.info["principal"]
+    fake_ocr.extraction = _bill()
+    _capture(client)
+    _capture(client)
+    cids = frozenset({ids["client"]})
+    assert intake_service.holding_count(db_session, cids) == len(
+        intake_service.holding_queue(db_session, cids)
+    ) == 2
+
+
 def test_holding_queue_excludes_eclaim_rows(db_session):
     """A record routed to e-Claim is never in the holding queue (it became a claim)."""
     ids = db_session.info["principal"]

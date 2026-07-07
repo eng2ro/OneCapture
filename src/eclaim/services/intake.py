@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db.models import DocumentIntake
@@ -135,6 +135,20 @@ def holding_queue(session: Session, client_ids) -> list[DocumentIntake]:
             .order_by(DocumentIntake.created_at, DocumentIntake.id)
         ).scalars()
     )
+
+
+def holding_count(session: Session, client_ids) -> int:
+    """COUNT of open holding-queue rows — for the nav badge, so the sidebar doesn't
+    load every intake row on every page render (F9)."""
+    if not client_ids:
+        return 0
+    return int(session.execute(
+        select(func.count()).select_from(DocumentIntake).where(
+            DocumentIntake.client_id.in_(client_ids),
+            DocumentIntake.status == "open",
+            DocumentIntake.routed_to.in_((routing.QUEUE_AP_HOLDING, routing.QUEUE_PENDING)),
+        )
+    ).scalar_one())
 
 
 def get_intake(session: Session, intake_id: uuid.UUID) -> DocumentIntake:

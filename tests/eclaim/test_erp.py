@@ -95,3 +95,9 @@ def test_mark_posted_refuses_double_post(client, db_session):
 
     with pytest.raises(erp.ErpError):        # already carries an erp_doc_entry
         erp.mark_posted(db_session, inv, result)
+
+
+def test_connector_seam_has_pull_open_pos(client, db_session):
+    """F9: the ERPConnector protocol exposes pull_open_pos (for the C4 3-way match);
+    the manual stub returns nothing."""
+    assert erp.ManualCsvConnector().pull_open_pos(None) == []

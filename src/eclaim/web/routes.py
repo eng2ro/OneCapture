@@ -96,8 +96,9 @@ def _nav_context(request: Request) -> dict:
         counts = ClaimRepository(db).status_counts(principal.allowed_client_ids)
         ctx["scope_name"] = _scope_name(list_visible_clients(db, principal))
         # Vendor-bills badge: pages the classifier parked in the holding queue (C1).
-        ctx["intake_holding_count"] = len(
-            intake_service.holding_queue(db, principal.allowed_client_ids)
+        # A COUNT, not a full load of every intake row on every page render (F9).
+        ctx["intake_holding_count"] = intake_service.holding_count(
+            db, principal.allowed_client_ids
         )
     except Exception:  # nav chrome must never break a page render
         return ctx
@@ -582,6 +583,12 @@ def intake_file_ap(
             repos.session, intake=intake, actor=_actor(principal)
         )
         repos.session.commit()
+    except IntegrityError:
+        # TOCTOU: a concurrent request already filed this intake (its idempotency key
+        # "intake:<id>" collided on uq_ap_invoice_idem) — treat as already-processed.
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        raise HTTPException(status_code=409, detail="this page has already been filed")
     except ap_service.ApError as exc:
         repos.session.rollback()
         set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)

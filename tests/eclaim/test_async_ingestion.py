@@ -255,6 +255,47 @@ def test_reclaimed_all_diverted_job_does_not_duplicate_intake(
     assert db_session.get(IngestionJob, job_id).status == "done"
 
 
+def test_mixed_async_upload_files_receipts_and_diverts_bills(
+    client, db_session, fake_segmenter, tmp_path
+):
+    """F9: a MIXED async upload builds the claim from its receipt pages while diverting
+    its vendor-bill pages to the holding queue — both in the same job."""
+    import threading
+
+    _enable_split(db_session)
+
+    class _MixedOcr:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._n = 0
+
+        def extract(self, image_bytes, media_type):
+            with self._lock:
+                i = self._n
+                self._n += 1
+            if i % 2 == 0:
+                return Extraction(
+                    vendor="Bill Co", total_amount=Decimal("100"),
+                    document_type="vendor_invoice", type_confidence=Decimal("0.95"),
+                )
+            return Extraction(
+                vendor="Cafe", total_amount=Decimal("20"),
+                document_type="expense_receipt", type_confidence=Decimal("0.9"),
+            )
+
+    job_id = _enqueue_via_http(client, 4)                 # 4 pages
+    assert worker.process_one(db_session, _providers(_MixedOcr(), fake_segmenter, tmp_path)) == job_id
+    db_session.expire_all()
+
+    job = db_session.get(IngestionJob, job_id)
+    assert job.status == "done" and job.claim_id is not None
+    lines = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == job.claim_id)
+    ).scalars().all()
+    assert len(lines) == 2                                # 2 receipts became claim lines
+    assert len(_intakes_for(db_session, job_id)) == 2     # 2 bills diverted
+
+
 def test_intake_job_sha_unique_blocks_redivert_but_allows_inline(client, db_session):
     """The partial UNIQUE(ingestion_job_id, image_sha256) blocks a re-divert of the same
     page for one job, while inline captures (NULL job) stay unconstrained (F3)."""

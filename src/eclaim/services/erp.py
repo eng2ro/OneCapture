@@ -46,6 +46,7 @@ class ERPConnector(Protocol):
     def push_ap_invoice(self, invoice: ApInvoice) -> PostResult: ...
     def pull_vendors(self) -> list: ...
     def pull_gl_accounts(self) -> list: ...
+    def pull_open_pos(self, vendor: Vendor) -> list: ...   # open POs for 3-way match (C4)
 
 
 # The CSV column order — one row per invoice LINE, invoice header fields repeated, so an
@@ -161,4 +162,7 @@ class ManualCsvConnector:
         return []
 
     def pull_gl_accounts(self) -> list:
+        return []
+
+    def pull_open_pos(self, vendor: Vendor) -> list:
         return []

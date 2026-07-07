@@ -337,6 +337,27 @@ def test_csv_export_of_approved_invoices(client, db_session):
 # --------------------------------------------------------------------------- #
 # Web surface (thin) — file from holding, list, approve, export
 # --------------------------------------------------------------------------- #
+def test_file_ap_toctou_collision_is_409(client, db_session):
+    """F9: two concurrent file-ap requests on one intake both pass the status check;
+    the second collides on the ap_invoice idempotency key. Map that to 409, not a 500.
+    Simulated by resetting the intake to 'open' after the first filing."""
+    from sqlalchemy import text
+
+    ids = db_session.info["principal"]
+    intake = _intake(db_session, ids, doc_no="TOC-1")
+    db_session.commit()
+
+    assert client.post(f"/intake/{intake.id}/file-ap", follow_redirects=False).status_code == 303
+    # Simulate a racing second request that already passed the consumed-check.
+    db_session.execute(
+        text("UPDATE document_intake SET status='open' WHERE id=:i"), {"i": str(intake.id)}
+    )
+    db_session.commit()
+
+    r = client.post(f"/intake/{intake.id}/file-ap", follow_redirects=False)
+    assert r.status_code == 409
+
+
 def test_web_file_ap_from_holding_then_list(client, db_session):
     ids = db_session.info["principal"]
     intake = _intake(db_session, ids, vendor="Widget Co", doc_no="WC-1")
