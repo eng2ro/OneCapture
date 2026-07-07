@@ -106,16 +106,26 @@ def test_streamed_over_cap_multipart_is_413_not_400():
 # --------------------------------------------------------------------------- #
 # Body cap vs ZIP budget invariant (punch-list P2)
 # --------------------------------------------------------------------------- #
-def test_body_cap_covers_zip_budget():
-    """The request-body cap must be >= the ZIP expansion budget, or a legitimate
-    full-budget receipt ZIP (mostly barely-compressible images) is 413'd before it
-    ever reaches ZIP expansion. Fails if max_upload_mb is dropped below the ZIP
-    total budget again — the exact regression P2 fixed."""
+# Headroom the body cap must keep ABOVE the ZIP budget for the multipart/form-data
+# envelope + ZIP container framing a full-budget upload rides inside (punch-list R4).
+_UPLOAD_FRAMING_HEADROOM = 1024 * 1024   # ~1 MiB
+
+
+def test_body_cap_covers_zip_budget_with_headroom():
+    """The request-body cap must exceed the ZIP expansion budget by at least the
+    framing headroom — not merely equal it. At an exact-equal cap a legitimate
+    full-budget receipt ZIP (mostly barely-compressible images) 413s on the multipart
+    envelope + ZIP framing alone, before it ever reaches ZIP expansion. Fails if the
+    cap is dropped to (or below) the budget again — the R4 refinement of P2."""
     from eclaim.config import get_settings
     from eclaim.services.ingestion import _ZIP_MAX_TOTAL_BYTES
 
-    assert get_settings().max_upload_bytes >= _ZIP_MAX_TOTAL_BYTES, (
-        "request body cap is below the documented ZIP budget — bulk ZIPs will 413"
+    assert (
+        get_settings().max_upload_bytes
+        >= _ZIP_MAX_TOTAL_BYTES + _UPLOAD_FRAMING_HEADROOM
+    ), (
+        "request body cap leaves no headroom above the ZIP budget — a full-budget "
+        "bulk ZIP will 413 on multipart/ZIP framing"
     )
 
 

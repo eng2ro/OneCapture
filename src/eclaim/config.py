@@ -77,12 +77,16 @@ class Settings(BaseSettings):
     # are settings (Appendix B: configuration, not customization) — a firm with
     # heavier batches can raise them.
     #
-    # The body cap MUST be >= the ZIP expansion budget (ingestion._ZIP_MAX_TOTAL_BYTES,
-    # 100 MB). A receipt ZIP is mostly JP/PNG images, which barely compress, so a
-    # legitimate full-budget batch arrives on the wire at ~100 MB — a lower body cap
-    # 413s bulk ZIPs that the ZIP path is documented to accept (punch-list P2). Kept
-    # equal at 100 MB; test_upload_limits pins the invariant so they can't diverge.
-    max_upload_mb: int = 100
+    # The body cap MUST exceed the ZIP expansion budget (ingestion._ZIP_MAX_TOTAL_BYTES,
+    # 100 MiB) — NOT merely equal it. A receipt ZIP is mostly JPG/PNG images, which
+    # barely compress, so a legitimate full-budget batch arrives on the wire at ~100
+    # MiB; but it rides inside a multipart/form-data envelope (boundary lines, per-part
+    # headers) and the ZIP container's own framing, so the actual request body is a
+    # little larger than the payload. At an exact 100-MiB cap a genuine full-budget
+    # upload 413s on that framing alone (punch-list R4, refining P2). We give ~1 MiB of
+    # headroom above the budget for it; test_upload_limits pins cap >= budget + headroom
+    # so the two can't silently converge again.
+    max_upload_mb: int = 101
     max_upload_files: int = 100
 
     @property
