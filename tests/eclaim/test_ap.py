@@ -146,6 +146,70 @@ def test_denied_approval_written_in_own_txn_not_request_session(client, db_sessi
     assert db_session.get(ApInvoice, inv.id).status == "coded"   # not approved
 
 
+def test_filer_cannot_submit_uncoded_and_self_approve(client, db_session):
+    """F5: the user who FILED a bill must not be able to skip coding and approve it
+    alone. Submitting requires coded status, and approve refuses an uncoded invoice."""
+    ids = db_session.info["principal"]
+    filer = _principal(ids, ids["user"], email="partner@seed.test")   # created_by
+    inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="filer")
+
+    # Can't send an UNCODED (captured) invoice for approval.
+    with pytest.raises(ap.IllegalApTransition):
+        ap.submit_for_approval(db_session, invoice_id=inv.id, actor="filer")
+    # And can't approve a captured (uncoded) invoice.
+    with pytest.raises((SoDViolation, ap.IllegalApTransition)):
+        ap.approve(db_session, invoice_id=inv.id, approver=filer, actor="filer")
+    assert db_session.get(ApInvoice, inv.id).status == "captured"
+
+
+def test_filer_cannot_approve_even_when_someone_else_codes(client, db_session):
+    """F5: separation of duties spans the whole preparation — the FILER can't approve
+    even if a different user did the coding."""
+    ids = db_session.info["principal"]
+    filer = _principal(ids, ids["user"], email="partner@seed.test")   # = created_by
+    coder = _principal(ids, _user(db_session, ids, "cx@seed.test").id, email="cx@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="filer")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="cx")
+
+    with pytest.raises(SoDViolation, match="filed"):
+        ap.approve(db_session, invoice_id=inv.id, approver=filer, actor="filer")
+
+
+def test_double_approve_is_rejected(client, db_session):
+    ids = db_session.info["principal"]
+    coder = _principal(ids, _user(db_session, ids, "cc@seed.test").id, email="cc@seed.test")
+    approver = _principal(ids, _user(db_session, ids, "aa@seed.test").id, email="aa@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="cc")
+    ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="aa")
+    with pytest.raises(ap.IllegalApTransition):
+        ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="aa")
+
+
+def test_duplicate_idempotency_key_is_blocked_by_the_unique(client, db_session):
+    """The uq_ap_invoice_idem UNIQUE stops a second insert of the same source document."""
+    from sqlalchemy.exc import IntegrityError
+
+    from eclaim.db.models import Vendor
+    ids = db_session.info["principal"]
+    v = Vendor(firm_id=ids["firm"], client_id=ids["client"], name="Dup Co")
+    db_session.add(v)
+    db_session.flush()
+
+    def _inv():
+        return ApInvoice(
+            firm_id=ids["firm"], client_id=ids["client"], vendor_id=v.id,
+            doc_no="D1", total_amount=Decimal("10"), idempotency_key="same-key",
+        )
+
+    db_session.add(_inv())
+    db_session.flush()
+    db_session.add(_inv())
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
 def test_viewer_cannot_code_or_approve(client, db_session):
     ids = db_session.info["principal"]
     viewer = _principal(ids, ids["user"], role="viewer", email="v@seed.test")

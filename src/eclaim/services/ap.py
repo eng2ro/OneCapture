@@ -232,8 +232,11 @@ def code_line(
 
 
 def submit_for_approval(session: Session, *, invoice_id: uuid.UUID, actor: str) -> ApInvoice:
+    """Send a CODED invoice for approval (→ ``pending_approval``). Only a coded invoice
+    qualifies (F5): accepting ``captured`` let an uncoded bill reach approval with no
+    coder on record, which the SoD self-approval check then couldn't catch."""
     invoice = get_invoice(session, invoice_id)
-    if invoice.status not in ("coded", "captured"):
+    if invoice.status != "coded":
         raise IllegalApTransition(
             f"only a coded invoice can be sent for approval (status {invoice.status!r})"
         )
@@ -250,14 +253,22 @@ def check_can_approve_invoice(
     invoice: ApInvoice, approver: Principal, *, matrix_rule: ApprovalMatrixRule | None = None
 ) -> None:
     """Raise :class:`SoDViolation` if ``approver`` may not approve ``invoice``: no
-    viewers, must hold the client grant, the coder cannot self-approve (maker≠checker),
-    within their authority limit, and must satisfy the ``ap`` approval-matrix band."""
+    viewers, must hold the client grant, the invoice must be CODED, neither the coder
+    nor the filer (the preparers) may approve it (maker≠checker), within their authority
+    limit, and must satisfy the ``ap`` approval-matrix band."""
     if approver.base_role == "viewer":
         raise SoDViolation("viewers cannot approve invoices")
     if not approver.can_access_client(invoice.client_id):
         raise SoDViolation("approver has no grant to this client")
-    if invoice.coded_by_user_id is not None and invoice.coded_by_user_id == approver.user_id:
+    # Must be coded before approval — otherwise the coder==approver check below is
+    # vacuous (coded_by is NULL) and the filer could file, skip coding, and self-approve
+    # (punch-list F5). Coding sets coded_by, so a coded invoice always has a maker.
+    if invoice.coded_by_user_id is None:
+        raise SoDViolation("an invoice must be coded before it can be approved")
+    if invoice.coded_by_user_id == approver.user_id:
         raise SoDViolation("the user who coded an invoice cannot approve it")
+    if invoice.created_by_user_id is not None and invoice.created_by_user_id == approver.user_id:
+        raise SoDViolation("the user who filed an invoice cannot approve it")
     amount = invoice.total_amount
     if (
         amount is not None and approver.authority_limit is not None
