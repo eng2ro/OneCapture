@@ -131,6 +131,11 @@
   </div>
 
   {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+  {% if diverted %}
+  <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-file-invoice"></i>
+    {{ diverted }} uploaded page{{ '' if diverted == 1 else 's' }} looked like a vendor bill and {{ 'was' if diverted == 1 else 'were' }} sent to <a href="/intake/holding">Vendor bills</a> instead of this claim. If that's wrong, re-file {{ 'it' if diverted == 1 else 'them' }} as a staff expense from there.
+  </div>
+  {% endif %}
   {% if review_block_reason and claim.status == 'in_review' and not over_authority %}
   <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-info-circle"></i>
     No approval actions shown — {{ review_block_reason }}. This claim must be reviewed by a different user (separation of duties). You can still open a line to view/correct it.

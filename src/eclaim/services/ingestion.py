@@ -138,7 +138,13 @@ def item_has_data(item) -> bool:
 
 
 def extraction_from_item(item: dict) -> Extraction:
-    """Build an Extraction from a per-file ``items`` entry (fields read client-side)."""
+    """Build an Extraction from a per-file ``items`` entry (fields read client-side).
+
+    Carries the classifier verdict (``document_type`` / ``type_confidence`` / signals /
+    ``po_ref``) so a page pre-read via ``/capture/extract`` routes on it — a vendor bill
+    dropped through the normal capture UI is diverted, not silently filed as an expense
+    (F2). A purely-manual entry has no ``document_type`` → defaults to expense_receipt →
+    e-Claim, unchanged."""
     return Extraction(
         vendor=item.get("vendor") or None,
         doc_no=item.get("doc_no") or None,
@@ -148,6 +154,12 @@ def extraction_from_item(item: dict) -> Extraction:
         quantity=Decimal(item["quantity"]) if item.get("quantity") else None,
         unit=item.get("unit") or None,
         boxes=item.get("boxes") or None,
+        document_type=item.get("document_type") or "expense_receipt",
+        type_confidence=(
+            Decimal(str(item["type_confidence"])) if item.get("type_confidence") not in (None, "") else None
+        ),
+        type_signals=item.get("type_signals") or [],
+        po_ref=item.get("po_ref") or None,
     )
 
 
@@ -449,16 +461,19 @@ def build_claim(
             item = r["item"]
             try:
                 if item_has_data(item):
+                    # Pre-read by /capture/extract: carries the classifier verdict, so it
+                    # is routed on document_type just like the server-OCR path — a vendor
+                    # bill dropped through the normal UI diverts, not silently forced into
+                    # e-Claim (F2). A purely-manual entry defaults to expense_receipt.
                     extraction = extraction_from_item(item)
                     cat_uuid = uuid.UUID(item["category_id"]) if item.get("category_id") else None
                     pay = item.get("payment_method") or "out_of_pocket"
-                    decision = routing.Route(routing.QUEUE_ECLAIM, needs_manual=False)
                 else:
                     pre = ocr_results.get(i)
                     if isinstance(pre, Exception):
                         raise pre if isinstance(pre, OcrError) else OcrError(str(pre))
                     extraction, cat_uuid, pay = pre, None, "out_of_pocket"
-                    decision = routing.route(extraction.document_type, extraction.type_confidence)
+                decision = routing.route(extraction.document_type, extraction.type_confidence)
             except (OcrError, ClaimError, ValueError) as exc:
                 errors.append(f"{r['name']}: {exc}")
                 continue

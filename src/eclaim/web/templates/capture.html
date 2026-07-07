@@ -458,7 +458,13 @@
         vendor: x.vendor || null, doc_no: x.doc_no || null, date: x.date || null,
         total_amount: x.total_amount != null ? String(x.total_amount) : null,
         quantity: x.quantity != null ? String(x.quantity) : null, unit: x.unit || null,
-        boxes: x.boxes || null   // carry OCR field positions through to the line
+        boxes: x.boxes || null,   // carry OCR field positions through to the line
+        // Carry the classifier verdict so the server routes a vendor bill to the AP
+        // holding queue instead of silently forcing it into e-Claim (F2).
+        document_type: x.document_type || null,
+        type_confidence: x.type_confidence != null ? String(x.type_confidence) : null,
+        type_signals: x.type_signals || null,
+        po_ref: x.po_ref || null
       };
     });
     fileInput.files = dt.files;

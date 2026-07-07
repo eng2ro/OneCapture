@@ -9,6 +9,7 @@ the end-to-end capture → divert → holding-queue → correct flow.
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -186,6 +187,75 @@ def test_holding_queue_excludes_eclaim_rows(db_session):
     # expense_receipt routed to eclaim → status open but routed_to == eclaim, so it is
     # NOT part of the AP/pending holding queue.
     assert intake_service.holding_queue(db_session, frozenset({ids["client"]})) == []
+
+
+# --------------------------------------------------------------------------- #
+# F2 — the classifier is NOT bypassed on the main (pre-read) capture flow
+# --------------------------------------------------------------------------- #
+def _capture_items(client, files, items):
+    return client.post(
+        "/capture",
+        files=[("files", f) for f in files],
+        data={"items": json.dumps(items), "attested": "yes"},
+        follow_redirects=False,
+    )
+
+
+def test_preread_vendor_bill_diverts_through_the_main_ui(client, db_session):
+    """A vendor bill dropped through the normal capture UI (pre-read via
+    /capture/extract, posted as an item WITH data + document_type) must divert to the
+    holding queue — not be silently forced into e-Claim (the F2 bug)."""
+    resp = _capture_items(
+        client,
+        [("v.png", b"\x89PNG\r\n bill", "image/png")],
+        [{"vendor": "Acme", "total_amount": "500",
+          "document_type": "vendor_invoice", "type_confidence": "0.95"}],
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/intake/holding")
+    assert db_session.execute(select(Claim)).scalars().first() is None
+    intake = db_session.execute(select(DocumentIntake)).scalars().one()
+    assert intake.document_type == "vendor_invoice" and intake.routed_to == "ap_holding"
+
+
+def test_manual_entry_without_a_verdict_still_files_a_claim(client, db_session):
+    """A purely manual entry (no classifier verdict) defaults to expense_receipt and is
+    filed as a claim — the dominant path is unchanged."""
+    resp = _capture_items(
+        client,
+        [("r.png", b"\x89PNG\r\n rc", "image/png")],
+        [{"vendor": "Cafe", "total_amount": "20", "expense_type": "other"}],
+    )
+    assert resp.status_code == 303 and "/claims/" in resp.headers["location"]
+    assert db_session.execute(select(Claim)).scalars().first() is not None
+    assert db_session.execute(select(DocumentIntake)).scalars().first() is None
+
+
+def test_mixed_capture_files_receipt_and_diverts_bill_with_banner(client, db_session):
+    resp = _capture_items(
+        client,
+        [("r.png", b"\x89PNG\r\n a", "image/png"), ("v.png", b"\x89PNG\r\n b", "image/png")],
+        [
+            {"vendor": "Cafe", "total_amount": "20", "expense_type": "other",
+             "document_type": "expense_receipt", "type_confidence": "0.9"},
+            {"vendor": "Acme", "total_amount": "500",
+             "document_type": "vendor_invoice", "type_confidence": "0.95"},
+        ],
+    )
+    assert resp.status_code == 303
+    loc = resp.headers["location"]
+    assert "/claims/" in loc and "diverted=1" in loc          # the banner is fed a count
+    page = client.get(loc)
+    assert "Vendor bills" in page.text and "vendor bill" in page.text   # banner rendered
+
+
+def test_api_upload_refuses_a_confident_vendor_bill(client, fake_ocr):
+    """/api/claims/upload is the staff-expense endpoint — a confident vendor bill is
+    refused (422), never silently filed as a claim (F2)."""
+    fake_ocr.extraction = _bill()
+    r = client.post("/api/claims/upload", files={"file": ("v.png", b"\x89PNG\r\n bill", "image/png")})
+    assert r.status_code == 422
+    assert "vendor_invoice" in r.json()["detail"]
 
 
 def test_delivery_order_links_to_its_matching_invoice(db_session):

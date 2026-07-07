@@ -13,6 +13,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 
 from ..auth.principal import Principal, list_visible_clients
 from ..ocr.base import OcrError, OcrProvider
+from ..services import routing
+from ..services.documents import normalize_image
+from ..services.ingestion import _FormOcr
 from ..services.claims import ClaimError, ClaimNotFound, ClaimService, IllegalTransition, Repos
 from ..services.evidence import EvidenceService
 from ..services.evidence_pdf import render as render_evidence_pdf
@@ -80,13 +83,31 @@ async def upload_claim(
         raise HTTPException(status_code=415, detail=f"unsupported media type {media_type!r}")
     image_bytes = await file.read()
     try:
+        norm_bytes, norm_media = normalize_image(image_bytes, media_type)
+        extraction = ocr.extract(norm_bytes, norm_media)
+    except (OcrError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"could not read receipt: {exc}")
+    # /claims/upload is the staff-EXPENSE endpoint. If the classifier is confident this
+    # is a vendor bill / delivery order, REFUSE it rather than silently filing it as an
+    # expense claim (F2) — the caller should route it through the AP intake instead.
+    if routing.route(extraction.document_type, extraction.type_confidence).queue != routing.QUEUE_ECLAIM:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"this document was classified as {extraction.document_type!r}, not a "
+                "staff expense — capture it via the app's document intake, not "
+                "/claims/upload"
+            ),
+        )
+    try:
+        # Reuse the already-read extraction (no second, billed OCR call).
         claim = _service.upload(
             repos=repos,
             firm_id=principal.firm_id,
             client_id=deps.default_client_id(repos.session),
-            image_bytes=image_bytes,
-            media_type=media_type,
-            ocr=ocr,
+            image_bytes=norm_bytes,
+            media_type=norm_media,
+            ocr=_FormOcr(extraction),
             image_dir=image_dir,
             actor=actor,
             claimant_ref=claimant_ref,

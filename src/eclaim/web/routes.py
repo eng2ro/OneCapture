@@ -1085,6 +1085,7 @@ def _render_review(
     principal: Principal,
     claim_id: uuid.UUID,
     error: str | None = None,
+    diverted: int = 0,
 ) -> HTMLResponse:
     claim = repos.claims.get(claim_id)
     if claim is None:
@@ -1240,6 +1241,8 @@ def _render_review(
             "next_review_id": queue[0].id if queue else None,
             "review_remaining": len(queue),
             "error": error,
+            # Pages the classifier routed to the vendor-bills queue on this capture (F2).
+            "diverted": diverted,
         },
     )
 
@@ -1248,10 +1251,11 @@ def _render_review(
 def review_page(
     request: Request,
     claim_id: uuid.UUID,
+    diverted: int = 0,
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
-    return _render_review(request, repos, principal, claim_id)
+    return _render_review(request, repos, principal, claim_id, diverted=diverted)
 
 
 def _receipt_download_name(line) -> str:
