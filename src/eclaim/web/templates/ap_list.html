@@ -1,37 +1,52 @@
 {% extends "base.html" %}
 {% block title %}AP invoices — OneCapture{% endblock %}
+{% macro status_badge(s) %}
+{%- set cls = {'approved':'success','posted':'success','paid':'success','held':'warning','rejected':'danger'}.get(s, 'neutral') -%}
+<span class="badge {{ cls }}">{{ s.replace('_', ' ') }}</span>
+{%- endmacro %}
 {% block content %}
-<section class="card">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-    <h1>AP invoices</h1>
+{% include "_editorial.html" %}
+<style>
+  .capx .mono{font-family:var(--mono)}
+</style>
+<div class="capx">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+    <div>
+      <h1 class="page-title">AP invoices</h1>
+      <p class="page-sub">Vendor bills finance pays. Approve here, then export the CSV to post them in the ERP until the connector ships.</p>
+    </div>
     <a class="btn" href="/ap/export.csv"><i class="ti ti-download"></i> Export approved (CSV)</a>
   </div>
-  <p class="muted">Vendor bills finance pays. ERP posting ships with the connector;
-    until then, approve here and export the CSV to post manually.</p>
 
-  {% if invoices %}
-  <table class="ledger">
-    <thead>
-      <tr><th>Vendor</th><th>Doc no</th><th>Total</th><th>Status</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for inv in invoices %}
-      <tr>
-        <td>{{ vendors[inv.vendor_id].name if inv.vendor_id in vendors else '—' }}</td>
-        <td class="mono">{{ inv.doc_no or '—' }}</td>
-        <td>{% if inv.total_amount is not none %}{{ inv.currency }} {{ '%.2f' | format(inv.total_amount) }}{% else %}—{% endif %}</td>
-        <td>
-          <span class="pill pill-{{ inv.status }}">{{ inv.status.replace('_', ' ') }}</span>
-          {% if inv.status == 'held' and inv.hold_reason %}<span class="page-sub" title="{{ inv.hold_reason }}">· {{ inv.hold_reason }}</span>{% endif %}
-        </td>
-        <td><a href="/ap/{{ inv.id }}">Open →</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="muted">No AP invoices yet. File a vendor bill from
-    <a href="/intake/holding">Vendor bills</a>.</p>
-  {% endif %}
-</section>
+  <div class="card" style="margin-top:16px;padding:0;overflow:hidden;">
+    {% if invoices %}
+    <table class="data">
+      <thead>
+        <tr><th>Vendor</th><th>Doc no</th><th style="text-align:right;">Total</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for inv in invoices %}
+        <tr>
+          <td style="font-weight:600;">{{ vendors[inv.vendor_id].name if inv.vendor_id in vendors else '—' }}</td>
+          <td class="mono" style="font-size:12px;">{{ inv.doc_no or '—' }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;">
+            {% if inv.total_amount is not none %}{{ inv.currency }} {{ '%.2f' | format(inv.total_amount) }}{% else %}<span style="color:var(--faint);">—</span>{% endif %}
+          </td>
+          <td>
+            {{ status_badge(inv.status) }}
+            {% if inv.status == 'held' and inv.hold_reason %}<div style="font-size:11px;color:var(--rust-2);margin-top:4px;">{{ inv.hold_reason }}</div>{% endif %}
+          </td>
+          <td style="text-align:right;"><a class="btn" href="/ap/{{ inv.id }}" style="height:32px;font-size:12px;">Open<i class="ti ti-chevron-right"></i></a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:52px 22px;text-align:center;">
+      <i class="ti ti-cash-banknote" style="font-size:30px;color:var(--faint);"></i>
+      <p class="page-sub" style="margin-top:10px;">No AP invoices yet — file a vendor bill from <a href="/intake/holding" style="color:var(--pine);">Vendor bills</a>.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
 {% endblock %}

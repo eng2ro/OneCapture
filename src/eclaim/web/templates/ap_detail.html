@@ -1,115 +1,133 @@
 {% extends "base.html" %}
 {% block title %}AP invoice — OneCapture{% endblock %}
+{% macro status_badge(s) %}
+{%- set cls = {'approved':'success','posted':'success','paid':'success','held':'warning','rejected':'danger'}.get(s, 'neutral') -%}
+<span class="badge {{ cls }}">{{ s.replace('_', ' ') }}</span>
+{%- endmacro %}
 {% block content %}
-<section class="grid">
-  <div class="card">
-    <h2>{{ vendor.name if vendor else 'Vendor' }}</h2>
-    <span class="pill pill-{{ invoice.status }}">{{ invoice.status.replace('_', ' ') }}</span>
-    {% if invoice.status == 'held' and invoice.hold_reason %}
-    <div class="hint-warn" style="margin-top:8px;"><i class="ti ti-alert-triangle"></i> {{ invoice.hold_reason }}</div>
-    {% endif %}
-    <dl class="fields">
-      <dt>Doc no</dt><dd class="mono">{{ invoice.doc_no or '—' }}</dd>
-      <dt>Doc date</dt><dd>{{ invoice.doc_date or '—' }}</dd>
-      <dt>Due date</dt><dd>{{ invoice.due_date or '—' }}</dd>
-      <dt>Currency</dt><dd>{{ invoice.currency }}</dd>
-      <dt>Total</dt><dd>{% if invoice.total_amount is not none %}{{ invoice.currency }} {{ '%.2f' | format(invoice.total_amount) }}{% else %}—{% endif %}</dd>
-      <dt>PO ref</dt><dd class="mono">{{ invoice.po_ref or '—' }}</dd>
-      <dt>ERP key</dt><dd class="mono">{{ invoice.erp_doc_entry or '— (not posted)' }}</dd>
-    </dl>
-  </div>
+{% include "_editorial.html" %}
+<style>
+  .capx .mono{font-family:var(--mono)}
+  .capx .two-col{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;align-items:start}
+  @media (max-width:900px){.capx .two-col{grid-template-columns:1fr}}
+  .capx .kv{display:grid;grid-template-columns:1fr 1fr;gap:15px 24px;margin-top:4px}
+  .capx .kv .l{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:3px}
+  .capx .kv .v{font-size:13.5px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .capx .code-form{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .capx .code-form .field{height:32px;min-height:32px;font-size:12px;padding:4px 8px}
+  .capx .audit{list-style:none;margin:0;padding:0}
+  .capx .audit li{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--rule-2);font-size:12.5px}
+  .capx .audit li:last-child{border-bottom:none}
+  .capx .audit .evt{font-weight:600;color:var(--ink)}
+  .capx .audit .who{color:var(--graphite)}
+  .capx .audit .hash{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--faint)}
+</style>
+<div class="capx">
+  <a href="/ap" class="page-sub" style="display:inline-flex;align-items:center;gap:5px;text-decoration:none;color:var(--graphite);"><i class="ti ti-chevron-left"></i> AP invoices</a>
 
-  <div class="card">
-    <h2>Workflow</h2>
-    {% if approve_block %}
-    <div class="hint-warn" style="margin-bottom:8px;"><i class="ti ti-lock"></i> You can't approve this: {{ approve_block }}</div>
-    {% endif %}
-    {% if can_act %}
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      {% if invoice.status == 'held' %}
-      <form method="post" action="/ap/{{ invoice.id }}/release-hold">
-        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <button class="btn" type="submit" title="This is not a duplicate — let it proceed"><i class="ti ti-lock-open"></i> Not a duplicate</button>
-      </form>
+  <div class="two-col" style="margin-top:12px;">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">{{ vendor.name if vendor else 'Vendor' }}</div>
+        {{ status_badge(invoice.status) }}
+      </div>
+      {% if invoice.status == 'held' and invoice.hold_reason %}
+      <div class="hint-warn"><i class="ti ti-alert-triangle"></i> {{ invoice.hold_reason }}</div>
       {% endif %}
-      {% if invoice.status == 'coded' %}
-      <form method="post" action="/ap/{{ invoice.id }}/submit">
-        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <button class="btn" type="submit">Send for approval</button>
-      </form>
+      <div class="kv">
+        <div><span class="l">Doc no</span><span class="v mono">{{ invoice.doc_no or '—' }}</span></div>
+        <div><span class="l">Total</span><span class="v">{% if invoice.total_amount is not none %}{{ invoice.currency }} {{ '%.2f' | format(invoice.total_amount) }}{% else %}—{% endif %}</span></div>
+        <div><span class="l">Doc date</span><span class="v">{{ invoice.doc_date or '—' }}</span></div>
+        <div><span class="l">Due date</span><span class="v">{{ invoice.due_date or '—' }}</span></div>
+        <div><span class="l">PO ref</span><span class="v mono">{{ invoice.po_ref or '—' }}</span></div>
+        <div><span class="l">ERP key</span><span class="v mono">{{ invoice.erp_doc_entry or '— not posted' }}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><div class="card-title">Workflow</div></div>
+      {% if approve_block %}
+      <div class="hint-warn"><i class="ti ti-lock"></i> You can't approve this: {{ approve_block }}</div>
       {% endif %}
-      {% if invoice.status in ('coded', 'pending_approval') and not approve_block %}
-      <form method="post" action="/ap/{{ invoice.id }}/approve">
-        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i> Approve</button>
-      </form>
+      {% if can_act %}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        {% if invoice.status == 'held' %}
+        <form method="post" action="/ap/{{ invoice.id }}/release-hold"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn" type="submit" title="This is not a duplicate — let it proceed"><i class="ti ti-lock-open"></i> Not a duplicate</button></form>
+        {% endif %}
+        {% if invoice.status == 'coded' %}
+        <form method="post" action="/ap/{{ invoice.id }}/submit"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn" type="submit">Send for approval</button></form>
+        {% endif %}
+        {% if invoice.status in ('coded', 'pending_approval') and not approve_block %}
+        <form method="post" action="/ap/{{ invoice.id }}/approve"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i> Approve</button></form>
+        {% endif %}
+        {% if invoice.status not in ('posted', 'paid', 'rejected') %}
+        <form method="post" action="/ap/{{ invoice.id }}/reject"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn btn-danger" type="submit">Reject</button></form>
+        {% endif %}
+      </div>
+      {% if invoice.status == 'approved' %}
+      <p class="page-sub" style="margin-top:12px;">Approved — export from the <a href="/ap" style="color:var(--pine);">AP invoices</a> list to post it in the ERP.</p>
       {% endif %}
-      {% if invoice.status not in ('posted', 'paid', 'rejected') %}
-      <form method="post" action="/ap/{{ invoice.id }}/reject">
-        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <button class="btn" type="submit">Reject</button>
-      </form>
+      {% else %}
+      <p class="page-sub">You don't have permission to act on this invoice.</p>
       {% endif %}
     </div>
-    {% if invoice.status == 'approved' %}
-    <p class="muted" style="margin-top:10px;">Approved — export to CSV from the
-      <a href="/ap">AP invoices</a> list to post it in the ERP.</p>
-    {% endif %}
-    {% endif %}
   </div>
-</section>
 
-<section class="card">
-  <h2>Lines</h2>
-  {% set cat_name = {} %}{% for c in categories %}{% set _ = cat_name.__setitem__(c.id, c.name) %}{% endfor %}
-  <table class="ledger">
-    <thead>
-      <tr><th>#</th><th>Description</th><th>Amount</th><th>GL</th><th>Tax</th>
-          <th>Category</th><th>Dept</th>{% if can_act %}<th>Code</th>{% endif %}</tr>
-    </thead>
-    <tbody>
-      {% for ln in lines %}
-      <tr>
-        <td>{{ ln.line_no }}</td>
-        <td>{{ ln.description or '—' }}</td>
-        <td>{% if ln.line_total is not none %}{{ '%.2f' | format(ln.line_total) }}{% else %}—{% endif %}</td>
-        <td class="mono">{{ ln.gl_code or '—' }}</td>
-        <td class="mono">{{ ln.tax_code or '—' }}</td>
-        <td>{{ cat_name.get(ln.category_id, '—') if ln.category_id else '—' }}</td>
-        <td>{{ ln.department or '—' }}</td>
-        {% if can_act %}
-        <td>
-          {% if invoice.status in ('captured', 'coded', 'held') %}
-          <form method="post" action="/ap/{{ invoice.id }}/code" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
-            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-            <input type="hidden" name="line_id" value="{{ ln.id }}">
-            <input name="gl_code" placeholder="GL" value="{{ ln.gl_code or '' }}" style="width:70px;">
-            <input name="tax_code" placeholder="Tax" value="{{ ln.tax_code or '' }}" style="width:60px;">
-            <select name="category_id" style="width:130px;">
-              <option value="">— carbon category —</option>
-              {% for c in categories %}
-              <option value="{{ c.id }}" {{ 'selected' if ln.category_id == c.id else '' }}>{{ c.name }}</option>
-              {% endfor %}
-            </select>
-            <input name="department" placeholder="Dept" value="{{ ln.department or '' }}" style="width:70px;">
-            <button class="btn" type="submit">Save</button>
-          </form>
-          {% else %}<span class="muted">locked</span>{% endif %}
-        </td>
-        {% endif %}
-      </tr>
+  <div class="card" style="margin-top:16px;padding:0;overflow:hidden;">
+    <div style="padding:16px 22px 0;"><div class="card-title">Lines</div></div>
+    {% set cat_name = {} %}{% for c in categories %}{% set _ = cat_name.__setitem__(c.id, c.name) %}{% endfor %}
+    <table class="data" style="margin-top:12px;">
+      <thead>
+        <tr><th>#</th><th>Description</th><th style="text-align:right;">Amount</th><th>GL</th><th>Tax</th>
+            <th>Carbon category</th><th>Dept</th>{% if can_act %}<th>Code</th>{% endif %}</tr>
+      </thead>
+      <tbody>
+        {% for ln in lines %}
+        <tr>
+          <td style="color:var(--faint);">{{ ln.line_no }}</td>
+          <td>{{ ln.description or '—' }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;">{% if ln.line_total is not none %}{{ '%.2f' | format(ln.line_total) }}{% else %}—{% endif %}</td>
+          <td class="mono">{{ ln.gl_code or '—' }}</td>
+          <td class="mono">{{ ln.tax_code or '—' }}</td>
+          <td>{{ cat_name.get(ln.category_id, '—') if ln.category_id else '—' }}</td>
+          <td>{{ ln.department or '—' }}</td>
+          {% if can_act %}
+          <td>
+            {% if invoice.status in ('captured', 'coded', 'held') %}
+            <form method="post" action="/ap/{{ invoice.id }}/code" class="code-form">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="line_id" value="{{ ln.id }}">
+              <input class="field" name="gl_code" placeholder="GL" value="{{ ln.gl_code or '' }}" style="width:72px;">
+              <input class="field" name="tax_code" placeholder="Tax" value="{{ ln.tax_code or '' }}" style="width:64px;">
+              <select class="field" name="category_id" style="width:150px;">
+                <option value="">— carbon category —</option>
+                {% for c in categories %}<option value="{{ c.id }}" {{ 'selected' if ln.category_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}
+              </select>
+              <input class="field" name="department" placeholder="Dept" value="{{ ln.department or '' }}" style="width:74px;">
+              <button class="btn" type="submit" style="height:32px;">Save</button>
+            </form>
+            {% else %}<span style="color:var(--faint);">locked</span>{% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <div class="card-title" style="margin-bottom:6px;">Audit trail</div>
+    <ol class="audit">
+      {% for e in events %}
+      <li><span class="evt">{{ e.event_type.replace('_', ' ') }}</span>
+          <span class="who">by {{ e.actor }}</span>
+          <span class="hash">{{ e.hash[:16] }}…</span></li>
       {% endfor %}
-    </tbody>
-  </table>
-</section>
-
-<section class="card">
-  <h2>Audit trail</h2>
-  <ol class="audit">
-    {% for e in events %}
-    <li><span class="evt">{{ e.event_type }}</span> by {{ e.actor }}
-        <span class="mono">{{ e.hash[:16] }}…</span></li>
-    {% endfor %}
-  </ol>
-</section>
+    </ol>
+  </div>
+</div>
 {% endblock %}

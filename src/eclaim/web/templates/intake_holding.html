@@ -1,72 +1,101 @@
 {% extends "base.html" %}
 {% block title %}Vendor bills — OneCapture{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>Vendor bills <span class="badge">coming soon</span></h1>
-  <p class="muted">
-    AP-side pages — a <strong>vendor invoice</strong> (the bill finance pays), a
-    <strong>delivery order</strong>, <strong>quotation</strong> or
-    <strong>purchase order</strong>, or anything the classifier wasn't sure about — are
-    captured here, not forced into an expense claim. Only a vendor invoice is payable;
-    the rest are held for reference. AP processing ships with the AP module; until then
-    they wait here, safe and auditable.
+{% include "_editorial.html" %}
+<style>
+  .capx .mono{font-family:var(--mono)}
+  .capx .chip{display:inline-block;font-size:10.5px;line-height:1.5;color:var(--graphite);background:var(--grey-tint);border:1px solid var(--rule);border-radius:4px;padding:1px 7px;margin:2px 4px 2px 0;white-space:nowrap}
+  .capx .chip.more{color:var(--faint);cursor:default}
+  .capx .stack-sub{font-size:11.5px;color:var(--graphite);margin-top:3px}
+  .capx .row-actions{display:inline-flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+  .capx .row-actions .btn{height:32px;font-size:12px}
+</style>
+<div class="capx">
+  <div style="display:flex;align-items:center;gap:11px;">
+    <h1 class="page-title">Vendor bills</h1>
+    <span class="badge">coming soon</span>
+  </div>
+  <p class="page-sub" style="max-width:780px;">
+    AP-side pages — an invoice, delivery order, quotation or purchase order, or anything
+    the classifier wasn't sure about — are captured here instead of being filed as staff
+    expenses. Only a <b>vendor invoice</b> is payable; the rest are held for reference
+    until the AP module ships.
   </p>
+
   {% if just_routed %}
-  <div class="hint-ok" style="margin:10px 0;"><i class="ti ti-inbox"></i>
+  <div class="banner" style="margin-top:14px;"><i class="ti ti-inbox"></i>
     Captured to the vendor-bills queue. Nothing was filed as a staff expense.</div>
   {% endif %}
 
-  {% if rows %}
-  <table class="ledger">
-    <thead>
-      <tr><th>Document</th><th>Vendor</th><th>Doc no</th><th>PO/DO link</th>
-          <th>Amount</th><th>Confidence</th><th>Signals</th>
-          {% if can_act %}<th>Correct</th>{% endif %}</tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>
-          <span class="pill pill-{{ r.document_type }}">{{ r.document_type.replace('_', ' ') }}</span>
-          {% if r.needs_manual %}<span class="page-sub" title="Low confidence — please confirm the type">· needs a check</span>{% endif %}
-        </td>
-        <td>{{ r.vendor or '—' }}</td>
-        <td class="mono">{{ r.doc_no or '—' }}</td>
-        <td>{% if r.linked_intake_id %}<span title="Linked to its matching {{ 'invoice' if r.document_type == 'delivery_order' else 'delivery order' }}"><i class="ti ti-link"></i> linked</span>{% else %}—{% endif %}</td>
-        <td>{% if r.total_amount is not none %}{{ r.currency or '' }} {{ '%.2f' | format(r.total_amount) }}{% else %}—{% endif %}</td>
-        <td>{% if r.type_confidence is not none %}{{ (r.type_confidence * 100) | round(0, 'floor') | int }}%{% else %}—{% endif %}</td>
-        <td class="muted" style="font-size:12px;">{{ (r.type_signals or []) | join(', ') }}</td>
-        {% if can_act %}
-        <td>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            {% if r.document_type in ('quotation', 'purchase_order', 'delivery_order') %}
-            <span class="page-sub" title="A {{ r.document_type.replace('_',' ') }} is not a bill to pay — captured for reference only">not payable — for reference</span>
-            {% else %}
-            <form method="post" action="/intake/{{ r.id }}/file-ap">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-              <button class="btn btn-accent" type="submit"
-                      title="File this vendor bill as an AP invoice for finance to pay">
-                <i class="ti ti-file-invoice"></i> File as AP invoice
-              </button>
-            </form>
-            {% endif %}
-            <form method="post" action="/intake/{{ r.id }}/reroute">
-              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-              <button class="btn" type="submit" name="to" value="eclaim"
-                      title="This is actually a staff expense — file it in e-Claim"
-                      onclick="return confirm('Re-file this as a staff expense claim in e-Claim?');">
-                <i class="ti ti-user-dollar"></i> Staff expense
-              </button>
-            </form>
-          </div>
-        </td>
-        {% endif %}
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="muted">No vendor bills waiting — every captured page was filed as an expense.</p>
-  {% endif %}
-</section>
+  <div class="card" style="margin-top:16px;padding:0;overflow:hidden;">
+    {% if rows %}
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Document</th>
+          <th>Vendor &amp; ref</th>
+          <th style="text-align:right;">Amount</th>
+          <th>Confidence</th>
+          <th>Why the classifier said so</th>
+          {% if can_act %}<th style="text-align:right;">Action</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            {% set label = r.document_type.replace('_', ' ') %}
+            {% if r.document_type == 'vendor_invoice' %}<span class="badge success">{{ label }}</span>
+            {% elif r.document_type == 'unknown' %}<span class="badge warning">{{ label }}</span>
+            {% else %}<span class="badge neutral">{{ label }}</span>{% endif %}
+            {% if r.needs_manual %}<div class="stack-sub" style="color:var(--rust-2);">needs a check</div>{% endif %}
+          </td>
+          <td>
+            <div style="font-weight:600;">{{ r.vendor or 'Unknown vendor' }}</div>
+            <div class="stack-sub mono">{{ r.doc_no or '—' }}{% if r.linked_intake_id %} · <span style="color:var(--pine);"><i class="ti ti-link"></i> linked</span>{% endif %}</div>
+          </td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;">
+            {% if r.total_amount is not none %}{{ r.currency or 'RM' }} {{ '%.2f' | format(r.total_amount) }}{% else %}<span style="color:var(--faint);">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.type_confidence is not none %}
+            {% set pct = (r.type_confidence * 100) | round(0, 'floor') | int %}
+            <span class="badge {{ 'success' if pct >= 85 else 'warning' }}">{{ pct }}%</span>
+            {% else %}<span style="color:var(--faint);">—</span>{% endif %}
+          </td>
+          <td style="max-width:300px;">
+            {% for s in (r.type_signals or [])[:3] %}<span class="chip">{{ s }}</span>{% endfor %}
+            {% if (r.type_signals or []) | length > 3 %}<span class="chip more" title="{{ r.type_signals | join(', ') }}">+{{ (r.type_signals | length) - 3 }} more</span>{% endif %}
+            {% if not r.type_signals %}<span style="color:var(--faint);">—</span>{% endif %}
+          </td>
+          {% if can_act %}
+          <td style="text-align:right;">
+            <div class="row-actions">
+              {% if r.document_type in ('quotation', 'purchase_order', 'delivery_order') %}
+              <span class="badge neutral" title="A {{ r.document_type.replace('_',' ') }} is not a bill to pay — captured for reference only">not payable</span>
+              {% else %}
+              <form method="post" action="/intake/{{ r.id }}/file-ap">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="btn btn-accent" type="submit" title="File this vendor bill as an AP invoice for finance to pay"><i class="ti ti-file-invoice"></i> File as AP invoice</button>
+              </form>
+              {% endif %}
+              <form method="post" action="/intake/{{ r.id }}/reroute" onsubmit="return confirm('Re-file this as a staff expense claim in e-Claim?');">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="btn" type="submit" name="to" value="eclaim" title="This is actually a staff expense — file it in e-Claim"><i class="ti ti-user-dollar"></i> Staff expense</button>
+              </form>
+            </div>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:52px 22px;text-align:center;">
+      <i class="ti ti-inbox" style="font-size:30px;color:var(--faint);"></i>
+      <p class="page-sub" style="margin-top:10px;">No vendor bills waiting — every captured page was filed as an expense.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
 {% endblock %}
