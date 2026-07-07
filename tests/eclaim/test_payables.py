@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
+import pytest
+
 from eclaim.auth.principal import Principal
-from eclaim.db.models import ApInvoice, AppUser, DocumentIntake
+from eclaim.db.models import ApInvoice, AppUser, Claim, DocumentIntake
 from eclaim.services import ap
 from eclaim.services import payables as payables_service
 
@@ -83,7 +86,7 @@ def test_payables_excludes_paid_and_pre_approval(client, db_session):
     assert p.reimburse_total == Decimal("0") and p.reimburse_count == 0
 
 
-def test_payables_page_shows_both_totals(client, db_session):
+def test_payables_page_shows_both_totals_and_grand_total(client, db_session):
     ids = db_session.info["principal"]
     _approved_out_of_pocket_claim(client, amount="100")
     _approved_invoice(db_session, ids, total="300")
@@ -93,3 +96,45 @@ def test_payables_page_shows_both_totals(client, db_session):
     assert page.status_code == 200
     assert "Reimburse staff" in page.text and "Pay vendors" in page.text
     assert "RM 100.00" in page.text and "RM 300.00" in page.text
+    assert "RM 400.00" in page.text                 # combined grand total
+
+
+def test_mark_paid_drops_items_off_payables(client, db_session):
+    ids = db_session.info["principal"]
+    cid = _approved_out_of_pocket_claim(client)
+    inv = _approved_invoice(db_session, ids, total="300")
+    db_session.commit()
+
+    assert client.post("/payables/pay", data={"kind": "claim", "id": cid},
+                       follow_redirects=False).status_code == 303
+    assert client.post("/payables/pay", data={"kind": "ap", "id": str(inv.id)},
+                       follow_redirects=False).status_code == 303
+
+    db_session.expire_all()
+    assert db_session.get(Claim, uuid.UUID(cid)).status == "paid"
+    assert db_session.get(ApInvoice, inv.id).status == "paid"
+    p = payables_service.payables(db_session, frozenset({ids["client"]}))
+    assert p.reimburse_count == 0 and p.pay_count == 0     # both settled → off the list
+
+
+def test_ap_mark_paid_requires_approved_or_posted(client, db_session):
+    ids = db_session.info["principal"]
+    intake = DocumentIntake(
+        firm_id=ids["firm"], client_id=ids["client"], document_type="vendor_invoice",
+        routed_to="ap_holding", vendor="X", doc_no="CAP2", total_amount=Decimal("50"),
+        currency="MYR", type_signals=[],
+    )
+    db_session.add(intake)
+    db_session.flush()
+    inv = ap.create_from_intake(db_session, intake=intake, actor="t")   # 'captured'
+    with pytest.raises(ap.IllegalApTransition):
+        ap.mark_paid(db_session, invoice_id=inv.id, actor="x")
+
+
+def test_claim_mark_paid_rejects_pre_approval(client, db_session):
+    """An in-review claim isn't a settled payable yet — can't be marked paid."""
+    files = {"file": ("r.png", b"\x89PNG\r\n fake", "image/png")}
+    cid = client.post("/api/claims/upload", files=files, data={"attested": "true"}).json()["id"]
+    # not approved → still in_review
+    r = client.post("/payables/pay", data={"kind": "claim", "id": cid}, follow_redirects=False)
+    assert r.status_code == 409

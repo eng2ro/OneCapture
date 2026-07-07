@@ -798,6 +798,40 @@ def payables_page(
     return templates.TemplateResponse(request, "payables.html", {"p": p})
 
 
+@router.post("/payables/pay")
+def payables_pay(
+    request: Request,
+    kind: str = Form(...),
+    id: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Settle one payable (a staff reimbursement or a vendor bill) → paid, so it drops
+    off the list. Viewers can't; the mutation is RLS-scoped + audited in its service."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot record payments")
+    try:
+        target = uuid.UUID(id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad id")
+    try:
+        if kind == "claim":
+            _service.mark_paid(repos=repos, claim_id=target, actor=_actor(principal), principal=principal)
+        elif kind == "ap":
+            inv = ap_service.get_invoice(repos.session, target)
+            if not principal.can_access_client(inv.client_id):
+                raise HTTPException(status_code=403, detail="no grant to this client")
+            ap_service.mark_paid(repos.session, invoice_id=target, actor=_actor(principal))
+        else:
+            raise HTTPException(status_code=400, detail="unknown payable kind")
+        repos.session.commit()
+    except (ClaimError, ap_service.ApError, SoDViolation) as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        raise HTTPException(status_code=409, detail=str(exc))
+    return RedirectResponse("/payables", status_code=303)
+
+
 # --------------------------------------------------------------------------- #
 # Carbon coverage (F-B): captured spend vs carbon-forwarded, per document/period.
 # --------------------------------------------------------------------------- #

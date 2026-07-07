@@ -46,6 +46,11 @@
     </div>
   </div>
 
+  <div class="banner" style="margin-top:12px;justify-content:space-between;">
+    <span><i class="ti ti-sum"></i> Total payable — reimbursements + vendor bills</span>
+    <b style="font-family:var(--serif);font-size:17px;font-variant-numeric:tabular-nums;">RM {{ '%.2f' | format(p.reimburse_total + p.pay_total) }}</b>
+  </div>
+
   <div class="tabs">
     <button class="tab active" data-pane="staff">Staff reimbursements <span class="n">({{ p.reimburse_count }})</span></button>
     <button class="tab" data-pane="vendor">Vendor bills <span class="n">({{ p.pay_count }})</span></button>
@@ -63,7 +68,15 @@
             <td>{{ c.title or c.claimant_ref or '—' }}</td>
             <td style="text-align:right;font-variant-numeric:tabular-nums;">RM {{ '%.2f' | format(c.total_reimbursable) }}</td>
             <td>{{ claim_status(c.status) }}</td>
-            <td style="text-align:right;"><a class="btn" href="/claims/{{ c.id }}/review" style="height:32px;font-size:12px;">Open<i class="ti ti-chevron-right"></i></a></td>
+            <td style="text-align:right;">
+              <div style="display:inline-flex;gap:6px;justify-content:flex-end;">
+                <form method="post" action="/payables/pay" onsubmit="return confirm('Mark this reimbursement paid?');">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="kind" value="claim"><input type="hidden" name="id" value="{{ c.id }}">
+                  <button class="btn btn-accent" type="submit" style="height:32px;font-size:12px;"><i class="ti ti-check"></i> Mark paid</button>
+                </form>
+                <a class="btn" href="/claims/{{ c.id }}/review" style="height:32px;font-size:12px;">Open</a>
+              </div>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -87,7 +100,15 @@
             <td class="mono" style="font-size:12px;">{{ inv.doc_no or '—' }}</td>
             <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ inv.currency }} {{ '%.2f' | format(inv.total_amount) if inv.total_amount is not none else '—' }}</td>
             <td>{{ ap_status(inv.status) }}</td>
-            <td style="text-align:right;"><a class="btn" href="/ap/{{ inv.id }}" style="height:32px;font-size:12px;">Open<i class="ti ti-chevron-right"></i></a></td>
+            <td style="text-align:right;">
+              <div style="display:inline-flex;gap:6px;justify-content:flex-end;">
+                <form method="post" action="/payables/pay" onsubmit="return confirm('Mark this vendor bill paid?');">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="kind" value="ap"><input type="hidden" name="id" value="{{ inv.id }}">
+                  <button class="btn btn-accent" type="submit" style="height:32px;font-size:12px;"><i class="ti ti-check"></i> Mark paid</button>
+                </form>
+                <a class="btn" href="/ap/{{ inv.id }}" style="height:32px;font-size:12px;">Open</a>
+              </div>
+            </td>
           </tr>
           {% endfor %}
         </tbody>

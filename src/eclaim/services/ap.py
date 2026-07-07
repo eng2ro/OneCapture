@@ -361,6 +361,20 @@ def release_hold(session: Session, *, invoice_id: uuid.UUID, actor: str) -> ApIn
     return invoice
 
 
+def mark_paid(session: Session, *, invoice_id: uuid.UUID, actor: str) -> ApInvoice:
+    """Settle the bill — the vendor has been paid (→ ``paid``, terminal). Allowed once
+    the invoice is approved or posted; audited (``ap_paid``)."""
+    invoice = get_invoice(session, invoice_id)
+    if invoice.status not in ("approved", "posted"):
+        raise IllegalApTransition(
+            f"cannot mark an invoice in status {invoice.status!r} as paid"
+        )
+    invoice.status = "paid"
+    _audit(session, invoice, "ap_paid", actor, {})
+    session.flush()
+    return invoice
+
+
 def reject(session: Session, *, invoice_id: uuid.UUID, actor: str, reason: str | None = None) -> ApInvoice:
     invoice = get_invoice(session, invoice_id)
     if invoice.status in ("posted", "paid"):

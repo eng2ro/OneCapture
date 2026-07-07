@@ -1158,6 +1158,31 @@ class ClaimService:
         )
         return claim
 
+    def mark_paid(
+        self, *, repos: "Repos", claim_id: uuid.UUID, actor: str,
+        principal: "Principal | None" = None,
+    ) -> Claim:
+        """Settle the reimbursement — the employee has been paid back (→ ``paid``). A
+        terminal money event, so it's writer-gated and audited; allowed once the claim
+        is approved onward (approved / partially_approved / released / exported). Carbon
+        release is a SEPARATE axis (via :meth:`release`) — paying the employee doesn't
+        forward carbon, and vice versa."""
+        claim = self._lock(repos, claim_id)
+        self._require_writer(claim, principal)
+        if claim.status not in ("approved", "partially_approved", "released", "exported"):
+            raise IllegalTransition(
+                f"cannot mark a claim in status {claim.status!r} as paid"
+            )
+        prior = claim.status
+        claim.status = "paid"
+        record_event(
+            repos.audit, firm_id=claim.firm_id, client_id=claim.client_id,
+            entity_type="claim", entity_id=claim.id, event_type="paid", actor=actor,
+            detail={"from_status": prior},
+        )
+        repos.session.flush()
+        return claim
+
     def resubmit(
         self, *, repos: "Repos", claim_id: uuid.UUID, actor: str,
         principal: "Principal | None" = None,
