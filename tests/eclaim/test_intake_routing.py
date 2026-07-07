@@ -56,6 +56,13 @@ def test_unknown_type_needs_a_manual_decision():
     assert r.queue == routing.QUEUE_PENDING and r.needs_manual
 
 
+def test_quotation_and_po_route_to_holding_for_reference():
+    """A quotation / purchase order is AP-side context — captured in the holding queue,
+    never e-Claim, but not a payable bill."""
+    assert routing.route("quotation", Decimal("0.95")).queue == routing.QUEUE_AP_HOLDING
+    assert routing.route("purchase_order", Decimal("0.95")).queue == routing.QUEUE_AP_HOLDING
+
+
 def test_link_key_needs_both_vendor_and_ref():
     assert routing.link_key("Acme Sdn Bhd", "PO-77") == "acme sdn bhd|po-77"
     assert routing.link_key("Acme", None) is None
@@ -346,6 +353,22 @@ def test_submission_needs_attestation_logic():
     assert _submission_needs_attestation([bill, receipt], [], 2) is True   # mixed
     assert _submission_needs_attestation([], [trip], 0) is True        # mileage
     assert _submission_needs_attestation([], [], 1) is True            # an unread file
+
+
+def test_quotation_is_captured_but_not_fileable_as_ap(client, db_session, fake_ocr):
+    """A quotation lands in the holding queue labelled correctly, the UI marks it 'not
+    payable' (no File-as-AP button), and the file-ap action is refused server-side."""
+    fake_ocr.extraction = _bill(document_type="quotation")
+    _capture(client)
+    intake = db_session.execute(select(DocumentIntake)).scalars().one()
+    assert intake.document_type == "quotation" and intake.routed_to == "ap_holding"
+
+    page = client.get("/intake/holding").text
+    assert "not payable" in page
+
+    r = client.post(f"/intake/{intake.id}/file-ap", follow_redirects=False)
+    assert r.status_code == 400
+    assert db_session.get(DocumentIntake, intake.id).status == "open"   # not consumed
 
 
 def test_api_upload_refuses_a_confident_vendor_bill(client, fake_ocr):

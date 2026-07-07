@@ -24,7 +24,7 @@ vendor (string), doc_no (string|null), date (string|null), currency (string|null
 total_amount (number|null), expense_type ("fuel_diesel"|"fuel_petrol"|"electricity"|
 "natural_gas"|"air_travel"|"other"), quantity (number|null), unit ("L"|"kWh"|"m3"|"km"|null),
 confidence (number 0..1),
-document_type ("expense_receipt"|"vendor_invoice"|"delivery_order"|"unknown"),
+document_type ("expense_receipt"|"vendor_invoice"|"delivery_order"|"quotation"|"purchase_order"|"unknown"),
 type_confidence (number 0..1),
 type_signals (array of short strings),
 po_ref (string|null),
@@ -41,9 +41,16 @@ Classify document_type by these cues, and list the ones you actually saw in type
   "Bank Account"/remittance details, a PO reference. A bill finance still has to PAY.
 - delivery_order: a "Delivery Order"/"DO" or goods-received note listing quantities
   delivered, usually with a DO/PO reference and NO amount due.
+- quotation: a supplier's PRICE OFFER — titled "Quotation"/"Quote"/"Proforma", has a
+  "Valid until"/"Validity" period, explicitly NOT a tax invoice, no amount actually
+  DUE yet. A quotation is NOT a bill to pay.
+- purchase_order: an ORDER from the buyer to the supplier — titled "Purchase Order"/
+  "PO", authorises a purchase. It is not itself a payable bill (its later invoice is).
 - unknown: you genuinely cannot tell.
-Payment terms / a due date / remittance bank details => vendor_invoice (a receipt is
-already paid). A PO or DO reference present => AP side (vendor_invoice or delivery_order).
+Only a vendor_invoice is PAYABLE. A "Quotation"/"Valid until"/"This is not a tax
+invoice" => quotation. A "Purchase Order"/"PO No" issued BY the customer => purchase_order.
+Payment terms / a due date / an amount DUE / remittance bank details => vendor_invoice
+(a receipt is already paid). A PO or DO reference present => AP side.
 Set type_confidence to how sure you are (0..1). Set po_ref to the referenced PO/DO
 number if the document cites one (e.g. "PO No: 4500012345", "Your DO: DO-778"), else null.
 
@@ -57,7 +64,10 @@ you reported. Omit a field from "boxes" if you cannot confidently locate it; use
 you cannot produce boxes at all.
 Return ONLY the JSON object, no prose, no code fences."""
 
-_VALID_DOC_TYPES = {"expense_receipt", "vendor_invoice", "delivery_order", "unknown"}
+_VALID_DOC_TYPES = {
+    "expense_receipt", "vendor_invoice", "delivery_order",
+    "quotation", "purchase_order", "unknown",
+}
 
 
 def _coerce_classification(data: dict) -> None:

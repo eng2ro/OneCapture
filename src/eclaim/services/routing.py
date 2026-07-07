@@ -64,7 +64,10 @@ def route(
         return Route(QUEUE_PENDING, needs_manual=True)
     if document_type == "expense_receipt":
         return Route(QUEUE_ECLAIM, needs_manual=False)
-    if document_type in ("vendor_invoice", "delivery_order"):
+    # AP-side documents captured for reference. Only ``vendor_invoice`` is payable (the
+    # holding UI offers "File as AP invoice" for that alone); a delivery_order,
+    # quotation and purchase_order are held, labelled, but not billable as-is.
+    if document_type in ("vendor_invoice", "delivery_order", "quotation", "purchase_order"):
         return Route(QUEUE_AP_HOLDING, needs_manual=False)
     # "unknown" (even at high confidence in the type "unknown") → ask the human.
     return Route(QUEUE_PENDING, needs_manual=True)

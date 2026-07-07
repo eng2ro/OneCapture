@@ -864,7 +864,8 @@ class DocumentIntake(Base):
     __tablename__ = "document_intake"
     __table_args__ = (
         CheckConstraint(
-            "document_type IN ('expense_receipt','vendor_invoice','delivery_order','unknown')",
+            "document_type IN ('expense_receipt','vendor_invoice','delivery_order',"
+            "'quotation','purchase_order','unknown')",
             name="ck_document_intake_type",
         ),
         CheckConstraint(

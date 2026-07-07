@@ -73,6 +73,17 @@ def test_create_from_intake_builds_invoice_and_consumes_it(client, db_session):
 # --------------------------------------------------------------------------- #
 # Hard duplicate detection
 # --------------------------------------------------------------------------- #
+def test_quotation_intake_cannot_be_filed_as_ap_invoice(client, db_session):
+    """A quotation / PO / DO is not a payable bill — create_from_intake refuses it."""
+    ids = db_session.info["principal"]
+    for dt in ("quotation", "purchase_order", "delivery_order"):
+        intake = _intake(db_session, ids, doc_no=f"Q-{dt}")
+        intake.document_type = dt
+        db_session.flush()
+        with pytest.raises(ap.ApError, match="not a payable bill"):
+            ap.create_from_intake(db_session, intake=intake, actor="t")
+
+
 def test_same_vendor_docno_amount_is_held_as_duplicate(client, db_session):
     ids = db_session.info["principal"]
     first = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")

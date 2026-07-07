@@ -174,12 +174,27 @@ def create_invoice(
     return invoice
 
 
+# Document types that are AP-side context but are NOT payable bills — a quotation is a
+# price offer, a purchase order is an order, a delivery order alone isn't payable. Only
+# a vendor_invoice (or an unconfirmed unknown page the reviewer is deciding on) becomes
+# an AP invoice.
+_NOT_PAYABLE = ("quotation", "purchase_order", "delivery_order")
+
+
 def create_from_intake(
     session: Session, *, intake: DocumentIntake, actor: str,
 ) -> ApInvoice:
     """Convenience: build an AP invoice from a captured vendor-bill intake row (C1→C2),
     resolving/creating the vendor and seeding one line for the whole amount, then
-    marking the intake consumed. The reviewer codes the lines afterwards."""
+    marking the intake consumed. The reviewer codes the lines afterwards.
+
+    Refuses a page the classifier read as not-payable (quotation / purchase_order /
+    delivery_order): filing a quote as a payable invoice would be a real error."""
+    if intake.document_type in _NOT_PAYABLE:
+        raise ApError(
+            f"a {intake.document_type.replace('_', ' ')} is not a payable bill — "
+            "it cannot be filed as an AP invoice"
+        )
     vendor = get_or_create_vendor(
         session, firm_id=intake.firm_id, client_id=intake.client_id,
         name=intake.vendor or "Unknown vendor",

@@ -4,10 +4,12 @@
 <section class="card">
   <h1>Vendor bills <span class="badge">coming soon</span></h1>
   <p class="muted">
-    Pages the classifier read as a <strong>vendor invoice</strong> or
-    <strong>delivery order</strong> (a bill finance pays), or wasn't sure about, are
-    captured here — not forced into an expense claim. Accounts-payable processing
-    ships with the AP module; until then they wait here, safe and auditable.
+    AP-side pages — a <strong>vendor invoice</strong> (the bill finance pays), a
+    <strong>delivery order</strong>, <strong>quotation</strong> or
+    <strong>purchase order</strong>, or anything the classifier wasn't sure about — are
+    captured here, not forced into an expense claim. Only a vendor invoice is payable;
+    the rest are held for reference. AP processing ships with the AP module; until then
+    they wait here, safe and auditable.
   </p>
   {% if just_routed %}
   <div class="hint-ok" style="margin:10px 0;"><i class="ti ti-inbox"></i>
@@ -36,7 +38,10 @@
         <td class="muted" style="font-size:12px;">{{ (r.type_signals or []) | join(', ') }}</td>
         {% if can_act %}
         <td>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            {% if r.document_type in ('quotation', 'purchase_order', 'delivery_order') %}
+            <span class="page-sub" title="A {{ r.document_type.replace('_',' ') }} is not a bill to pay — captured for reference only">not payable — for reference</span>
+            {% else %}
             <form method="post" action="/intake/{{ r.id }}/file-ap">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <button class="btn btn-accent" type="submit"
@@ -44,6 +49,7 @@
                 <i class="ti ti-file-invoice"></i> File as AP invoice
               </button>
             </form>
+            {% endif %}
             <form method="post" action="/intake/{{ r.id }}/reroute">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <button class="btn" type="submit" name="to" value="eclaim"

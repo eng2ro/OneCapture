@@ -14,12 +14,14 @@ Unit = Literal["L", "kWh", "m3", "km"]
 
 # What KIND of document this is — the classifier output that the router (C1) uses to
 # send a captured page to the right queue: a staff-paid ``expense_receipt`` into
-# e-Claim, a ``vendor_invoice`` (a bill finance pays) or its ``delivery_order`` into
-# the AP side, or ``unknown`` when the model can't tell. Defaults to
-# ``expense_receipt`` so a provider that predates the classifier (and the fake OCR in
-# tests) keeps the existing e-Claim behaviour unchanged.
+# e-Claim; a ``vendor_invoice`` (the bill finance actually pays) — the only AP-side
+# type that is PAYABLE; its ``delivery_order``; a supplier ``quotation`` (a price
+# offer, NOT payable) or a ``purchase_order`` (an order, not itself a bill); or
+# ``unknown``. Defaults to ``expense_receipt`` so a provider that predates the
+# classifier (and the fake OCR in tests) keeps the existing e-Claim behaviour.
 DocumentType = Literal[
-    "expense_receipt", "vendor_invoice", "delivery_order", "unknown"
+    "expense_receipt", "vendor_invoice", "delivery_order",
+    "quotation", "purchase_order", "unknown",
 ]
 
 
