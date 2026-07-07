@@ -75,16 +75,40 @@ _VALID_DOC_TYPES = {
 }
 
 
+def _drop_bad_decimal(data: dict, key: str, *, nonneg: bool = False) -> Decimal | None:
+    """Normalize one numeric field IN PLACE: unparseable, non-finite (``NaN``/
+    ``Infinity`` — which ``Decimal(str(v))`` happily parses but pydantic's finite
+    check then rejects, killing the whole read) or, when ``nonneg``, negative values
+    drop to ``None``. Returns the surviving Decimal so callers can cross-check."""
+    v = data.get(key)
+    if v is None:
+        return None
+    try:
+        d = Decimal(str(v))
+        if not d.is_finite() or (nonneg and d < 0):
+            raise InvalidOperation
+    except (InvalidOperation, ValueError, TypeError):
+        data[key] = None
+        return None
+    return d
+
+
 def _coerce_classification(data: dict) -> None:
-    """Normalize the classifier fields IN PLACE so a stray value degrades gracefully
-    instead of failing the whole read (mirrors the tolerant ``boxes`` handling):
+    """Normalize the classifier + numeric fields IN PLACE so a stray model value
+    degrades gracefully instead of failing the whole read (mirrors the tolerant
+    ``boxes`` handling):
 
     * an unrecognised/absent ``document_type`` becomes ``"unknown"`` — never a
       validation error, and never a wrong confident class;
     * ``type_signals`` is coerced to a list of short strings (or dropped);
-    * ``type_confidence`` that isn't a parseable number is dropped to ``None`` — a junk
-      value like ``"very sure"`` is a str, so a bare isinstance check let it through to
-      the Decimal validator, which raised and killed the whole page read (F4).
+    * numeric fields (``type_confidence``, ``confidence``, ``tax_amount``,
+      ``total_amount``, ``quantity``) that aren't parseable FINITE numbers drop to
+      ``None`` — junk like ``"very sure"`` raised in the Decimal validator (F4), and
+      ``NaN``/``Infinity`` parse as Decimals but fail pydantic's finite check: the
+      same whole-read crash by another door;
+    * tax sanity: negative tax, or tax exceeding the document gross, is dropped
+      (the reviewer can still key it) — OCR must never auto-populate an impossible
+      net; ``tax_code`` is clipped to a short trimmed string.
     """
     dt = data.get("document_type")
     if dt not in _VALID_DOC_TYPES:
@@ -94,12 +118,17 @@ def _coerce_classification(data: dict) -> None:
         data["type_signals"] = [str(s)[:120] for s in signals if str(s).strip()][:12]
     elif signals is not None:
         data.pop("type_signals", None)
-    tc = data.get("type_confidence")
-    if tc is not None:
-        try:
-            Decimal(str(tc))            # numeric string / int / float → keep as-is
-        except (InvalidOperation, ValueError, TypeError):
-            data["type_confidence"] = None
+    _drop_bad_decimal(data, "type_confidence", nonneg=True)
+    _drop_bad_decimal(data, "confidence", nonneg=True)
+    _drop_bad_decimal(data, "quantity")
+    total = _drop_bad_decimal(data, "total_amount")
+    tax = _drop_bad_decimal(data, "tax_amount", nonneg=True)
+    if tax is not None and total is not None and tax > abs(total):
+        data["tax_amount"] = None
+    code = data.get("tax_code")
+    if code is not None:
+        code = str(code).strip()[:16]
+        data["tax_code"] = code or None
 
 
 # The SDK retries transient failures (429 rate-limit, 529 overloaded, 5xx, and

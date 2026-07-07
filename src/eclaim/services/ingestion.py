@@ -28,7 +28,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable
 
@@ -138,6 +138,21 @@ def item_has_data(item) -> bool:
     return any(item.get(k) for k in ("vendor", "doc_no", "date", "total_amount", "quantity", "unit"))
 
 
+def _item_decimal(item: dict, key: str) -> Decimal | None:
+    """Tolerant Decimal for a client-supplied item field: junk or non-finite input
+    (a crafted POST, or a stale tab posting garbage) degrades to ``None`` instead of
+    an unhandled ``InvalidOperation`` 500 — the review screen is where a human fixes
+    a value the client couldn't carry."""
+    v = item.get(key)
+    if v in (None, ""):
+        return None
+    try:
+        d = Decimal(str(v))
+        return d if d.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
 def extraction_from_item(item: dict) -> Extraction:
     """Build an Extraction from a per-file ``items`` entry (fields read client-side).
 
@@ -150,17 +165,15 @@ def extraction_from_item(item: dict) -> Extraction:
         vendor=item.get("vendor") or None,
         doc_no=item.get("doc_no") or None,
         date=item.get("date") or None,
-        total_amount=Decimal(item["total_amount"]) if item.get("total_amount") else None,
-        tax_amount=Decimal(item["tax_amount"]) if item.get("tax_amount") else None,
+        total_amount=_item_decimal(item, "total_amount"),
+        tax_amount=_item_decimal(item, "tax_amount"),
         tax_code=item.get("tax_code") or None,
         expense_type=item.get("expense_type") or "other",
-        quantity=Decimal(item["quantity"]) if item.get("quantity") else None,
+        quantity=_item_decimal(item, "quantity"),
         unit=item.get("unit") or None,
         boxes=item.get("boxes") or None,
         document_type=item.get("document_type") or "expense_receipt",
-        type_confidence=(
-            Decimal(str(item["type_confidence"])) if item.get("type_confidence") not in (None, "") else None
-        ),
+        type_confidence=_item_decimal(item, "type_confidence"),
         type_signals=item.get("type_signals") or [],
         po_ref=item.get("po_ref") or None,
     )

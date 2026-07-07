@@ -101,6 +101,53 @@ def test_coerce_keeps_a_numeric_string_confidence():
     assert Extraction.model_validate(data).type_confidence == Decimal("0.9")
 
 
+def test_coerce_nonfinite_confidence_to_none_does_not_kill_the_read():
+    """F4 follow-up: NaN/Infinity parse as valid Decimals (json.loads even emits bare
+    NaN), then pydantic's finite check raises — the same whole-read crash by another
+    door. They must degrade to None, per field, without failing validation."""
+    for junk in ("NaN", "Infinity", "-inf", float("nan")):
+        data = {"document_type": "vendor_invoice", "type_confidence": junk}
+        _coerce_classification(data)
+        assert data["type_confidence"] is None, junk
+        assert Extraction.model_validate(data).type_confidence is None
+
+
+def test_coerce_junk_tax_fields_never_kill_the_read():
+    """Tax extraction (d9a32ed) must use the same tolerant coercion as the classifier
+    fields: a model emitting tax_amount='6%' (the prompt mentions 6% SST) previously
+    raised in the Decimal validator and lost the whole page."""
+    data = {"document_type": "expense_receipt", "tax_amount": "6%", "tax_code": "  SR  "}
+    _coerce_classification(data)
+    assert data["tax_amount"] is None
+    assert data["tax_code"] == "SR"
+    assert Extraction.model_validate(data).tax_amount is None
+
+
+def test_coerce_drops_impossible_tax():
+    # negative tax, and tax exceeding the document gross, are OCR errors — dropped so
+    # the derived net can never go negative without a human keying it deliberately.
+    neg = {"tax_amount": "-5", "total_amount": "100"}
+    _coerce_classification(neg)
+    assert neg["tax_amount"] is None and neg["total_amount"] == "100"
+    over = {"tax_amount": "150.00", "total_amount": "100.00"}
+    _coerce_classification(over)
+    assert over["tax_amount"] is None
+
+
+def test_extraction_from_item_tolerates_junk_numerics():
+    """A crafted POST (or stale tab) with junk numeric strings must degrade to None
+    per field, not 500 via decimal.InvalidOperation."""
+    from eclaim.services.ingestion import extraction_from_item
+
+    ext = extraction_from_item(
+        {"vendor": "V", "total_amount": "abc", "tax_amount": "NaN",
+         "quantity": "1/2", "type_confidence": "sure"}
+    )
+    assert ext.vendor == "V"
+    assert ext.total_amount is None and ext.tax_amount is None
+    assert ext.quantity is None and ext.type_confidence is None
+
+
 def test_coerce_trims_and_caps_signals():
     data = {"document_type": "vendor_invoice", "type_signals": ["  Bill To  ", "", "x" * 500] + ["s"] * 20}
     _coerce_classification(data)
