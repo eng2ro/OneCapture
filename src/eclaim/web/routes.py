@@ -201,7 +201,7 @@ def _render_capture(
     error: str | None = None,
     form: dict | None = None,
 ) -> HTMLResponse:
-    return templates.TemplateResponse(
+    resp = templates.TemplateResponse(
         request,
         "capture.html",
         {
@@ -220,6 +220,11 @@ def _render_capture(
             "form": form or {},
         },
     )
+    # The capture page's inline JS carries the classifier verdict (document_type) in the
+    # POST payload; a browser serving a STALE cached copy would drop it and mis-file
+    # vendor bills as expenses. Never cache this page, so its JS is always current.
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 
 @router.get("/capture", response_class=HTMLResponse)

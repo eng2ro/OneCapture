@@ -64,6 +64,14 @@ def test_capture_page_renders_for_logged_in_user(client):
     assert "/capture/extract" in page.text
 
 
+def test_capture_page_is_not_cached(client):
+    """The capture page's inline JS carries the classifier verdict in the POST payload;
+    a stale cached copy would drop it and mis-file vendor bills as expenses. It must be
+    served no-store so the browser can't run an old version."""
+    page = client.get("/capture")
+    assert "no-store" in page.headers.get("cache-control", "").lower()
+
+
 def test_post_capture_creates_claim_via_category_path_and_redirects(client, db_session):
     resp = _capture(client, items=[{
         "expense_type": "fuel_diesel", "quantity": "450", "unit": "L",
