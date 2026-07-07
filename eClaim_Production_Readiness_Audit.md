@@ -50,6 +50,58 @@
 > (bare 422 alert otherwise); comment the latent streamed-response edge in
 > `api/limits.py:74-87`; note upload-concurrency/proxy cap as a B8 deploy item.
 >
+> ### ROUND-3 VERIFICATION — 2026-07-07 (R1–R5 + C1 + C2, pre-merge)
+> Suite: **427 passed, 0 skipped** (verified twice). Verdicts: R1, R4/R5,
+> C2-domain-schema — ✅ DONE. R2, R3, C1, C2-controls — ⚠️ PARTIAL.
+> Critic: no BLOCKER/HIGH; five MEDIUMs, all confined to the NEW C1/C2
+> modules; existing e-Claim/erpsync behaviour provably unchanged.
+> **Merge recommendation: MERGE-WITH-FIXES. Regression risk: LOW.**
+>
+> ### ROUND-4 FIX LIST (apply on the branch before merging the PR)
+> **F1 (R2 — attestation attribution, most important).** `POST
+> /api/claims/{id}/attest` records `attested_by="system"` (routes.py:286 uses
+> `deps.get_actor` → `default_releaser`) instead of the authenticated
+> principal — an anonymous, forgeable declaration. Record `principal.email`,
+> decide who MAY attest (creator/claimant vs any writer — at minimum keep the
+> actor trace), and pin attribution with a test on the API path.
+> **F2 (C1 — the classifier is bypassed on the MAIN web flow).** capture.html
+> pre-reads pages via `/capture/extract` and posts `items` with data;
+> `build_claim` forces any item-with-data into e-Claim, discarding
+> `document_type` (ingestion.py:451-455, capture.html:451-463). A vendor bill
+> uploaded the normal way is STILL silently forced into e-Claim — the exact
+> case C1 advertises closing. Carry document_type/type_confidence through the
+> item payload and route on it. Also: render the `?diverted=N` banner on
+> review (currently consumed by nothing), and make `POST /api/claims/upload`
+> divert or refuse a confident vendor_invoice.
+> **F3 (C1 — intake retry duplication).** `document_intake` has no
+> `ingestion_job_id` + unique constraint; a re-claimed all-diverted job
+> creates duplicate intake rows (same bug class as B3). Mirror the B3 fix.
+> **F4 (C1 — classifier crash on junk).** A junk STRING `type_confidence`
+> ("very sure") passes `_coerce_classification` then fails Extraction
+> validation → OcrError → the whole page read dies. Coerce to None instead.
+> **F5 (C2 — SoD hole).** `submit_for_approval` accepts status `captured`
+> and `check_can_approve_invoice` only compares `coded_by` — the user who
+> FILED the bill can submit it uncoded and approve it alone. Require coded
+> status + track/compare the submitter. Pin all AP transitions with tests
+> (approve-from-captured, double-post, idempotency UNIQUE — none are pinned).
+> **F6 (C2 — held is a dead end).** A false-positive duplicate hold can only
+> be rejected — no audited "release hold" (held → coded) action exists; the
+> UI even shows "Send for approval" on held rows (guaranteed 409). Add one.
+> **F7 (C2 — invisible scope_module).** Existing NULL matrix rules now
+> silently govern AP approvals, and the admin UI can neither show nor set
+> scope_module. Expose it in the admin UI (or backfill NULL → 'eclaim' in a
+> migration); fix the denial text mislabel.
+> **F8 (C2 — export/posting hardening).** CSV formula injection: escape
+> cells starting with = + - @ in export_ap_csv; record the idempotency_key in
+> the push receipt; mark_posted must require approved status and refuse
+> overwriting erp_doc_entry.
+> **F9 (smaller).** R3: pin the erpsync queue-template rendering + fix the
+> column-header tooltip ("posts on release" shown on held/flagged-only page);
+> intake_file_ap TOCTOU: IntegrityError → 409; nav badge COUNT(*) instead of
+> loading all rows; add ERPConnector.pull_open_pos to the Protocol; worker
+> diverted-path + mixed-upload tests; decide nav visibility of "Vendor bills"
+> for client-scoped approvers.
+>
 > ### ORIGINAL ROUND-1 PUNCH LIST (all addressed; kept for history)
 > **P1 — approvals_required is a fake control (HIGH).** The Growing/Enterprise
 > templates write `approvals_required=2` ("two partners above 10k") but
@@ -541,6 +593,87 @@ build before one connector is live and stable.
 
 🚫 Same governing rule as Appendix B: configuration, not customization. A new
 ERP is a new connector implementing the same Protocol — never a customer fork.
+
+---
+
+# Appendix F — CarbonNext handoff contract: partial documents (owner, 2026-07-07)
+
+> **Owner question resolved:** a single bill (claim OR vendor bill) may contain
+> both carbon-related and non-carbon lines, so the amount reaching CarbonNext
+> will differ from the document total. That is CORRECT — the carbon unit is the
+> LINE, never the document. Rule: **never reconcile by totals — reconcile by
+> reference.**
+
+## F-A. Principles (already mostly built)
+1. Per-line forwarding on release (`carbon_handoff`, one row per carbon-relevant
+   APPROVED line) — exists. Partial approval naturally forwards a subset.
+2. A mixed single receipt is SPLIT into lines at review (merge/split exists);
+   one category per line.
+3. Corrections after forwarding = reversal row + re-forward (direction
+   'forward'/'reversal') — exists for e-Claim; the AP handoff must use the
+   identical pattern when wired.
+
+## F-B. Gaps to build (small, before the AP handoff / real client)
+1. **Add document reference + parent context to every forwarded line**:
+   `carbon_handoff` today lacks `doc_no` and any parent-doc context. Add
+   columns `doc_no`, `doc_gross_total` (+ currency implied), migration +
+   include in the release/reverse construction (`claims.py:1336,1438`) and in
+   the future AP handoff. This lets CarbonNext (and any auditor) answer
+   "which bill is this from, and why is it less than the invoice total?".
+2. **Coverage view** (FR-S7-lite): per document and per period — total captured
+   spend vs carbon-forwarded amount (count + RM), drill-down to the lines.
+   Surfaces the doc-vs-forwarded difference as a feature, not a surprise.
+
+## F-C. Questions OUT to the CarbonNext programmer (added to
+CarbonNext_Integration_Requirements.txt §3 — chase these now, they gate the
+real client, not Appendix E):
+- Line-level ingestion confirmed? Partial documents acceptable?
+- Will you store/display the parent-doc context fields (doc_no, gross total)?
+- Spend basis: NET (ex-tax) or GROSS amount for spend-based factors? (We can
+  send both; you choose.)
+- Reversal ingestion: negative-amount 'reversal' records accepted?
+- Any dedup on your side across channels (e-Claim / ERP Sync / AP)?
+
+Sequencing: F-B does NOT block Appendix E (E is all pre-release; the handoff
+fires at release). F-B + the F-C answers DO gate the AP carbon handoff wiring
+and the real CarbonNext client.
+
+---
+
+# Appendix E — Unified approvals inbox + document-type switching (owner, 2026-07-07)
+
+> **Owner decision:** approvers and submitters must SEE which bucket each
+> uploaded document landed in (e-Claim vs vendor bill) and be able to SWITCH a
+> misclassified one — with switching locked after approval.
+
+## E1. Approvals inbox with two tabs
+One "Approvals" workspace with tabs **Expenses** and **Vendor bills**, each
+with a live pending-count badge (`?tab=` param, deep-linkable). It aggregates
+what today lives on separate pages: claims in review + AP invoices pending
+approval + holding-queue rows flagged "needs a check". Keep the existing
+dedicated pages; the inbox is the approver's front door. Reuse the existing
+list queries — COUNT(*) for badges, no N+1.
+
+## E2. Submitter visibility
+After a capture, show where each page went: "3 filed as expenses · 1 sent to
+Vendor bills [view]" (extends the F2 diverted banner). On a claim's review
+page and an AP invoice's detail page, show the document-type pill.
+
+## E3. Switching rules (the hard part — enforce exactly this)
+| State | Switch? |
+|-------|---------|
+| Holding queue (not yet filed) | ✅ already built (file-as-AP / staff-expense) |
+| Filed, NOT yet approved | ✅ new audited "switch type" action |
+| Approved / released / posted / paid | 🚫 locked — corrections via reject/reversal only |
+
+Switch mechanics (pre-approval): void/remove the wrong-side record, create the
+other-side record carrying the SAME image provenance (path + sha256) and
+intake link; both sides get an audit event referencing each other; idempotent
+(a double-click must not create two AP invoices). Claim-side: removing the
+only line voids the claim (audited); AP-side: only `captured`/`coded`/`held`
+may convert. SoD: switching is a MAKER action — the switcher cannot then
+approve the result. Carbon is unaffected (handoff happens only at release).
+Tests: switch both directions, lock after approval, idempotency, SoD carryover.
 
 ---
 

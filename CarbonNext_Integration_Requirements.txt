@@ -54,10 +54,28 @@ replace "endpoint / payload" items with "target table(s) + column mapping".
 --------------------------------------------------------------------------------
 [ ] The exact endpoint: URL + HTTP method.
 [ ] The full field list + types expected PER emission line.
-[ ] KEY QUESTION: does CarbonNext want the pre-computed tCO2e, or does it
-    recompute from factor + quantity?
-    (ERP Sync already computes tonnage; your e-Claim channel forwards raw data
-     — confirm which the ERP Sync feed should send.)
+[X] KEY QUESTION — ANSWERED (owner decision, 2026-07-07):
+    CarbonNext COMPUTES the CO2e. OneCapture does NOT send pre-computed
+    tonnage — it sends the raw transaction data (category, quantity, UoM,
+    amount, currency, vendor, date) for every line flagged carbon-related.
+    OneCapture's job is only to differentiate carbon-related vs not.
+    -> Please confirm the exact raw-data field list CarbonNext expects.
+
+[ ] PARTIAL DOCUMENTS (owner decision 2026-07-07 — confirm CarbonNext side):
+    OneCapture forwards PER LINE, never per document: a bill mixing carbon
+    and non-carbon lines posts only its carbon lines, so the amount received
+    by CarbonNext will be LESS than the document total. This is by design
+    (reconcile by reference, not totals). Please confirm:
+      [ ] Line-level ingestion is supported; partial documents are acceptable.
+      [ ] You will store/display the parent-document context we send with
+          each line: doc_no + document gross total + currency (so a user in
+          CarbonNext can see "RM 500 carbon lines of a RM 2,000 invoice").
+      [ ] Spend basis: do spend-based factors apply to NET (ex-tax) or GROSS
+          amounts? We can send both; tell us which you use.
+      [ ] Reversals: corrections arrive as negative-amount records marked
+          direction='reversal' (never edits of prior records) — supported?
+      [ ] Do you dedup on your side across our channels (e-Claim / ERP Sync /
+          AP invoices), or do you rely fully on our idempotency keys?
 [ ] Units & conventions:
         - tonnes vs kg
         - decimal precision / rounding rules
