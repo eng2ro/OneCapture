@@ -322,8 +322,13 @@
       </section>
     </div>
 
-    <label class="cap-attest" for="f-attested">
-      <input type="checkbox" name="attested" value="yes" id="f-attested" required
+    {# The out-of-pocket declaration is only relevant to a staff EXPENSE — it is shown
+       and required only when the submission contains genuine out-of-pocket spend (a
+       receipt classified as an expense, or a mileage trip). An all-vendor-bill upload
+       diverts to Vendor bills and needs no declaration; updateSubmitBar() toggles this
+       row (and its `required`) from the pre-read classification. #}
+    <label class="cap-attest" for="f-attested" id="attest-row">
+      <input type="checkbox" name="attested" value="yes" id="f-attested"
              {% if form and form.get('attested') %}checked{% endif %}>
       <span>I confirm these out-of-pocket expenses were paid with my own money and have
         not been (and will not be) reimbursed elsewhere.</span>
@@ -633,6 +638,24 @@ window.updateSubmitBar = function () {
              : "Add a receipt or a mileage trip to begin · you'll verify next");
   if (submit) submit.disabled = n === 0 || rs.reading;
   if (label) label.textContent = n > 0 ? "Submit claim (" + n + ")" : "Submit claim";
+  // Show/require the out-of-pocket declaration ONLY when there's genuine out-of-pocket
+  // expense: a mileage trip, or a receipt NOT classified as a vendor bill. An all-
+  // vendor-bill upload (every read entry is vendor_invoice/delivery_order) diverts to
+  // Vendor bills and needs no declaration. An unread/manual entry is treated as expense
+  // (the server makes the final call from the same classification).
+  var needsAttest = mileageLines.length > 0 || entries.some(function (e) {
+    if (e.status !== "read" || !e.ext) return true;
+    var dt = e.ext.document_type;
+    return dt !== "vendor_invoice" && dt !== "delivery_order";
+  });
+  var attestRow = document.getElementById("attest-row");
+  var attestBox = document.getElementById("f-attested");
+  if (attestRow && attestBox) {
+    var showAttest = needsAttest && n > 0;
+    attestRow.style.display = showAttest ? "" : "none";
+    if (showAttest) { attestBox.setAttribute("required", "required"); }
+    else { attestBox.removeAttribute("required"); attestBox.checked = false; }
+  }
   // Persist the mileage specs for the POST (the server recomputes each authoritative km).
   var mf = document.getElementById("f-mileage");
   if (mf) mf.value = JSON.stringify(mileageLines.map(function (m) {

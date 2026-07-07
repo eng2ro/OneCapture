@@ -274,6 +274,32 @@ async def capture_extract(
     )
 
 
+def _submission_needs_attestation(item_list, mileage_specs, file_count: int) -> bool:
+    """Does this capture contain out-of-pocket EXPENSE that requires the declaration?
+
+    True when there's a mileage trip, an uploaded file with no classifying item
+    (server-OCR of an unknown type — treated as a potential expense), or any pre-read
+    item the classifier routes to e-Claim. False only when EVERY item is a vendor bill /
+    delivery order (they divert to the AP holding queue and create no claim), so a
+    pure-vendor-bill upload doesn't force the tick. Server-side mirror of the capture
+    page's own gate, so a crafted POST can't bypass it."""
+    if any(
+        isinstance(s, dict) and str(s.get("origin") or "").strip()
+        and str(s.get("destination") or "").strip()
+        for s in mileage_specs
+    ):
+        return True
+    data_items = [i for i in item_list if ingestion.item_has_data(i)]
+    # A file with no data-bearing item is an unread/server-OCR page of unknown type.
+    if file_count > len(data_items):
+        return True
+    for item in data_items:
+        dt = item.get("document_type") or "expense_receipt"
+        if routing.route(dt, item.get("type_confidence")).queue == routing.QUEUE_ECLAIM:
+            return True
+    return False
+
+
 @router.post("/capture")
 async def web_capture(
     request: Request,
@@ -348,11 +374,15 @@ async def web_capture(
             form,
         )
 
-    # Out-of-pocket attestation (Appendix A): capture builds out-of-pocket
-    # reimbursement claims by default, so the declaration is required to submit.
-    # Enforce it BEFORE the slow read phase (and before staging an async job), so a
-    # missing tick costs no OCR. The stamp itself is recorded in ClaimService.submit.
-    if not is_attested:
+    # Out-of-pocket attestation (Appendix A): the declaration is required ONLY when the
+    # submission actually contains out-of-pocket EXPENSE — a mileage trip, or a receipt
+    # the classifier routes to e-Claim. An all-vendor-bill upload diverts to the AP
+    # holding queue and creates no reimbursement claim, so it needs no declaration (a
+    # vendor bill is not something you paid out of pocket). Computed from the item
+    # payload's classification BEFORE the read phase, so a missing tick still costs no
+    # OCR; the release-time gate remains the real control for anything that slips
+    # through. The stamp itself is recorded in ClaimService.submit.
+    if _submission_needs_attestation(item_list, mileage_specs, len(named_files)) and not is_attested:
         return _render_capture(
             request, _capture_categories(repos), _events_for(repos),
             "Please confirm the out-of-pocket declaration before submitting your claim.",

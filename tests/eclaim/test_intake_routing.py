@@ -277,6 +277,60 @@ def test_mixed_capture_files_receipt_and_diverts_bill_with_banner(client, db_ses
     assert "Vendor bills" in page.text and "vendor bill" in page.text   # banner rendered
 
 
+def test_vendor_bill_only_capture_needs_no_attestation(client, db_session):
+    """A pure vendor-bill upload diverts to the holding queue and creates no
+    reimbursement claim — so it must submit WITHOUT the out-of-pocket declaration."""
+    resp = client.post(
+        "/capture",
+        files=[("files", ("v.png", b"\x89PNG\r\n bill", "image/png"))],
+        data={"items": json.dumps([
+            {"vendor": "Acme", "total_amount": "500",
+             "document_type": "vendor_invoice", "type_confidence": "0.95"},
+        ])},                                              # NO attested field
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/intake/holding")
+    assert db_session.execute(select(Claim)).scalars().first() is None
+
+
+def test_mixed_capture_without_attestation_is_blocked(client, db_session):
+    """A batch that contains a real expense receipt still requires the declaration —
+    the receipt is genuine out-of-pocket spend."""
+    resp = client.post(
+        "/capture",
+        files=[("files", ("r.png", b"\x89PNG\r\n a", "image/png")),
+               ("files", ("v.png", b"\x89PNG\r\n b", "image/png"))],
+        data={"items": json.dumps([
+            {"vendor": "Cafe", "total_amount": "20", "expense_type": "other",
+             "document_type": "expense_receipt", "type_confidence": "0.9"},
+            {"vendor": "Acme", "total_amount": "500",
+             "document_type": "vendor_invoice", "type_confidence": "0.95"},
+        ])},                                              # NO attested
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200                        # re-render, blocked
+    assert "out-of-pocket declaration" in resp.text
+    assert db_session.execute(select(Claim)).scalars().first() is None
+
+
+def test_submission_needs_attestation_logic():
+    from eclaim.web.routes import _submission_needs_attestation
+
+    bill = {"vendor": "A", "total_amount": "5",
+            "document_type": "vendor_invoice", "type_confidence": "0.95"}
+    receipt = {"vendor": "B", "total_amount": "5",
+               "document_type": "expense_receipt", "type_confidence": "0.9"}
+    trip = {"origin": "KL", "destination": "PJ"}
+
+    assert _submission_needs_attestation([bill], [], 1) is False       # all vendor bills
+    assert _submission_needs_attestation([bill, bill], [], 2) is False
+    assert _submission_needs_attestation([receipt], [], 1) is True     # an expense
+    assert _submission_needs_attestation([bill, receipt], [], 2) is True   # mixed
+    assert _submission_needs_attestation([], [trip], 0) is True        # mileage
+    assert _submission_needs_attestation([], [], 1) is True            # an unread file
+
+
 def test_api_upload_refuses_a_confident_vendor_bill(client, fake_ocr):
     """/api/claims/upload is the staff-expense endpoint — a confident vendor bill is
     refused (422), never silently filed as a claim (F2)."""
