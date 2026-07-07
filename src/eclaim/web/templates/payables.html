@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Payables — OneCapture{% endblock %}
+{% macro ap_status(s) %}
+{%- set cls = {'approved':'success','posted':'success','paid':'success','held':'warning','rejected':'danger'}.get(s, 'neutral') -%}
+<span class="badge {{ cls }}">{{ s.replace('_', ' ') }}</span>
+{%- endmacro %}
+{% macro claim_status(s) %}
+{%- set cls = {'approved':'success','partially_approved':'warning','released':'success','exported':'success'}.get(s, 'neutral') -%}
+<span class="badge {{ cls }}">{{ s.replace('_', ' ') }}</span>
+{%- endmacro %}
+{% block content %}
+{% include "_editorial.html" %}
+<style>
+  .capx .mono{font-family:var(--mono)}
+  .capx .pay-tiles{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  @media (max-width:720px){.capx .pay-tiles{grid-template-columns:1fr}}
+  .capx .pay-tile{border:1px solid var(--rule);border-radius:var(--r-lg);padding:18px 20px;background:var(--paper);box-shadow:0 1px 1px rgba(20,22,18,.03),0 12px 36px rgba(20,22,18,.05)}
+  .capx .pay-tile .l{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);display:flex;align-items:center;gap:7px}
+  .capx .pay-tile .v{font-family:var(--serif);font-size:30px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:8px;line-height:1;color:var(--ink)}
+  .capx .pay-tile .d{font-size:12px;color:var(--graphite);margin-top:7px}
+  .capx .pay-tile.staff{border-left:3px solid var(--pine)}
+  .capx .pay-tile.vendor{border-left:3px solid var(--rust)}
+  .capx .tabs{display:flex;gap:4px;margin:22px 0 0;border-bottom:1px solid var(--rule)}
+  .capx .tab{appearance:none;background:none;border:none;font:inherit;cursor:pointer;padding:10px 16px;font-size:13px;font-weight:600;color:var(--graphite);border-bottom:2px solid transparent;margin-bottom:-1px}
+  .capx .tab.active{color:var(--pine);border-bottom-color:var(--pine)}
+  .capx .tab .n{color:var(--faint);font-weight:500}
+  .capx .pane{display:none}
+  .capx .pane.active{display:block}
+  .capx .subtotal{display:flex;justify-content:flex-end;gap:8px;align-items:baseline;padding:12px 16px;font-size:12.5px;color:var(--graphite)}
+  .capx .subtotal b{font-family:var(--serif);font-size:16px;color:var(--ink);font-variant-numeric:tabular-nums}
+</style>
+<div class="capx">
+  <h1 class="page-title">Payables</h1>
+  <p class="page-sub" style="max-width:760px;">What the company still owes — reimbursements to staff and bills to vendors. Two different payment runs, kept apart, but totalled together here so you can see cash out at a glance.</p>
+
+  <div class="pay-tiles">
+    <div class="pay-tile staff">
+      <div class="l"><i class="ti ti-user-dollar" style="color:var(--pine);"></i> Reimburse staff</div>
+      <div class="v">RM {{ '%.2f' | format(p.reimburse_total) }}</div>
+      <div class="d">{{ p.reimburse_count }} claim{{ '' if p.reimburse_count == 1 else 's' }} · approved, awaiting payment</div>
+    </div>
+    <div class="pay-tile vendor">
+      <div class="l"><i class="ti ti-cash-banknote" style="color:var(--rust);"></i> Pay vendors</div>
+      <div class="v">RM {{ '%.2f' | format(p.pay_total) }}</div>
+      <div class="d">{{ p.pay_count }} invoice{{ '' if p.pay_count == 1 else 's' }} · approved / posted, unpaid</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-pane="staff">Staff reimbursements <span class="n">({{ p.reimburse_count }})</span></button>
+    <button class="tab" data-pane="vendor">Vendor bills <span class="n">({{ p.pay_count }})</span></button>
+  </div>
+
+  <div class="pane active" id="pane-staff">
+    <div class="card" style="margin-top:14px;padding:0;overflow:hidden;">
+      {% if p.claims %}
+      <table class="data">
+        <thead><tr><th>Claim</th><th>Title</th><th style="text-align:right;">Reimbursable</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for c in p.claims %}
+          <tr>
+            <td class="mono" style="font-size:12px;">{{ c.claim_no or '—' }}</td>
+            <td>{{ c.title or c.claimant_ref or '—' }}</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums;">RM {{ '%.2f' | format(c.total_reimbursable) }}</td>
+            <td>{{ claim_status(c.status) }}</td>
+            <td style="text-align:right;"><a class="btn" href="/claims/{{ c.id }}/review" style="height:32px;font-size:12px;">Open<i class="ti ti-chevron-right"></i></a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="subtotal" style="border-top:1px solid var(--rule);">To reimburse <b>RM {{ '%.2f' | format(p.reimburse_total) }}</b></div>
+      {% else %}
+      <div style="padding:44px;text-align:center;color:var(--graphite);">Nothing to reimburse — no approved out-of-pocket claims awaiting payment.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="pane" id="pane-vendor">
+    <div class="card" style="margin-top:14px;padding:0;overflow:hidden;">
+      {% if p.invoices %}
+      <table class="data">
+        <thead><tr><th>Vendor</th><th>Doc no</th><th style="text-align:right;">Total</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for inv in p.invoices %}
+          <tr>
+            <td style="font-weight:600;">{{ p.vendors[inv.vendor_id].name if inv.vendor_id in p.vendors else '—' }}</td>
+            <td class="mono" style="font-size:12px;">{{ inv.doc_no or '—' }}</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ inv.currency }} {{ '%.2f' | format(inv.total_amount) if inv.total_amount is not none else '—' }}</td>
+            <td>{{ ap_status(inv.status) }}</td>
+            <td style="text-align:right;"><a class="btn" href="/ap/{{ inv.id }}" style="height:32px;font-size:12px;">Open<i class="ti ti-chevron-right"></i></a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="subtotal" style="border-top:1px solid var(--rule);">To pay <b>RM {{ '%.2f' | format(p.pay_total) }}</b></div>
+      {% else %}
+      <div style="padding:44px;text-align:center;color:var(--graphite);">Nothing to pay — no approved vendor invoices outstanding.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('.capx .tab').forEach(function (t) {
+    t.addEventListener('click', function () {
+      document.querySelectorAll('.capx .tab').forEach(function (x) { x.classList.remove('active'); });
+      document.querySelectorAll('.capx .pane').forEach(function (x) { x.classList.remove('active'); });
+      t.classList.add('active');
+      document.getElementById('pane-' + t.getAttribute('data-pane')).classList.add('active');
+    });
+  });
+</script>
+{% endblock %}

@@ -47,6 +47,7 @@ from ..repositories import ClaimRepository, LedgerRepository
 from ..services import ap as ap_service
 from ..services import coverage as coverage_service
 from ..services import erp as erp_service
+from ..services import payables as payables_service
 from ..services import ingestion, routing
 from ..services import intake as intake_service
 from ..services.documents import normalize_image
@@ -782,6 +783,19 @@ def ap_reject(
             reason=reason.strip() or None,
         ),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Payables overview: reimburse-staff vs pay-vendors totals in one place.
+# --------------------------------------------------------------------------- #
+@router.get("/payables", response_class=HTMLResponse)
+def payables_page(
+    request: Request,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse:
+    p = payables_service.payables(repos.session, principal.allowed_client_ids)
+    return templates.TemplateResponse(request, "payables.html", {"p": p})
 
 
 # --------------------------------------------------------------------------- #
