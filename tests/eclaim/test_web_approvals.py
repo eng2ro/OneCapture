@@ -63,6 +63,75 @@ def test_add_then_delete_band(client, db_session):
     assert repos.approvals.rules_for_client(cid) == []
 
 
+# --------------------------------------------------------------------------- #
+# F7 — the launch matrix is scoped to e-Claim, not silently governing AP
+# --------------------------------------------------------------------------- #
+def test_admin_rules_are_scoped_to_eclaim(client, db_session):
+    """F7: the launch admin UI configures the e-Claim matrix, so the rows it writes
+    must be scope_module='eclaim' — not NULL, which would silently govern AP too."""
+    cid = _cid(db_session)
+    client.post("/admin/approvals/template",
+                data={"client_id": str(cid), "template": "small"}, follow_redirects=False)
+    client.post("/admin/approvals/add", data={
+        "client_id": str(cid), "min_amount": "5000", "max_amount": "",
+        "approver_role": "partner",
+    }, follow_redirects=False)
+    rules = Repos.for_session(db_session).approvals.rules_for_client(cid)
+    assert rules and all(r.scope_module == "eclaim" for r in rules)
+
+
+def test_eclaim_admin_matrix_does_not_govern_ap(client, db_session):
+    """An e-Claim matrix band must NOT bind an AP invoice (F7) — AP is governed only by
+    an ap-scoped matrix (or its SoD + authority fallback)."""
+    from decimal import Decimal as _D
+
+    from eclaim.db.models import ApInvoice, Vendor
+    from eclaim.services import ap
+
+    cid = _cid(db_session)
+    ids = db_session.info["principal"]
+    client.post("/admin/approvals/template",
+                data={"client_id": str(cid), "template": "growing"}, follow_redirects=False)
+
+    v = Vendor(firm_id=ids["firm"], client_id=cid, name="V")
+    db_session.add(v)
+    db_session.flush()
+    inv = ApInvoice(firm_id=ids["firm"], client_id=cid, vendor_id=v.id,
+                    total_amount=_D("50000"), idempotency_key="k7")
+    db_session.add(inv)
+    db_session.flush()
+    assert ap.matrix_rule_for_invoice(db_session, inv) is None   # e-Claim rules don't bind AP
+
+
+def _backfill_sql():
+    import importlib.util
+    from pathlib import Path
+
+    path = (Path(__file__).resolve().parents[2] / "src" / "eclaim" / "alembic"
+            / "versions" / "0029_matrix_scope_backfill.py")
+    spec = importlib.util.spec_from_file_location("_mig_0029", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.BACKFILL
+
+
+def test_migration_0029_backfills_null_scope_to_eclaim(client, db_session):
+    """Pins the migration's UPDATE: a legacy NULL-scope rule is clamped to 'eclaim'."""
+    from sqlalchemy import text
+
+    from eclaim.db.models import ApprovalMatrixRule
+    ids = db_session.info["principal"]
+    legacy = ApprovalMatrixRule(
+        firm_id=ids["firm"], client_id=ids["client"], step_order=1,
+        approver_role="partner", approvals_required=1, active=True, scope_module=None,
+    )
+    db_session.add(legacy)
+    db_session.flush()
+    db_session.execute(text(_backfill_sql()))
+    db_session.expire_all()
+    assert db_session.get(ApprovalMatrixRule, legacy.id).scope_module == "eclaim"
+
+
 @pytest.mark.parametrize("template", ["starter", "small", "growing", "enterprise"])
 def test_launch_templates_seed_single_approval(client, db_session, template):
     """P1: no launch template may seed an ``approvals_required > 1`` band — the engine

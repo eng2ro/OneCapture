@@ -2121,6 +2121,9 @@ def admin_apply_template(
             min_amount=Decimal(mn) if mn else None,
             max_amount=Decimal(mx) if mx else None,
             step_order=1, approver_role=role,
+            # This launch UI configures the e-Claim matrix; scope it explicitly so it
+            # doesn't silently also govern AP invoice approvals (F7).
+            scope_module="eclaim",
             approvals_required=PHASE1_APPROVALS_REQUIRED, active=True,
         ))
     return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
@@ -2156,7 +2159,7 @@ def admin_add_rule(
     role = approver_role if approver_role in APPROVER_ROLES else None
     repos.approvals.add(ApprovalMatrixRule(
         firm_id=principal.firm_id, client_id=cid, min_amount=mn, max_amount=mx,
-        step_order=1, approver_role=role,
+        step_order=1, approver_role=role, scope_module="eclaim",   # e-Claim only (F7)
         approvals_required=PHASE1_APPROVALS_REQUIRED, active=True,
     ))
     return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)

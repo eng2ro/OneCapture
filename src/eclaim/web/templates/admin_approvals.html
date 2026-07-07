@@ -74,7 +74,7 @@
     {% if rules %}
     <table class="table" style="width:100%;">
       <thead><tr>
-        <th>Amount band</th><th>Approver</th><th>Approvals</th><th>Status</th><th></th>
+        <th>Amount band</th><th>Approver</th><th>Module</th><th>Approvals</th><th>Status</th><th></th>
       </tr></thead>
       <tbody>
         {% for r in rules %}
@@ -86,6 +86,7 @@
             {% else %}RM {{ '%.2f' | format(r.min_amount) }} – {{ '%.2f' | format(r.max_amount) }}{% endif %}
           </td>
           <td>{{ r.approver_role | capitalize if r.approver_role else 'Any approver' }}{% if r.step_order != 1 %} · step {{ r.step_order }}{% endif %}</td>
+          <td>{% if r.scope_module %}{{ r.scope_module }}{% else %}<span class="page-sub" title="Governs every module, including AP">all</span>{% endif %}</td>
           <td>1{% if r.approvals_required > 1 %} <span class="page-sub" title="Multi-approval counting is not enforced yet — a single sign-off releases this band until Phase-2">(shows {{ r.approvals_required }}, not yet enforced)</span>{% endif %}</td>
           <td>{{ 'Active' if r.active else 'Off' }}</td>
           <td style="text-align:right;">
