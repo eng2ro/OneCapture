@@ -25,6 +25,14 @@ def _approved_out_of_pocket_claim(client, amount="100"):
     return cid
 
 
+def _released_out_of_pocket_claim(client, amount="100"):
+    """Approved AND released — the only state a claim may be marked paid from
+    (payment after release keeps the attestation gate + CarbonNext handoff intact)."""
+    cid = _approved_out_of_pocket_claim(client, amount=amount)
+    assert client.post(f"/api/claims/{cid}/release").status_code == 200
+    return cid
+
+
 # --- vendor bill (an approved AP invoice) ----------------------------------- #
 def _user(db_session, ids, email):
     u = AppUser(firm_id=ids["firm"], email=email, display_name=email, base_role="partner")
@@ -40,9 +48,13 @@ def _principal(ids, uid, email):
     )
 
 
-def _approved_invoice(db_session, ids, total="300"):
+def _approved_invoice(db_session, ids, total="300", filer_id=None):
+    # The filer defaults to a DIFFERENT user than the test principal: the settlement
+    # SoD rule (filer may not record the payment) would otherwise block the pay step.
+    if filer_id is None:
+        filer_id = _user(db_session, ids, f"filer-{uuid.uuid4().hex[:6]}@seed.test").id
     intake = DocumentIntake(
-        firm_id=ids["firm"], client_id=ids["client"], created_by_user_id=ids["user"],
+        firm_id=ids["firm"], client_id=ids["client"], created_by_user_id=filer_id,
         document_type="vendor_invoice", routed_to="ap_holding",
         vendor="Acme", doc_no="INV-PAY", total_amount=Decimal(total), currency="MYR",
         type_signals=[],
@@ -101,7 +113,7 @@ def test_payables_page_shows_both_totals_and_grand_total(client, db_session):
 
 def test_mark_paid_drops_items_off_payables(client, db_session):
     ids = db_session.info["principal"]
-    cid = _approved_out_of_pocket_claim(client)
+    cid = _released_out_of_pocket_claim(client)
     inv = _approved_invoice(db_session, ids, total="300")
     db_session.commit()
 
@@ -115,6 +127,110 @@ def test_mark_paid_drops_items_off_payables(client, db_session):
     assert db_session.get(ApInvoice, inv.id).status == "paid"
     p = payables_service.payables(db_session, frozenset({ids["client"]}))
     assert p.reimburse_count == 0 and p.pay_count == 0     # both settled → off the list
+
+
+def test_claim_cannot_be_paid_before_release(client, db_session):
+    """Paying an approved-but-unreleased claim would permanently strand its CarbonNext
+    handoff (release refuses 'paid') and bypass the attestation gate — blocked."""
+    cid = _approved_out_of_pocket_claim(client)
+    db_session.commit()
+    r = client.post("/payables/pay", data={"kind": "claim", "id": cid},
+                    follow_redirects=False)
+    assert r.status_code == 409
+    assert "release" in r.json()["detail"].lower()
+    db_session.expire_all()
+    assert db_session.get(Claim, uuid.UUID(cid)).status == "approved"   # untouched
+
+
+def test_payables_page_gates_pay_button_on_release(client, db_session):
+    """An approved claim shows 'release first', not a pay button; a released one pays."""
+    cid = _approved_out_of_pocket_claim(client)
+    db_session.commit()
+    page = client.get("/payables")
+    assert "release first" in page.text
+    assert client.post(f"/api/claims/{cid}/release").status_code == 200
+    db_session.commit()
+    page = client.get("/payables")
+    assert "Mark this reimbursement paid" in page.text
+
+
+def test_creator_cannot_pay_own_claim(client, db_session):
+    """Settlement SoD: the user who keyed the claim may not record its payment."""
+    ids = db_session.info["principal"]
+    cid = _released_out_of_pocket_claim(client)
+    claim = db_session.get(Claim, uuid.UUID(cid))
+    # Make the test principal the MAKER. The claim was approved by the same test
+    # principal via the API, and ck_claim_sod forbids creator==approver — so move
+    # the approval to a different user first; the payer==creator rule is what's
+    # under test here.
+    other = _user(db_session, ids, "other-approver@seed.test")
+    claim.approved_by_user_id = other.id
+    claim.created_by_user_id = ids["user"]
+    db_session.commit()
+    r = client.post("/payables/pay", data={"kind": "claim", "id": cid},
+                    follow_redirects=False)
+    assert r.status_code == 403
+    db_session.expire_all()
+    assert db_session.get(Claim, uuid.UUID(cid)).status != "paid"
+
+
+def test_filer_cannot_pay_own_ap_invoice(client, db_session):
+    """Settlement SoD on the AP side: the filer may not record the payment."""
+    ids = db_session.info["principal"]
+    inv = _approved_invoice(db_session, ids, total="300")
+    inv.created_by_user_id = ids["user"]        # test principal filed it
+    db_session.commit()
+    r = client.post("/payables/pay", data={"kind": "ap", "id": str(inv.id)},
+                    follow_redirects=False)
+    assert r.status_code == 403
+    db_session.expire_all()
+    assert db_session.get(ApInvoice, inv.id).status == "approved"
+
+
+def test_paid_invoice_stays_exportable_until_posted(client, db_session):
+    """H2: paying before ERP posting must not drop the bill out of the CSV pipeline.
+    A paid, unposted invoice stays in the export; posting stamps the ERP key while
+    keeping the terminal 'paid' status; then it leaves the export."""
+    from eclaim.services import erp as erp_service
+
+    ids = db_session.info["principal"]
+    inv = _approved_invoice(db_session, ids, total="300")
+    ap.mark_paid(db_session, invoice_id=inv.id, actor="finance")
+    db_session.flush()
+
+    exportable = ap.exportable_invoices(db_session, frozenset({ids["client"]}))
+    assert inv.id in {i.id for i in exportable}
+
+    result = erp_service.ManualCsvConnector().push_ap_invoice(inv)
+    erp_service.mark_posted(db_session, inv, result)
+    assert inv.status == "paid"                  # terminal status preserved
+    assert inv.erp_doc_entry is not None         # but the ERP key is stamped
+    exportable = ap.exportable_invoices(db_session, frozenset({ids["client"]}))
+    assert inv.id not in {i.id for i in exportable}
+
+
+def test_mixed_currencies_are_not_summed_into_one_rm_figure(client, db_session):
+    """A USD invoice must not be silently added into an 'RM' total."""
+    ids = db_session.info["principal"]
+    _approved_invoice(db_session, ids, total="300")
+    intake = DocumentIntake(
+        firm_id=ids["firm"], client_id=ids["client"], created_by_user_id=ids["user"],
+        document_type="vendor_invoice", routed_to="ap_holding",
+        vendor="Acme US", doc_no="INV-USD", total_amount=Decimal("100"), currency="USD",
+        type_signals=[],
+    )
+    db_session.add(intake)
+    db_session.flush()
+    inv2 = ap.create_from_intake(db_session, intake=intake, actor="t")
+    coder = _principal(ids, _user(db_session, ids, "pc2@seed.test").id, "pc2@seed.test")
+    approver = _principal(ids, _user(db_session, ids, "pa2@seed.test").id, "pa2@seed.test")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv2.id)[0].id, coder=coder, actor="pc", gl_code="6000")
+    ap.approve(db_session, invoice_id=inv2.id, approver=approver, actor="pa")
+
+    p = payables_service.payables(db_session, frozenset({ids["client"]}))
+    assert p.pay_by_ccy["MYR"] == Decimal("300") and p.pay_by_ccy["USD"] == Decimal("100")
+    assert "RM 300.00" in p.pay_display and "USD 100.00" in p.pay_display
+    assert "RM 400.00" not in p.pay_display      # never a mixed-currency sum
 
 
 def test_ap_mark_paid_requires_approved_or_posted(client, db_session):

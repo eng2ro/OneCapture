@@ -1163,15 +1163,30 @@ class ClaimService:
         principal: "Principal | None" = None,
     ) -> Claim:
         """Settle the reimbursement — the employee has been paid back (→ ``paid``). A
-        terminal money event, so it's writer-gated and audited; allowed once the claim
-        is approved onward (approved / partially_approved / released / exported). Carbon
-        release is a SEPARATE axis (via :meth:`release`) — paying the employee doesn't
-        forward carbon, and vice versa."""
+        terminal money event, so it's writer-gated and audited.
+
+        Allowed only AFTER release (released / exported): ``release()`` accepts only
+        approved claims and ``paid`` is terminal, so paying an approved-but-unreleased
+        claim would permanently strand its CarbonNext handoff — and, because the
+        attestation gate lives at release, money would leave without the claimant's
+        out-of-pocket declaration ever being enforced. Release first, then pay.
+
+        Settlement SoD: the user who keyed the claim may not also record its payment
+        (payer ≠ maker — mirrors the approve-side maker≠checker rule)."""
         claim = self._lock(repos, claim_id)
         self._require_writer(claim, principal)
-        if claim.status not in ("approved", "partially_approved", "released", "exported"):
+        if (
+            principal is not None
+            and claim.created_by_user_id is not None
+            and claim.created_by_user_id == principal.user_id
+        ):
+            from .sod import SoDViolation
+
+            raise SoDViolation("the user who created a claim cannot record its payment")
+        if claim.status not in ("released", "exported"):
             raise IllegalTransition(
-                f"cannot mark a claim in status {claim.status!r} as paid"
+                f"cannot mark a claim in status {claim.status!r} as paid — "
+                "release it first (the attestation gate and CarbonNext handoff live at release)"
             )
         prior = claim.status
         claim.status = "paid"

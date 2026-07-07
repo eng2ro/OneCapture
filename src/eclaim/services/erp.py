@@ -122,24 +122,31 @@ def export_ap_csv(session: Session, invoices: list[ApInvoice]) -> str:
 
 
 def mark_posted(session: Session, invoice: ApInvoice, result: PostResult) -> None:
-    """Record a successful ERP post: stamp the ERP's key and flip ``approved → posted``.
-    A failed push leaves the invoice approved for the retry queue rather than losing it.
+    """Record a successful ERP post: stamp the ERP's key; ``approved`` flips to
+    ``posted``. A failed push leaves the invoice untouched for the retry queue.
 
-    Hardened (F8): only an APPROVED invoice may be posted (never a captured/held/coded
-    one), and an invoice that already carries an ``erp_doc_entry`` is NOT overwritten —
-    a double-post would silently re-pay a bill. Both raise :class:`ErpError`."""
+    Hardened (F8): only an APPROVED — or already-PAID — invoice may be posted (never
+    a captured/held/coded one), and an invoice that already carries an
+    ``erp_doc_entry`` is NOT overwritten — a double-post would silently re-pay a
+    bill. Both raise :class:`ErpError`.
+
+    ``paid`` is accepted because payment and ERP posting are independent settlement
+    steps that can happen in either order (manual-CSV reality): a bill paid before
+    posting keeps its terminal ``paid`` status and just gains the ERP key —
+    otherwise paying first would strand the bill outside the ERP forever."""
     if not result.ok:
         return
-    if invoice.status != "approved":
+    if invoice.status not in ("approved", "paid"):
         raise ErpError(
-            f"only an approved invoice can be posted (status {invoice.status!r})"
+            f"only an approved (or paid) invoice can be posted (status {invoice.status!r})"
         )
     if invoice.erp_doc_entry is not None:
         raise ErpError(
             f"invoice already posted as {invoice.erp_doc_entry!r} — refusing to overwrite"
         )
     invoice.erp_doc_entry = result.erp_doc_entry
-    invoice.status = "posted"
+    if invoice.status == "approved":
+        invoice.status = "posted"
     session.flush()
 
 

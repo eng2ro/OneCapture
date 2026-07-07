@@ -51,7 +51,7 @@ from ..services import payables as payables_service
 from ..services import ingestion, routing
 from ..services import intake as intake_service
 from ..services.documents import normalize_image
-from ..services.claims import CLAIM_TYPES, ClaimError, ClaimService, Repos
+from ..services.claims import CLAIM_TYPES, ClaimError, ClaimNotFound, ClaimService, Repos
 from ..services.sod import SoDViolation, can_approve
 from ..tenancy import set_tenant_context
 
@@ -658,9 +658,11 @@ def ap_export_csv(
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ):
-    """Download approved AP invoices as a CSV an accountant posts manually (C2 stub)."""
-    invoices = ap_service.list_invoices(
-        repos.session, principal.allowed_client_ids, status="approved"
+    """Download the AP invoices an accountant still needs to post manually (C2 stub):
+    approved or paid, not yet carrying an ERP key — paying first must never drop a
+    bill out of the posting pipeline."""
+    invoices = ap_service.exportable_invoices(
+        repos.session, principal.allowed_client_ids
     )
     csv_text = erp_service.export_ap_csv(repos.session, invoices)
     from fastapi.responses import Response as _Response
@@ -826,13 +828,19 @@ def payables_pay(
             inv = ap_service.get_invoice(repos.session, target)
             if not principal.can_access_client(inv.client_id):
                 raise HTTPException(status_code=403, detail="no grant to this client")
-            ap_service.mark_paid(repos.session, invoice_id=target, actor=_actor(principal))
+            ap_service.mark_paid(
+                repos.session, invoice_id=target, actor=_actor(principal), payer=principal
+            )
         else:
             raise HTTPException(status_code=400, detail="unknown payable kind")
         repos.session.commit()
     except (ClaimError, ap_service.ApError, SoDViolation) as exc:
         repos.session.rollback()
         set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        if isinstance(exc, (ap_service.ApNotFound, ClaimNotFound)):
+            raise HTTPException(status_code=404, detail=str(exc))
+        if isinstance(exc, SoDViolation):
+            raise HTTPException(status_code=403, detail=str(exc))
         raise HTTPException(status_code=409, detail=str(exc))
     return RedirectResponse("/payables", status_code=303)
 

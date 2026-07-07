@@ -36,19 +36,19 @@
   <div class="pay-tiles">
     <div class="pay-tile staff">
       <div class="l"><i class="ti ti-user-dollar" style="color:var(--pine);"></i> Reimburse staff</div>
-      <div class="v">RM {{ '%.2f' | format(p.reimburse_total) }}</div>
-      <div class="d">{{ p.reimburse_count }} claim{{ '' if p.reimburse_count == 1 else 's' }} · approved, awaiting payment</div>
+      <div class="v">{{ p.reimburse_display }}</div>
+      <div class="d">{{ p.reimburse_count }} claim{{ '' if p.reimburse_count == 1 else 's' }} · approved onward, awaiting payment (release before paying)</div>
     </div>
     <div class="pay-tile vendor">
       <div class="l"><i class="ti ti-cash-banknote" style="color:var(--rust);"></i> Pay vendors</div>
-      <div class="v">RM {{ '%.2f' | format(p.pay_total) }}</div>
+      <div class="v">{{ p.pay_display }}</div>
       <div class="d">{{ p.pay_count }} invoice{{ '' if p.pay_count == 1 else 's' }} · approved / posted, unpaid</div>
     </div>
   </div>
 
   <div class="banner" style="margin-top:12px;justify-content:space-between;">
     <span><i class="ti ti-sum"></i> Total payable — reimbursements + vendor bills</span>
-    <b style="font-family:var(--serif);font-size:17px;font-variant-numeric:tabular-nums;">RM {{ '%.2f' | format(p.reimburse_total + p.pay_total) }}</b>
+    <b style="font-family:var(--serif);font-size:17px;font-variant-numeric:tabular-nums;">{{ p.combined_display }}</b>
   </div>
 
   <div class="tabs">
@@ -69,11 +69,15 @@
             <td style="text-align:right;font-variant-numeric:tabular-nums;">RM {{ '%.2f' | format(c.total_reimbursable) }}</td>
             <td>{{ claim_status(c.status) }}</td>
             <td style="text-align:right;">
-              <div style="display:inline-flex;gap:6px;justify-content:flex-end;">
+              <div style="display:inline-flex;gap:6px;justify-content:flex-end;align-items:center;">
+                {% if c.status in ('released', 'exported') %}
                 <form method="post" action="/payables/pay" onsubmit="return confirm('Mark this reimbursement paid?');">
                   <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="kind" value="claim"><input type="hidden" name="id" value="{{ c.id }}">
                   <button class="btn btn-accent" type="submit" style="height:32px;font-size:12px;"><i class="ti ti-check"></i> Mark paid</button>
                 </form>
+                {% else %}
+                <span class="page-sub" title="Release the claim first — the attestation gate and the CarbonNext handoff happen at release; paying earlier would strand them.">release first →</span>
+                {% endif %}
                 <a class="btn" href="/claims/{{ c.id }}/review" style="height:32px;font-size:12px;">Open</a>
               </div>
             </td>
@@ -81,7 +85,7 @@
           {% endfor %}
         </tbody>
       </table>
-      <div class="subtotal" style="border-top:1px solid var(--rule);">To reimburse <b>RM {{ '%.2f' | format(p.reimburse_total) }}</b></div>
+      <div class="subtotal" style="border-top:1px solid var(--rule);">To reimburse <b>{{ p.reimburse_display }}</b></div>
       {% else %}
       <div style="padding:44px;text-align:center;color:var(--graphite);">Nothing to reimburse — no approved out-of-pocket claims awaiting payment.</div>
       {% endif %}
@@ -113,7 +117,7 @@
           {% endfor %}
         </tbody>
       </table>
-      <div class="subtotal" style="border-top:1px solid var(--rule);">To pay <b>RM {{ '%.2f' | format(p.pay_total) }}</b></div>
+      <div class="subtotal" style="border-top:1px solid var(--rule);">To pay <b>{{ p.pay_display }}</b></div>
       {% else %}
       <div style="padding:44px;text-align:center;color:var(--graphite);">Nothing to pay — no approved vendor invoices outstanding.</div>
       {% endif %}

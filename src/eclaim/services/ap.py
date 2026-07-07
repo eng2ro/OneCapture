@@ -361,10 +361,27 @@ def release_hold(session: Session, *, invoice_id: uuid.UUID, actor: str) -> ApIn
     return invoice
 
 
-def mark_paid(session: Session, *, invoice_id: uuid.UUID, actor: str) -> ApInvoice:
+def mark_paid(
+    session: Session, *, invoice_id: uuid.UUID, actor: str,
+    payer: Principal | None = None,
+) -> ApInvoice:
     """Settle the bill — the vendor has been paid (→ ``paid``, terminal). Allowed once
-    the invoice is approved or posted; audited (``ap_paid``)."""
-    invoice = get_invoice(session, invoice_id)
+    the invoice is approved or posted; audited (``ap_paid``).
+
+    Row-locked (two concurrent marks serialise — the loser sees ``paid`` and 409s
+    instead of double-auditing), and settlement-SoD-gated: the user who FILED the bill
+    may not also record its payment (payer ≠ maker, mirroring the approve-side rule).
+    A paid invoice stays exportable/postable until it carries an ``erp_doc_entry``, so
+    paying before the ERP posting never drops the bill out of the pipeline."""
+    invoice = session.get(ApInvoice, invoice_id, with_for_update=True)
+    if invoice is None:
+        raise ApNotFound(str(invoice_id))
+    if (
+        payer is not None
+        and invoice.created_by_user_id is not None
+        and invoice.created_by_user_id == payer.user_id
+    ):
+        raise SoDViolation("the user who filed an invoice cannot record its payment")
     if invoice.status not in ("approved", "posted"):
         raise IllegalApTransition(
             f"cannot mark an invoice in status {invoice.status!r} as paid"
@@ -403,6 +420,25 @@ def list_invoices(session: Session, client_ids, *, status: str | None = None) ->
     if status is not None:
         q = q.where(ApInvoice.status == status)
     return list(session.execute(q.order_by(ApInvoice.created_at.desc())).scalars())
+
+
+def exportable_invoices(session: Session, client_ids) -> list[ApInvoice]:
+    """Invoices the accountant still needs to post into the ERP: approved OR paid
+    (payment and posting are independent settlement steps), and not yet carrying an
+    ``erp_doc_entry``. Selecting on 'approved' alone silently dropped a
+    paid-before-posted bill out of the CSV pipeline forever."""
+    if not client_ids:
+        return []
+    q = (
+        select(ApInvoice)
+        .where(
+            ApInvoice.client_id.in_(client_ids),
+            ApInvoice.status.in_(("approved", "paid")),
+            ApInvoice.erp_doc_entry.is_(None),
+        )
+        .order_by(ApInvoice.created_at.desc())
+    )
+    return list(session.execute(q).scalars())
 
 
 def handoff_doc_fields(invoice: ApInvoice) -> tuple[str | None, Decimal | None]:
