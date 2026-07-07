@@ -78,6 +78,22 @@ def test_coerce_unknown_document_type_becomes_unknown():
     assert "type_signals" not in data or isinstance(data["type_signals"], list)
 
 
+def test_coerce_junk_type_confidence_to_none_does_not_kill_the_read():
+    """F4: a non-numeric type_confidence ('very sure') is a str, so a bare isinstance
+    check let it reach the Decimal validator and raise — killing the whole page read.
+    It must be coerced to None and the extraction must then validate cleanly."""
+    data = {"document_type": "vendor_invoice", "type_confidence": "very sure"}
+    _coerce_classification(data)
+    assert data["type_confidence"] is None
+    assert Extraction.model_validate(data).type_confidence is None   # no raise
+
+
+def test_coerce_keeps_a_numeric_string_confidence():
+    data = {"document_type": "vendor_invoice", "type_confidence": "0.9"}
+    _coerce_classification(data)
+    assert Extraction.model_validate(data).type_confidence == Decimal("0.9")
+
+
 def test_coerce_trims_and_caps_signals():
     data = {"document_type": "vendor_invoice", "type_signals": ["  Bill To  ", "", "x" * 500] + ["s"] * 20}
     _coerce_classification(data)

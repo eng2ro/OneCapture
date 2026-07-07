@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+from decimal import Decimal, InvalidOperation
 
 from pydantic import ValidationError
 
@@ -66,8 +67,9 @@ def _coerce_classification(data: dict) -> None:
     * an unrecognised/absent ``document_type`` becomes ``"unknown"`` — never a
       validation error, and never a wrong confident class;
     * ``type_signals`` is coerced to a list of short strings (or dropped);
-    * ``type_confidence`` is left for the Decimal validator, but a non-numeric value
-      is dropped to ``None`` rather than raising.
+    * ``type_confidence`` that isn't a parseable number is dropped to ``None`` — a junk
+      value like ``"very sure"`` is a str, so a bare isinstance check let it through to
+      the Decimal validator, which raised and killed the whole page read (F4).
     """
     dt = data.get("document_type")
     if dt not in _VALID_DOC_TYPES:
@@ -78,8 +80,11 @@ def _coerce_classification(data: dict) -> None:
     elif signals is not None:
         data.pop("type_signals", None)
     tc = data.get("type_confidence")
-    if tc is not None and not isinstance(tc, (int, float, str)):
-        data["type_confidence"] = None
+    if tc is not None:
+        try:
+            Decimal(str(tc))            # numeric string / int / float → keep as-is
+        except (InvalidOperation, ValueError, TypeError):
+            data["type_confidence"] = None
 
 
 # The SDK retries transient failures (429 rate-limit, 529 overloaded, 5xx, and
