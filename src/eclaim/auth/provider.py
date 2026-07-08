@@ -63,7 +63,10 @@ class DevAuthProvider:
                 "passwordless dev login is disabled in production — "
                 "configure a real identity provider (Entra/OIDC)"
             )
-        rows = self._session.execute(_LOOKUP, {"email": email}).all()
+        # Every write path stores emails lowercased (users service, seed), but the
+        # SECURITY DEFINER lookup matches exactly — normalise the probe so a user
+        # typing Their@Email.Com still signs in.
+        rows = self._session.execute(_LOOKUP, {"email": (email or "").strip().lower()}).all()
         if not rows:
             raise AuthError("unknown user")
         if len(rows) > 1:

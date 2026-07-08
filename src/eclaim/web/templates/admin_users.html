@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Users · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Firm users{% endblock %}
+{% block content %}
+{% include "_editorial.html" %}
+<div class="capx" id="screen-users">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">Users</h1>
+      <p class="page-sub">Who can sign in, their role, and which companies they may work on</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <a class="btn" href="/admin/claimants"><i class="ti ti-users"></i>Claimants</a>
+    </div>
+  </div>
+
+  <div class="banner">
+    <i class="ti ti-info-circle"></i>
+    <span><strong>{{ users | length }} users</strong> · Partner and Manager see every company and all Manage pages.
+      Approver works only on the companies granted below; Viewer is read-only.
+      Claimants (employees who submit receipts) are a separate list — they never sign in.</span>
+  </div>
+
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">{{ 'Edit user' if editing else 'Add a user' }}</div>
+    <form method="post" action="/admin/users">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      {% if editing %}<input type="hidden" name="user_id" value="{{ editing.id }}">{% endif %}
+      <div class="field-row">
+        <div><label class="label-tiny">Email (used to sign in)</label>
+          <input class="field" name="email" type="email" value="{{ editing.email if editing else '' }}" required></div>
+        <div><label class="label-tiny">Display name</label>
+          <input class="field" name="display_name" value="{{ editing.display_name if editing else '' }}" required></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Role</label>
+          {% set cur_role = editing.base_role if editing else 'approver' %}
+          <select class="field" name="base_role" id="u-role">
+            <option value="partner" {{ 'selected' if cur_role == 'partner' else '' }}>Partner — everything, all companies</option>
+            <option value="manager" {{ 'selected' if cur_role == 'manager' else '' }}>Manager — everything, all companies</option>
+            <option value="approver" {{ 'selected' if cur_role == 'approver' else '' }}>Approver — works on granted companies</option>
+            <option value="viewer" {{ 'selected' if cur_role == 'viewer' else '' }}>Viewer — read-only on granted companies</option>
+          </select></div>
+        <div><label class="label-tiny">Authority limit (RM, empty = no cap)</label>
+          <input class="field" name="authority_limit" inputmode="decimal" placeholder="e.g. 5000"
+                 value="{{ editing.authority_limit if editing and editing.authority_limit is not none else '' }}">
+        </div>
+      </div>
+      <div id="u-grants" style="margin-top:8px;">
+        <label class="label-tiny">Companies this user may work on</label>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;">
+          {% set editing_grants = grants.get(editing.id, []) if editing else [] %}
+          {% for c in clients %}
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;">
+            <input type="checkbox" name="grant_client_ids" value="{{ c.id }}"
+                   {{ 'checked' if c.id in editing_grants else '' }}> {{ c.name }}
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Status</label>
+          {% set st = editing.status if editing else 'active' %}
+          <select class="field" name="status">
+            <option value="active" {{ 'selected' if st == 'active' else '' }}>Active</option>
+            <option value="inactive" {{ 'selected' if st == 'inactive' else '' }}>Inactive — sign-in refused</option>
+          </select>
+          {% if editing and editing.id == self_id %}
+          <div style="font-size:10px;color:var(--text-tertiary);margin-top:4px;">
+            This is your own account — you cannot deactivate or demote yourself.</div>
+          {% endif %}
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;">
+          <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i>{{ 'Save' if editing else 'Add user' }}</button>
+          {% if editing %}<a class="btn" href="/admin/users">Cancel</a>{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>User</th><th>Role</th><th>Companies</th>
+          <th>Authority limit</th><th>Status</th><th style="width:60px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr data-edit="/admin/users?edit={{ u.id }}" style="cursor:pointer;" title="Double-click to edit">
+          <td><strong>{{ u.display_name }}</strong>{% if u.id == self_id %} <span class="badge neutral">you</span>{% endif %}
+            <br><span style="font-size:10px;color:var(--text-tertiary);">{{ u.email }}</span></td>
+          <td><span class="badge {{ 'success' if u.base_role in firm_scoped_roles else 'neutral' }}">{{ u.base_role }}</span></td>
+          <td style="font-size:11px;">
+            {% if u.base_role in firm_scoped_roles %}All companies
+            {% else %}{{ grant_names.get(u.id) or '— none —' }}
+            {% endif %}
+          </td>
+          <td style="font-family:'SF Mono',monospace;font-size:11px;">{{ u.authority_limit if u.authority_limit is not none else '—' }}</td>
+          <td><span class="badge {{ 'success' if u.status == 'active' else 'neutral' }}">{{ u.status }}</span></td>
+          <td><a href="/admin/users?edit={{ u.id }}" title="Edit"><i class="ti ti-edit" style="color:var(--text-tertiary);"></i></a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-tertiary);">No users yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script>
+  // Companies only matter for client-scoped roles — hide the block otherwise.
+  (function () {
+    var role = document.getElementById('u-role'), block = document.getElementById('u-grants');
+    if (!role || !block) return;
+    function sync() {
+      block.style.display = (role.value === 'approver' || role.value === 'viewer') ? '' : 'none';
+    }
+    role.addEventListener('change', sync);
+    sync();
+  })();
+</script>
+{% endblock %}

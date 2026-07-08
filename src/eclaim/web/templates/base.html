@@ -99,7 +99,9 @@
       <div><div class="oc-wm-name">OneCapture</div><div class="oc-wm-sub">E-CLAIM</div></div>
     </div>
 
+    {% if principal and principal.base_role != 'viewer' %}
     <a class="oc-compose" href="/capture"><i class="ti ti-plus"></i> New claim</a>
+    {% endif %}
 
     <nav class="oc-nav">
       <div class="oc-nav-h">INBOX</div>
@@ -127,6 +129,7 @@
       {% if is_firm_scoped %}
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/events' else '' }}" href="/admin/events"><i class="ti ti-map-pin"></i><span class="lab">Events &amp; budgets</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/claimants' else '' }}" href="/admin/claimants"><i class="ti ti-users"></i><span class="lab">Claimants</span></a>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/users' else '' }}" href="/admin/users"><i class="ti ti-user-cog"></i><span class="lab">Users</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/categories' else '' }}" href="/admin/categories"><i class="ti ti-list-check"></i><span class="lab">Categories</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/approvals' else '' }}" href="/admin/approvals"><i class="ti ti-checkup-list"></i><span class="lab">Approval matrix</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/rates' else '' }}" href="/admin/rates"><i class="ti ti-currency-dollar"></i><span class="lab">Exchange rates</span></a>

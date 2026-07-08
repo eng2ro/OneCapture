@@ -36,11 +36,21 @@ from sqlalchemy.orm import Session
 
 from ..api import deps
 from ..auth import csrf
-from ..auth.principal import Principal, list_visible_clients
+from ..auth.principal import Principal, list_visible_clients, list_visible_users
 from ..auth.provider import AuthError, DevAuthProvider
 from ..auth.ratelimit import RateLimited, client_ip
 from ..config import get_settings
-from ..db.models import ApprovalMatrixRule, Category, Claimant, Client, Event, IngestionJob
+from ..db.models import (
+    BASE_ROLES,
+    FIRM_SCOPED_ROLES,
+    ApprovalMatrixRule,
+    AppUser,
+    Category,
+    Claimant,
+    Client,
+    Event,
+    IngestionJob,
+)
 from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
 from ..ocr.segment import PageSegmenter
 from ..repositories import ClaimRepository, LedgerRepository
@@ -48,6 +58,7 @@ from ..services import ap as ap_service
 from ..services import coverage as coverage_service
 from ..services import erp as erp_service
 from ..services import fx as fx_service
+from ..services import users as users_service
 from ..services import vehicles as vehicles_service
 from ..services import payables as payables_service
 from ..services import ingestion, routing
@@ -253,12 +264,27 @@ def _render_capture(
     return resp
 
 
+def _require_capture_writer(principal: Principal, client_id: uuid.UUID | None = None) -> None:
+    """Capturing claims is WRITER work: viewers are read-only on the web exactly
+    as they are on the bearer API's upload endpoint, and a client-scoped writer
+    needs a grant to the client the capture lands in."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot create claims")
+    if client_id is not None and not principal.can_access_client(client_id):
+        raise HTTPException(status_code=403, detail="no grant to this client")
+
+
 @router.get("/capture", response_class=HTMLResponse)
 def capture_page(
     request: Request,
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
+    if principal.base_role == "viewer":
+        raise deps.WebForbidden(
+            "Your account is view-only, so it cannot create claims. Ask a "
+            "partner or manager if you need capture access."
+        )
     return _render_capture(request, _capture_categories(repos), _events_for(repos))
 
 
@@ -275,6 +301,7 @@ async def capture_extract(
     the auto-captured data before submitting. Degrades gracefully: any read
     failure (incl. no API key configured) returns ``{"ok": false}`` with a
     friendly reason so the page falls back to manual entry instead of breaking."""
+    _require_capture_writer(principal)
     media_type = file.content_type or "application/octet-stream"
     if media_type not in SUPPORTED_MEDIA:
         return JSONResponse(
@@ -374,6 +401,7 @@ async def web_capture(
         mileage_specs = []
 
     client_id = deps.default_client_id(repos.session)
+    _require_capture_writer(principal, client_id)
     _client = repos.session.get(Client, client_id)
     split_docs = bool(_client and (_client.modules or {}).get("allow_document_split"))
 
@@ -1273,6 +1301,7 @@ def web_capture_mileage(
     from ..maps import MapError
 
     client_id = deps.default_client_id(repos.session)
+    _require_capture_writer(principal, client_id)
     try:
         wps = [w for w in json.loads(waypoints) if isinstance(w, str) and w.strip()]
     except json.JSONDecodeError:
@@ -2590,6 +2619,106 @@ def admin_save_claimant(
             error="A claimant with that phone already exists for this client.",
         )
     return RedirectResponse("/admin/claimants", status_code=303)
+
+
+# --------------------------------------------------------------------------- #
+# Admin: firm users — the login-user registry (who exists, their role, their
+# companies). Credentials stay with the AuthProvider; this page never sees them.
+# --------------------------------------------------------------------------- #
+def _render_users(request, repos, principal, *, editing=None, error=None) -> HTMLResponse:
+    clients = list_visible_clients(repos.session, principal)
+    users = list_visible_users(repos.session, principal)
+    grants = users_service.grants_by_user(repos.session, [u.id for u in users])
+    names = {c.id: c.name for c in clients}
+    return templates.TemplateResponse(
+        request,
+        "admin_users.html",
+        {
+            "users": users,
+            "grants": grants,
+            "grant_names": {
+                uid: ", ".join(sorted(names[cid] for cid in cids if cid in names))
+                for uid, cids in grants.items()
+            },
+            "clients": clients,
+            "client_names": names,
+            "roles": BASE_ROLES,
+            "firm_scoped_roles": FIRM_SCOPED_ROLES,
+            "self_id": principal.user_id,
+            "editing": editing,
+            "error": error,
+        },
+    )
+
+
+def _editing_user(repos, principal, user_id: str) -> AppUser | None:
+    """The firm's user row behind an ?edit=/user_id value — None for junk ids or
+    another firm's user, so the page just falls back to the blank Add form."""
+    eid = _opt_uuid(user_id)
+    u = repos.session.get(AppUser, eid) if eid else None
+    return u if u is not None and u.firm_id == principal.firm_id else None
+
+
+@router.get("/admin/users", response_class=HTMLResponse)
+def admin_users(
+    request: Request,
+    edit: str = "",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+) -> HTMLResponse:
+    return _render_users(
+        request, repos, principal, editing=_editing_user(repos, principal, edit)
+    )
+
+
+@router.post("/admin/users")
+def admin_save_user(
+    request: Request,
+    user_id: str = Form(""),
+    email: str = Form(...),
+    display_name: str = Form(...),
+    base_role: str = Form(...),
+    authority_limit: str = Form(""),
+    status: str = Form("active"),
+    grant_client_ids: list[str] = Form([]),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    try:
+        grant_ids = [uuid.UUID(g) for g in grant_client_ids if g.strip()]
+    except ValueError:
+        return _render_users(
+            request, repos, principal,
+            editing=_editing_user(repos, principal, user_id),
+            error="Invalid company selection.",
+        )
+    try:
+        with repos.session.begin_nested():
+            users_service.save_user(
+                repos.session, principal=principal,
+                audit_client_id=deps.default_client_id(repos.session),
+                user_id=_opt_uuid(user_id), email=email, display_name=display_name,
+                base_role=base_role, authority_limit=authority_limit, status=status,
+                grant_client_ids=grant_ids, actor=_actor(principal),
+            )
+    except users_service.UserAdminError as exc:
+        # Keep the edit context so a refused UPDATE re-renders as the same edit
+        # form — never as a blank Add form that would create a duplicate.
+        return _render_users(
+            request, repos, principal,
+            editing=_editing_user(repos, principal, user_id), error=str(exc),
+        )
+    except IntegrityError:
+        repos.session.rollback()
+        # rollback clears the SET LOCAL RLS context; re-establish it so the
+        # re-render's scoped queries still see rows.
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        return _render_users(
+            request, repos, principal,
+            editing=_editing_user(repos, principal, user_id),
+            error="A user with that email already exists in this firm.",
+        )
+    return RedirectResponse("/admin/users", status_code=303)
 
 
 # --------------------------------------------------------------------------- #
