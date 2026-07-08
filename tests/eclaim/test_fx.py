@@ -172,6 +172,53 @@ def test_prefilled_fx_flows_to_the_handoff_base(client, fake_ocr, db_session):
 # --------------------------------------------------------------------------- #
 # Admin page
 # --------------------------------------------------------------------------- #
+def test_blanking_clears_optional_numerics(client, fake_ocr, db_session):
+    """F-E item 6: an OCR-hallucinated quantity/tax/fx could be overtyped but never
+    REMOVED — the verify form's inputs are always rendered prefilled, so blanking
+    one is an explicit clear."""
+    fake_ocr.extraction = Extraction(
+        vendor="Kedai A", total_amount=Decimal("50.00"), currency="MYR",
+        expense_type="fuel_diesel", quantity=Decimal("999"), unit="L",
+        tax_amount=Decimal("3.00"),
+    )
+    files = {"file": ("r.png", b"\x89PNG clearme", "image/png")}
+    cid = client.post("/api/claims/upload", files=files,
+                      data={"attested": "true"}).json()["id"]
+    client.post(f"/claims/{cid}/edit",
+                data={"line_id": "", "quantity": "", "unit": "", "tax_amount": "",
+                      "total_amount": "50.00"},
+                follow_redirects=False)
+    line = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == uuid.UUID(cid))
+    ).scalars().one()
+    assert line.quantity is None and line.unit is None and line.tax_amount is None
+    assert line.total_amount == Decimal("50.00")         # gross never clearable
+    assert line.net_amount == Decimal("50.00")           # re-derived without tax
+
+
+def test_release_notes_category_missing_carbon_lines(client, fake_ocr, db_session):
+    """F-E item 7: a carbon-relevant line forwarded with category NULL leaves
+    CarbonNext only the raw expense_type — the release event must note it."""
+    fake_ocr.extraction = Extraction(
+        vendor="Unknown Shop", total_amount=Decimal("80.00"),
+        expense_type="other", quantity=None,
+    )
+    files = {"file": ("r.png", b"\x89PNG nocat", "image/png")}
+    cid = client.post("/api/claims/upload", files=files,
+                      data={"attested": "true"}).json()["id"]
+    line = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == uuid.UUID(cid))
+    ).scalars().one()
+    line.category_id = None                              # ensure unmapped
+    db_session.commit()
+
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+    assert client.post(f"/api/claims/{cid}/release").status_code == 200
+    events = client.get(f"/api/audit/{cid}").json()
+    released = next(e for e in events if e["event_type"] == "released")
+    assert released["detail"]["category_missing_lines"] == [1]
+
+
 def test_admin_rates_page_crud(client, db_session):
     ids = db_session.info["principal"]
     r = client.post("/admin/rates", data={

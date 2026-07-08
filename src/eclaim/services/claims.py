@@ -729,10 +729,11 @@ class ClaimService:
         if "payment_method" in fields:
             line.reimbursable = line.payment_method == "out_of_pocket"
         # Re-derive net/base whenever any money-affecting field was touched. A
-        # currency change re-runs the FX default lookup (an explicit fx_rate in the
-        # same edit still wins — _apply_fx_default never overwrites a set rate).
+        # currency change re-runs the FX default lookup (an explicit fx_rate VALUE
+        # in the same edit still wins — a blank/absent fx alongside a currency
+        # correction means "look the new currency's rate up for me").
         if {"total_amount", "tax_amount", "tax_inclusive", "fx_rate", "currency"} & set(fields):
-            if "currency" in fields and "fx_rate" not in fields:
+            if "currency" in fields and fields.get("fx_rate") is None:
                 line.fx_rate = None
                 self._apply_fx_default(repos, line)
             self._recompute_line_money(line)
@@ -1487,6 +1488,14 @@ class ClaimService:
                 }
                 if fx_missing:
                     release_detail["fx_missing_lines"] = fx_missing
+                # Carbon-relevant lines forwarded with NO category leave CarbonNext
+                # only the raw expense_type to map a factor from (F-E item 7) —
+                # noted so an unmapped forward is auditable, never silently normal.
+                category_missing = [
+                    ln.line_no for ln, _cat in items if ln.category_id is None
+                ]
+                if category_missing:
+                    release_detail["category_missing_lines"] = category_missing
                 released = record_event(
                     repos.audit,
                     firm_id=claim.firm_id,

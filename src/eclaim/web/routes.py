@@ -1644,10 +1644,18 @@ def web_edit(
     ):
         if value != "":
             fields[key] = value
-    for key, value in (("total_amount", total_amount), ("quantity", quantity),
-                       ("tax_amount", tax_amount), ("fx_rate", fx_rate)):
-        if value != "":
-            fields[key] = Decimal(value)
+    # total_amount stays non-clearable (a line always has its printed gross); the
+    # OPTIONAL numerics are clearable — the verify form always renders these inputs
+    # prefilled, so a reviewer BLANKING one is an explicit "remove this value"
+    # (an OCR-hallucinated quantity was previously overtypeable but never
+    # removable, F-E item 6). unit clears alongside quantity semantics.
+    if total_amount != "":
+        fields["total_amount"] = Decimal(total_amount)
+    for key, value in (("quantity", quantity), ("tax_amount", tax_amount),
+                       ("fx_rate", fx_rate)):
+        fields[key] = Decimal(value) if value != "" else None
+    if unit == "":
+        fields["unit"] = None
     if posting_date != "":
         fields["posting_date"] = _parse_date(posting_date)
     if tax_inclusive != "":
