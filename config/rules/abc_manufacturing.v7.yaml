@@ -14,6 +14,14 @@ rules:
     factor_ref: DIESEL_B7
     spend_fallback_ref: EEIO_FUEL
 
+  - rule_id: ITEM-PETROL-RON95
+    item_code: PETROL-RON95
+    category: "Fleet petrol"
+    scope: scope_1
+    basis: activity
+    factor_ref: PETROL_RON95
+    spend_fallback_ref: EEIO_FUEL
+
   - rule_id: ITEM-R134A
     item_code: R134A
     category: "Refrigerant"

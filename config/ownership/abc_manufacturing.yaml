@@ -5,6 +5,7 @@
 client_id: abc_manufacturing
 ownership:
   "Fleet diesel": erp_sync
+  "Fleet petrol": erp_sync
   "Bulk fuel": erp_sync
   "Electricity": erp_sync
   "Refrigerant": erp_sync

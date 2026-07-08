@@ -11,6 +11,12 @@ factors:
     uom: L
     source: "DEFRA 2026 — diesel (B7)"
 
+  - ref: PETROL_RON95
+    value: "2.33"          # kgCO2e per litre, fleet petrol RON95
+    basis: activity
+    uom: L
+    source: "DEFRA 2026 — petrol (average biofuel blend)"
+
   - ref: GRID_MY
     value: "0.585"         # kgCO2e per kWh, Malaysian grid (location-based)
     basis: activity

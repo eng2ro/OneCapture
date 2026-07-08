@@ -51,6 +51,9 @@ DEMO_CATEGORIES = [
     ("Fuel — Diesel (fleet)", "fuel_diesel", True, "6200", None),
     ("Fuel — Petrol (fleet)", "fuel_petrol", True, "6200", None),
     ("Electricity", "electricity", True, "6300", None),
+    # The OCR emits expense_type natural_gas (unit m3) — without this row such a
+    # bill lands unmapped and forwards to CarbonNext with category=NULL.
+    ("Natural gas", "natural_gas", True, "6310", None),
     ("Air travel", "air_travel", True, "6410", None),
     ("Mileage — own car", "mileage", True, "6450", None),
     ("Hotel / accommodation", "hotel", True, "6430", Decimal("500")),
