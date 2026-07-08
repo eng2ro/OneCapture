@@ -61,6 +61,16 @@ replace "endpoint / payload" items with "target table(s) + column mapping".
     OneCapture's job is only to differentiate carbon-related vs not.
     -> Please confirm the exact raw-data field list CarbonNext expects.
 
+    PROPOSED PER-LINE PAYLOAD (field contract v1 — confirm/adjust):
+      carbon_ref, idempotency_key, direction (forward|reversal),
+      category_name, expense_type,
+      quantity, unit (L|kWh|m3|km|kg),
+      amount_gross, currency, net_amount, tax_amount, base_amount_myr,
+      vendor, doc_date (ISO 8601), doc_no, doc_gross_total,
+      cost_centre, department,
+      batch: carbonnext_company_id, batch_hash, source_channel
+             (eclaim | erpsync | ap)
+
 [ ] PARTIAL DOCUMENTS (owner decision 2026-07-07 — confirm CarbonNext side):
     OneCapture forwards PER LINE, never per document: a bill mixing carbon
     and non-carbon lines posts only its carbon lines, so the amount received

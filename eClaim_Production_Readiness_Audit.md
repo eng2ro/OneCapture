@@ -654,6 +654,70 @@ Sequencing: F-B does NOT block Appendix E (E is all pre-release; the handoff
 fires at release). F-B + the F-C answers DO gate the AP carbon handoff wiring
 and the real CarbonNext client.
 
+## F-D. The CarbonNext line payload — field contract v1 (field study, 2026-07-07)
+
+Every carbon-relevant line posted to CarbonNext must carry:
+
+| # | Field | Why CarbonNext needs it |
+|---|-------|-------------------------|
+| 1 | `carbon_ref` + `idempotency_key` + `direction` | identity, dedup, reversals |
+| 2 | `category_name` (+ id) | THE factor-mapping key |
+| 3 | `expense_type` (fuel_diesel/petrol/electricity/natural_gas/air_travel/mileage/other) | raw activity hint when category is generic |
+| 4 | `quantity` + `unit` (L/kWh/m3/km/kg) | activity-based factors — the accuracy path |
+| 5 | `amount` (gross) + `currency` | spend-based fallback |
+| 6 | `net_amount` + `tax_amount` | the NET basis option promised in F-C |
+| 7 | `base_amount_myr` (or fx_rate) | home-currency spend for foreign receipts |
+| 8 | `vendor` | provenance + merchant-level analysis |
+| 9 | `doc_date` (NORMALIZED ISO) | period allocation + factor vintage |
+| 10 | `doc_no` + `doc_gross_total` | F-B reconcile-by-reference |
+| 11 | `cost_centre` / `department` (resolved, not just override) | org attribution |
+| 12 | batch: `carbonnext_company_id`, `batch_hash`, `source_channel` (eclaim/erpsync/ap) | destination + audit anchor |
+
+## F-E. Field-study gap list (fix before wiring the real post)
+
+**e-Claim (chain mostly COMPLETE — quantity/unit fixed 2026-07-07):**
+1. `carbon_handoff` lacks `net_amount`/`tax_amount`/`base_amount` columns — the
+   F-C "we can send both" promise is unfulfillable (migration + release/reverse).
+2. `currency` + `expense_type` are forwarded but have NO verify-form inputs
+   (dead form params exist — one template edit each, mirror the quantity fix).
+3. `unit` is a strict Literal with NO tolerant coercion — a model answering
+   `kg`/`gal` kills the whole page read (F4 class); and the vocab lacks `kg`
+   (refrigerant/LPG). Add kg + coerce unknown units to None.
+4. `doc_date` forwards as raw OCR text — normalize at the boundary (or forward
+   the parsed posting_date alongside).
+5. `cost_centre` forwards only the line OVERRIDE (inherited resolves to NULL);
+   `department` never forwards. Use the resolved value; add department.
+6. Empty-string edits can't CLEAR a field (hallucinated qty can be overtyped,
+   never removed). Treat a cleared input as NULL for the numeric fields.
+7. Release doesn't warn when a carbon-relevant line has category NULL.
+
+**ERP Sync (per-line payload does not exist yet):**
+8. The forward seam sends only hash+count; the future payload must come from
+   `erpsync_entry` (amount/currency/posting_date/vendor are LOST after
+   validation — add columns) + string factor_version.
+
+**AP invoices (NOT handoff-ready — schema is, data flow is not):**
+9. `carbon_handoff.claim_id/line_id` are NOT NULL FKs — AP rows cannot be
+   inserted at all (migration needed: nullable + ap_invoice_line_id).
+10. Intake DISCARDS quantity/uom/doc_date/tax at the divert step
+    (`DocumentIntake` has no columns) → every AP line would forward
+    quantity=NULL and dateless. Plumb Extraction → intake → ap line.
+11. One-lump-line: a multi-line bill files as ONE line = doc gross — the
+    mixed-bill partial forward F-A is impossible on AP. Need line split/edit UI.
+12. No OCR field on the AP detail page is human-correctable (vendor/doc_no/
+    amount/currency) — a misread doc_no also poisons the duplicate hold.
+13. No coding gate: an all-NULL-category bill approves silently; no
+    carbon_relevant snapshot on AP lines; coverage view is e-Claim-only.
+
+**Config seeds (trivial but real):**
+14. No `natural_gas` category in the seed (such receipts land unmapped); no
+    petrol factor/rule in the ERP Sync client config.
+
+**Accepted-for-launch (CarbonNext-side assumptions — record in F-C):**
+single MY grid region (no site/meter field); air travel = spend-based (no
+route capture); mileage = flat factor (no vehicle class); refrigerant stays
+ERP-Sync-owned until AP can carry a gas type.
+
 ---
 
 # Appendix E — Unified approvals inbox + document-type switching (owner, 2026-07-07)
