@@ -190,6 +190,27 @@ def holding_queue(session: Session, client_ids) -> list[DocumentIntake]:
     )
 
 
+def open_diverted_for_user(
+    session: Session, client_ids, user_id: uuid.UUID | None, limit: int = 6
+) -> list[DocumentIntake]:
+    """The caller's own still-open diverted pages — surfaced on the claim review
+    screen so a mis-classified receipt can be pulled BACK into the claim without
+    a trip through the vendor-bills module (owner request, 2026-07-07)."""
+    if not client_ids or user_id is None:
+        return []
+    return list(session.execute(
+        select(DocumentIntake)
+        .where(
+            DocumentIntake.client_id.in_(client_ids),
+            DocumentIntake.created_by_user_id == user_id,
+            DocumentIntake.status == "open",
+            DocumentIntake.routed_to.in_((routing.QUEUE_AP_HOLDING, routing.QUEUE_PENDING)),
+        )
+        .order_by(DocumentIntake.created_at.desc())
+        .limit(limit)
+    ).scalars())
+
+
 def holding_count(session: Session, client_ids) -> int:
     """COUNT of open holding-queue rows — for the nav badge, so the sidebar doesn't
     load every intake row on every page render (F9)."""

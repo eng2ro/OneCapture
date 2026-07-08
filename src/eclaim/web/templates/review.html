@@ -134,7 +134,36 @@
   {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
   {% if diverted %}
   <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-file-invoice"></i>
-    {{ diverted }} uploaded page{{ '' if diverted == 1 else 's' }} looked like a vendor bill and {{ 'was' if diverted == 1 else 'were' }} sent to <a href="/intake/holding">Vendor bills</a> instead of this claim. If that's wrong, re-file {{ 'it' if diverted == 1 else 'them' }} as a staff expense from there.
+    {{ diverted }} uploaded page{{ '' if diverted == 1 else 's' }} looked like a vendor bill and {{ 'was' if diverted == 1 else 'were' }} sent to <a href="/intake/holding">Vendor bills</a> instead of this claim. If that's wrong, bring {{ 'it' if diverted == 1 else 'them' }} back below.
+  </div>
+  {% endif %}
+  {% if my_diverted %}
+  <div class="card" style="margin-bottom:12px;">
+    <div class="card-title" style="margin-bottom:6px;"><i class="ti ti-arrow-back-up"></i> Your pages in Vendor bills</div>
+    <p class="page-sub" style="margin-bottom:10px;">These pages from your uploads were classified as vendor bills. If one is really YOUR expense, bring it straight back into this claim — no need to visit the Vendor bills module.</p>
+    <table class="data">
+      <tbody>
+        {% for d in my_diverted %}
+        <tr>
+          <td>{{ d.vendor or 'Unknown vendor' }}</td>
+          <td class="mono" style="font-size:12px;">{{ d.doc_no or '—' }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;">{% if d.total_amount is not none %}{{ d.currency or '' }} {{ '%.2f' | format(d.total_amount) }}{% else %}—{% endif %}</td>
+          <td style="text-align:right;">
+            <form method="post" action="/intake/{{ d.id }}/reroute" style="display:inline;"
+                  onsubmit="return confirm('Bring this page back into this claim as a staff expense?');">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="to" value="eclaim">
+              <input type="hidden" name="claim_id" value="{{ claim.id }}">
+              <button class="btn" type="submit" style="height:30px;font-size:12px;"
+                      title="Adds it as a line on THIS claim — the stored read and image come along, nothing is re-keyed.">
+                <i class="ti ti-arrow-back-up"></i> Bring back into this claim
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% endif %}
   {% if review_block_reason and claim.status == 'in_review' and not over_authority %}

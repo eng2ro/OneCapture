@@ -553,6 +553,63 @@ class ClaimService:
         )
         return line
 
+    def attach_intake_as_line(
+        self, *, repos: "Repos", claim_id: uuid.UUID, intake,
+        actor: str, principal: "Principal | None" = None,
+    ) -> ClaimLine:
+        """The reverse of :meth:`switch_line_to_vendor_bill` for a page still in
+        the holding queue: bring a mis-diverted document back INTO the claim the
+        user is already reviewing — no trip through the vendor-bills module, no
+        separate new claim, no re-OCR (the intake kept the full read + the stored
+        image). Pre-approval only; the correction is audited on the claim (the
+        intake side is audited by the reroute that calls this)."""
+        claim = self._lock(repos, claim_id)
+        self._require_writer(claim, principal)
+        if claim.status not in ("submitted", "in_review", "sent_back"):
+            raise IllegalTransition(
+                f"cannot add a page to a claim in status {claim.status!r}"
+            )
+        if intake.client_id != claim.client_id:
+            raise ClaimError("that document belongs to a different client")
+        if intake.status != "open":
+            raise ClaimError("that document was already filed elsewhere")
+
+        category = repos.categories.match_by_merchant(
+            claim.client_id, intake.vendor, intake.expense_type or "other"
+        )
+        line = ClaimLine(
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            claim_id=claim.id,
+            line_no=repos.claims.next_line_no(claim.id),
+            vendor=intake.vendor,
+            doc_no=intake.doc_no,
+            doc_date=intake.doc_date,
+            currency=intake.currency,
+            total_amount=intake.total_amount,
+            tax_amount=intake.tax_amount,
+            tax_code=intake.tax_code,
+            expense_type=intake.expense_type or "other",
+            quantity=intake.quantity,
+            unit=intake.unit,
+            category_id=(category.id if category else None),
+            carbon_relevant=carbon_relevant_for(category),
+            image_path=intake.image_path,
+            image_sha256=intake.image_sha256,
+        )
+        self._apply_fx_default(repos, line)
+        self._recompute_line_money(line)
+        repos.claims.add_line(line)
+        self._recompute_totals(claim, repos.claims.lines(claim.id))
+        record_event(
+            repos.audit, firm_id=claim.firm_id, client_id=claim.client_id,
+            entity_type="claim", entity_id=claim.id, event_type="edited",
+            actor=actor,
+            detail={"added": "line_from_intake", "intake_id": str(intake.id),
+                    "line_no": line.line_no},
+        )
+        return line
+
     def switch_line_to_vendor_bill(
         self, *, repos: "Repos", claim_id: uuid.UUID, line_id: uuid.UUID,
         actor: str, principal: "Principal | None" = None,

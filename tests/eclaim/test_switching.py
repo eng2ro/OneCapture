@@ -157,6 +157,95 @@ def test_switch_invoice_creates_review_claim_and_rejects_the_bill(client, db_ses
                        follow_redirects=False).status_code == 409
 
 
+# --------------------------------------------------------------------------- #
+# Holding-queue page → back INTO the claim under review (no vendor-module trip)
+# --------------------------------------------------------------------------- #
+def _open_diverted(db_session, ids, *, doc_no="INV-BB1", created_by=None):
+    row = DocumentIntake(
+        firm_id=ids["firm"], client_id=ids["client"],
+        created_by_user_id=(created_by or ids["user"]),
+        document_type="vendor_invoice", routed_to="ap_holding", status="open",
+        vendor="Kedai Runcit", doc_no=doc_no, total_amount=Decimal("42.00"),
+        currency="MYR", type_signals=[], quantity=Decimal("5"), unit="L",
+        tax_amount=Decimal("2.00"),
+        image_sha256=f"sha-{doc_no}", image_path=f"/img/{doc_no}.png",
+    )
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def test_bring_back_appends_the_page_to_the_same_claim(client, fake_ocr, db_session):
+    """Owner request: a mis-diverted receipt returns to the claim the user is
+    ALREADY reviewing — one click on the review page, no vendor-bills detour,
+    no new claim, no re-OCR (the stored read + image come along)."""
+    ids = db_session.info["principal"]
+    cid = _upload_bill_as_expense(client, fake_ocr, doc_no="INV-BASE")
+    intake = _open_diverted(db_session, ids)
+    db_session.commit()
+
+    page = client.get(f"/claims/{cid}/review")
+    assert "Bring back into this claim" in page.text     # the affordance is THERE
+
+    r = client.post(f"/intake/{intake.id}/reroute",
+                    data={"to": "eclaim", "claim_id": cid}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/claims/{cid}/review"   # straight back
+
+    db_session.expire_all()
+    lines = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == uuid.UUID(cid))
+        .order_by(ClaimLine.line_no)
+    ).scalars().all()
+    assert len(lines) == 2                               # appended, not a new claim
+    back = lines[-1]
+    assert back.vendor == "Kedai Runcit"
+    assert back.total_amount == Decimal("42.00")
+    assert back.quantity == Decimal("5") and back.unit == "L"
+    assert back.tax_amount == Decimal("2.00")
+    assert back.image_sha256 == "sha-INV-BB1"            # same evidence
+
+    row = db_session.get(DocumentIntake, intake.id)
+    assert row.status == "consumed" and row.claim_id == uuid.UUID(cid)
+    events = client.get(f"/api/audit/{cid}").json()
+    assert any(
+        e["event_type"] == "edited"
+        and (e.get("detail") or {}).get("added") == "line_from_intake"
+        for e in events
+    )
+
+
+def test_bring_back_locked_after_approval(client, fake_ocr, db_session):
+    ids = db_session.info["principal"]
+    cid = _upload_bill_as_expense(client, fake_ocr, doc_no="INV-BB2")
+    intake = _open_diverted(db_session, ids, doc_no="INV-BB3")
+    db_session.commit()
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+
+    r = client.post(f"/intake/{intake.id}/reroute",
+                    data={"to": "eclaim", "claim_id": cid}, follow_redirects=False)
+    assert r.status_code == 400
+    db_session.expire_all()
+    assert db_session.get(DocumentIntake, intake.id).status == "open"   # untouched
+    # And the approved claim shows no bring-back panel.
+    assert "Bring back into this claim" not in client.get(f"/claims/{cid}/review").text
+
+
+def test_bring_back_lists_only_the_users_own_pages(client, fake_ocr, db_session):
+    ids = db_session.info["principal"]
+    other = AppUser(firm_id=ids["firm"], email="someone-else@seed.test",
+                    display_name="o", base_role="approver")
+    db_session.add(other)
+    db_session.flush()
+    cid = _upload_bill_as_expense(client, fake_ocr, doc_no="INV-BB4")
+    _open_diverted(db_session, ids, doc_no="INV-OTHER", created_by=other.id)
+    db_session.commit()
+
+    page = client.get(f"/claims/{cid}/review")
+    assert "INV-OTHER" not in page.text                  # someone else's page
+    assert "Bring back into this claim" not in page.text
+
+
 def test_switcher_cannot_approve_the_converted_claim(client, db_session):
     """SoD carryover: switching is a MAKER action — the converter is the claim's
     creator, so the approve gate blocks them."""

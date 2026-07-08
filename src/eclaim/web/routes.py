@@ -590,14 +590,17 @@ def intake_reroute(
     request: Request,
     intake_id: uuid.UUID,
     to: str = Form(...),
+    claim_id: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
     image_dir: Path = Depends(deps.get_image_dir),
     ocr: OcrProvider = Depends(deps.get_ocr),
 ):
-    """A reviewer's correction of a route (C1). Re-routing to e-Claim re-runs the
-    e-Claim builder from the stored image (a single-line claim) and marks the intake
-    consumed; the correction is audited either way. Viewers cannot re-route."""
+    """A reviewer's correction of a route (C1). Re-routing to e-Claim either
+    APPENDS the page to an existing pre-approval claim (``claim_id`` given — the
+    review page's "bring it back" button, no re-OCR, no vendor-module detour) or
+    re-runs the e-Claim builder from the stored image as a new single-line claim.
+    The correction is audited either way. Viewers cannot re-route."""
     if principal.base_role == "viewer":
         raise HTTPException(status_code=403, detail="viewers cannot re-route documents")
     try:
@@ -605,20 +608,28 @@ def intake_reroute(
         if not principal.can_access_client(row.client_id):
             raise HTTPException(status_code=403, detail="no grant to this client")
 
-        claim_id = None
+        target_claim_id = None
         if to == routing.QUEUE_ECLAIM:
-            if not row.image_path or not Path(row.image_path).exists():
-                raise ClaimError("the captured image is no longer available to re-file")
-            image_bytes = Path(row.image_path).read_bytes()
-            claim = _service.upload(
-                repos=repos, firm_id=principal.firm_id, client_id=row.client_id,
-                image_bytes=image_bytes, media_type=row.media_type or "image/jpeg",
-                ocr=ocr, image_dir=image_dir, actor=_actor(principal),
-            )
-            claim_id = claim.id
+            existing = _opt_uuid(claim_id)
+            if existing is not None:
+                _service.attach_intake_as_line(
+                    repos=repos, claim_id=existing, intake=row,
+                    actor=_actor(principal), principal=principal,
+                )
+                target_claim_id = existing
+            else:
+                if not row.image_path or not Path(row.image_path).exists():
+                    raise ClaimError("the captured image is no longer available to re-file")
+                image_bytes = Path(row.image_path).read_bytes()
+                claim = _service.upload(
+                    repos=repos, firm_id=principal.firm_id, client_id=row.client_id,
+                    image_bytes=image_bytes, media_type=row.media_type or "image/jpeg",
+                    ocr=ocr, image_dir=image_dir, actor=_actor(principal),
+                )
+                target_claim_id = claim.id
         intake_service.reroute(
             repos.session, intake_id=intake_id, to=to,
-            actor=_actor(principal), claim_id=claim_id,
+            actor=_actor(principal), claim_id=target_claim_id,
         )
         repos.session.commit()
     except intake_service.IntakeError as exc:
@@ -626,12 +637,12 @@ def intake_reroute(
         set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
         status = 404 if isinstance(exc, intake_service.IntakeNotFound) else 409
         raise HTTPException(status_code=status, detail=str(exc))
-    except ClaimError as exc:
+    except (ClaimError, SoDViolation) as exc:
         repos.session.rollback()
         set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
         raise HTTPException(status_code=400, detail=str(exc))
-    if claim_id is not None:
-        return RedirectResponse(f"/claims/{claim_id}/review", status_code=303)
+    if target_claim_id is not None:
+        return RedirectResponse(f"/claims/{target_claim_id}/review", status_code=303)
     return RedirectResponse("/intake/holding", status_code=303)
 
 
@@ -1587,6 +1598,18 @@ def _render_review(
             "error": error,
             # Pages the classifier routed to the vendor-bills queue on this capture (F2).
             "diverted": diverted,
+            # The user's own still-open diverted pages, offered for a one-click
+            # "bring back into THIS claim" (owner request: fixing a misroute must
+            # not require a trip through the vendor-bills module). Only while the
+            # claim is still editable.
+            "my_diverted": (
+                intake_service.open_diverted_for_user(
+                    repos.session, principal.allowed_client_ids, principal.user_id
+                )
+                if claim.status in ("submitted", "in_review", "sent_back")
+                and principal.base_role != "viewer"
+                else []
+            ),
         },
     )
 
