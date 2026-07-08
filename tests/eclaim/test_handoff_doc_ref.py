@@ -115,6 +115,78 @@ def test_single_receipt_gross_equals_line_total(client, fake_ocr, db_session, tm
     assert h.doc_gross_total == Decimal("300.00") == h.amount   # fully carbon
 
 
+def test_handoff_carries_net_tax_base_department_and_iso_date(client, fake_ocr, db_session, tmp_path):
+    """F-D contract: the spend-basis options (net / tax / MYR base), the resolved org
+    dimensions, and a NORMALIZED doc date all forward. All were captured and
+    human-verified before this fix — then dropped at the forward step, making the
+    F-C 'we can send both net and gross' promise unfulfillable."""
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    claim = svc.start_claim(repos=repos, firm_id=ids["firm"], client_id=ids["client"])
+    fake_ocr.extraction = Extraction(
+        vendor="Shell", doc_no="INV-FX", total_amount=Decimal("106.00"),
+        tax_amount=Decimal("6.00"), currency="USD", date="26 SEP 2025",
+        expense_type="fuel_diesel", quantity=Decimal("10"), unit="L",
+    )
+    line = svc.add_line(
+        repos=repos, claim=claim, image_bytes=b"\x89PNG fx", media_type="image/png",
+        ocr=fake_ocr, image_dir=tmp_path,
+        category_id=_cat(db_session, "fuel_diesel").id, payment_method="corporate_card",
+    )
+    partner = _p(ids)
+    svc.edit(
+        repos=repos, claim_id=claim.id, line_id=line.id, actor="p", principal=partner,
+        fields={"fx_rate": Decimal("4.70"), "department": "LOGISTICS",
+                "cost_centre_override": "CC-FLEET"},
+    )
+    svc.approve(repos=repos, claim_id=claim.id, actor="p", approver=partner)
+    svc.release(repos=repos, claim_id=claim.id, actor="p", principal=partner)
+
+    h = _forwards(db_session, claim.id)[0]
+    assert h.amount == Decimal("106.00") and h.currency == "USD"     # gross basis
+    assert h.tax_amount == Decimal("6.00")                            # tax shown
+    assert h.net_amount == Decimal("100.00")                          # net basis
+    assert h.base_amount == Decimal("498.20")                         # MYR value (106×4.70)
+    assert h.department == "LOGISTICS"
+    assert h.cost_centre == "CC-FLEET"                                # resolved dimension
+    assert h.doc_date == "2025-09-26"                                 # normalized, not raw
+
+    # A reversal negates every money basis, mirroring amount/quantity.
+    svc.reverse(repos=repos, claim_id=claim.id, actor="p", principal=partner)
+    rev = db_session.execute(
+        select(CarbonHandoff).where(
+            CarbonHandoff.claim_id == claim.id, CarbonHandoff.direction == "reversal"
+        )
+    ).scalars().one()
+    assert rev.net_amount == Decimal("-100.00")
+    assert rev.tax_amount == Decimal("-6.00")
+    assert rev.base_amount == Decimal("-498.20")
+
+
+def test_handoff_resolves_inherited_cost_centre(client, fake_ocr, db_session, tmp_path):
+    """A line with NO override must forward the claimant's inherited cost centre —
+    previously the handoff forwarded NULL even though release's own posting check
+    resolved a real value."""
+    from eclaim.db.models import Claimant
+
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    cm = Claimant(firm_id=ids["firm"], client_id=ids["client"],
+                  name="Aina", phone="+60177", cost_centre="CC-SALES")
+    db_session.add(cm)
+    db_session.flush()
+    claim = svc.start_claim(repos=repos, firm_id=ids["firm"], client_id=ids["client"],
+                            submitted_by_claimant_id=cm.id)
+    _add(svc, repos, claim, fake_ocr, tmp_path, doc_no="INV-CC", total="50",
+         expense_type="fuel_diesel", category_id=_cat(db_session, "fuel_diesel").id)
+    partner = _p(ids)
+    svc.approve(repos=repos, claim_id=claim.id, actor="p", approver=partner)
+    svc.release(repos=repos, claim_id=claim.id, actor="p", principal=partner)
+
+    h = _forwards(db_session, claim.id)[0]
+    assert h.cost_centre == "CC-SALES"       # inherited, not NULL
+
+
 def test_reverse_carries_same_positive_gross(client, fake_ocr, db_session, tmp_path):
     """A reversal reconciles to the SAME bill: doc_no + doc_gross_total unchanged and
     POSITIVE (document context, not a signed amount), while the amount is negated."""

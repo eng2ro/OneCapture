@@ -1388,12 +1388,16 @@ class ClaimService:
                             category_name=(cat.name if cat else None),
                             expense_type=ln.expense_type,
                             vendor=ln.vendor,
-                            doc_date=ln.doc_date,
+                            doc_date=_handoff_date(ln.doc_date),
                             amount=ln.total_amount,
                             currency=ln.currency,
+                            net_amount=ln.net_amount,
+                            tax_amount=ln.tax_amount,
+                            base_amount=ln.base_amount,
                             quantity=ln.quantity,
                             unit=ln.unit,
-                            cost_centre=ln.cost_centre_override,
+                            cost_centre=self._resolved_cost_centre(repos, ln, claim),
+                            department=ln.department or claim.department,
                             doc_no=ln.doc_no,
                             doc_gross_total=doc_totals.get(_doc_key(ln)),
                             direction="forward",
@@ -1495,12 +1499,16 @@ class ClaimService:
                             category_name=(cat.name if cat else None),
                             expense_type=ln.expense_type,
                             vendor=ln.vendor,
-                            doc_date=ln.doc_date,
+                            doc_date=_handoff_date(ln.doc_date),
                             amount=None if ln.total_amount is None else -ln.total_amount,
                             currency=ln.currency,
+                            net_amount=None if ln.net_amount is None else -ln.net_amount,
+                            tax_amount=None if ln.tax_amount is None else -ln.tax_amount,
+                            base_amount=None if ln.base_amount is None else -ln.base_amount,
                             quantity=None if ln.quantity is None else -ln.quantity,
                             unit=ln.unit,
-                            cost_centre=ln.cost_centre_override,
+                            cost_centre=self._resolved_cost_centre(repos, ln, claim),
+                            department=ln.department or claim.department,
                             doc_no=ln.doc_no,
                             doc_gross_total=doc_totals.get(_doc_key(ln)),
                             direction="reversal",
@@ -1567,6 +1575,15 @@ class Repos:
 def _idempotency_key(client_id: uuid.UUID, claim_id: uuid.UUID, suffix: str = "") -> str:
     raw = f"{client_id}{claim_id}{suffix}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _handoff_date(value: str | None) -> str | None:
+    """The doc_date the handoff forwards: NORMALIZED to ISO when the OCR string
+    parses ('26 SEP 2025' → '2025-09-26'), else the raw text — CarbonNext should
+    never have to re-implement Malaysian receipt-date parsing (F-D contract), but a
+    date we can't parse is still better forwarded verbatim than dropped."""
+    parsed = parse_receipt_date(value)
+    return parsed.isoformat() if parsed else value
 
 
 def _doc_key(line: ClaimLine) -> str:

@@ -679,9 +679,19 @@ class CarbonHandoff(Base):
     doc_date: Mapped[str | None] = mapped_column(String)
     amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     currency: Mapped[str | None] = mapped_column(String)
+    # Spend-basis options (F-D / migration 0032): the F-C question to CarbonNext is
+    # "NET or GROSS — we can send both". ``amount`` stays the document-currency GROSS;
+    # ``net_amount``/``tax_amount`` give the ex-tax basis; ``base_amount`` is the
+    # human-verified MYR value of a foreign receipt (gross × fx_rate).
+    net_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    base_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
     unit: Mapped[str | None] = mapped_column(String)
+    # Org attribution: cost_centre is the RESOLVED value (line override, else the
+    # claimant's, else the event's — not just the override); department likewise.
     cost_centre: Mapped[str | None] = mapped_column(String)
+    department: Mapped[str | None] = mapped_column(String)
     # Parent-document reference (F-B): which document this line came from, and that
     # document's GROSS total (across ALL its lines, carbon + non-carbon). The forwarded
     # ``amount`` is this line only, so ``doc_gross_total`` explains why it can be less
