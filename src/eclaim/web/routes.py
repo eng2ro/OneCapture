@@ -48,6 +48,7 @@ from ..services import ap as ap_service
 from ..services import coverage as coverage_service
 from ..services import erp as erp_service
 from ..services import fx as fx_service
+from ..services import vehicles as vehicles_service
 from ..services import payables as payables_service
 from ..services import ingestion, routing
 from ..services import intake as intake_service
@@ -215,6 +216,11 @@ def _render_capture(
             # Mileage mode: browser Maps key (referrer-restricted) + per-km rate.
             "maps_key": get_settings().google_maps_browser_key or get_settings().google_maps_api_key,
             "mileage_rate": get_settings().mileage_rate_per_km,
+            # Registered vehicles for the mileage vehicle picker (Appendix H-C).
+            "vehicles": vehicles_service.list_for_clients(
+                request.state.db, list(request.state.principal.allowed_client_ids),
+                active_only=True,
+            ) if hasattr(request.state, "principal") else [],
             "error": error,
             # Echo the header fields back on a validation error so the user does
             # not have to re-pick the type/dates (the receipts are re-dropped).
@@ -1068,6 +1074,7 @@ def web_capture_mileage(
     title: str = Form(""),
     event_id: str = Form(""),
     attested: str = Form(""),
+    vehicle_id: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ):
@@ -1120,6 +1127,7 @@ def web_capture_mileage(
             repos=repos, claim=claim, origin=origin.strip(), destination=destination.strip(),
             waypoints=wps, route=route, date=trip_date or None,
             rate=deps.get_mileage_rate(), shortest_km=shortest_km,
+            vehicle=vehicles_service.resolve(repos.session, client_id, vehicle_id),
         )
     except (ClaimError, ValueError) as exc:
         repos.session.rollback()
@@ -2106,6 +2114,107 @@ def admin_delete_rate(
     return RedirectResponse("/admin/rates", status_code=303)
 
 
+def _render_vehicles(request, repos, principal, *, editing=None, error=None) -> HTMLResponse:
+    from ..db.models import VEHICLE_TYPES
+
+    clients = list_visible_clients(repos.session, principal)
+    claimants = repos.claimants.list_for_clients([c.id for c in clients])
+    return templates.TemplateResponse(
+        request,
+        "admin_vehicles.html",
+        {
+            "vehicles": vehicles_service.list_for_clients(repos.session, [c.id for c in clients]),
+            "vehicle_types": VEHICLE_TYPES,
+            "clients": clients,
+            "client_names": {c.id: c.name for c in clients},
+            "claimants": claimants,
+            "claimant_names": {cm.id: cm.name for cm in claimants},
+            "editing": editing,
+            "error": error,
+        },
+    )
+
+
+@router.get("/admin/vehicles", response_class=HTMLResponse)
+def admin_vehicles(
+    request: Request,
+    edit: str = "",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+) -> HTMLResponse:
+    from ..db.models import Vehicle
+
+    eid = _opt_uuid(edit)
+    editing = repos.session.get(Vehicle, eid) if eid else None
+    return _render_vehicles(request, repos, principal, editing=editing)
+
+
+@router.post("/admin/vehicles")
+def admin_save_vehicle(
+    request: Request,
+    vehicle_id: str = Form(""),
+    client_id: str = Form(...),
+    label: str = Form(...),
+    vehicle_type: str = Form(...),
+    engine_size: str = Form(""),
+    usual_claimant_id: str = Form(""),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    from ..db.models import VEHICLE_TYPES, Vehicle
+
+    try:
+        cid = uuid.UUID(client_id)
+    except ValueError:
+        return _render_vehicles(request, repos, principal, error="Invalid client.")
+    if cid not in principal.allowed_client_ids:
+        return _render_vehicles(request, repos, principal, error="You cannot manage that client.")
+    if vehicle_type not in VEHICLE_TYPES:
+        return _render_vehicles(request, repos, principal, error="Unknown vehicle type.")
+    usual = _opt_uuid(usual_claimant_id)
+    try:
+        with repos.session.begin_nested():
+            if vehicle_id.strip():
+                v = repos.session.get(Vehicle, uuid.UUID(vehicle_id))
+                if v is None or v.client_id != cid:
+                    raise LookupError
+                v.label, v.vehicle_type = label.strip(), vehicle_type
+                v.engine_size = engine_size.strip() or None
+                v.usual_claimant_id = usual
+            else:
+                repos.session.add(Vehicle(
+                    firm_id=principal.firm_id, client_id=cid, label=label.strip(),
+                    vehicle_type=vehicle_type, engine_size=engine_size.strip() or None,
+                    usual_claimant_id=usual,
+                ))
+            repos.session.flush()
+    except LookupError:
+        return _render_vehicles(request, repos, principal, error="Vehicle not found.")
+    except IntegrityError:
+        return _render_vehicles(
+            request, repos, principal,
+            error="A vehicle with that label already exists for this client.",
+        )
+    return RedirectResponse("/admin/vehicles", status_code=303)
+
+
+@router.post("/admin/vehicles/toggle")
+def admin_toggle_vehicle(
+    request: Request,
+    vehicle_id: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    from ..db.models import Vehicle
+
+    vid = _opt_uuid(vehicle_id)
+    v = repos.session.get(Vehicle, vid) if vid else None
+    if v is not None:
+        v.active = not v.active
+        repos.session.flush()
+    return RedirectResponse("/admin/vehicles", status_code=303)
+
+
 def _render_claimants(request, repos, principal, *, editing=None, error=None) -> HTMLResponse:
     clients = list_visible_clients(repos.session, principal)
     return templates.TemplateResponse(
@@ -2143,6 +2252,8 @@ def admin_save_claimant(
     email: str = Form(""),
     employee_ref: str = Form(""),
     cost_centre: str = Form(""),
+    position: str = Form(""),
+    department: str = Form(""),
     status: str = Form("active"),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.require_firm_scope),
@@ -2161,6 +2272,7 @@ def admin_save_claimant(
                     raise LookupError
                 cm.name, cm.phone, cm.email = name, phone or None, email or None
                 cm.employee_ref, cm.cost_centre = employee_ref or None, cost_centre or None
+                cm.position, cm.department = position or None, department or None
                 cm.status = status or "active"
             else:
                 repos.session.add(
@@ -2168,6 +2280,7 @@ def admin_save_claimant(
                         firm_id=principal.firm_id, client_id=cid, name=name,
                         phone=phone or None, email=email or None,
                         employee_ref=employee_ref or None, cost_centre=cost_centre or None,
+                        position=position or None, department=department or None,
                         status=status or "active",
                     )
                 )

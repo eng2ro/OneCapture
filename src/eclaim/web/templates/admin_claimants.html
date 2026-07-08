@@ -41,6 +41,10 @@
         <div><label class="label-tiny">Cost centre</label><input class="field" name="cost_centre" value="{{ editing.cost_centre or '' if editing else '' }}"></div>
       </div>
       <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Position</label><input class="field" name="position" value="{{ editing.position or '' if editing else '' }}" placeholder="e.g. Sales Executive"></div>
+        <div><label class="label-tiny">Department</label><input class="field" name="department" value="{{ editing.department or '' if editing else '' }}" placeholder="e.g. Sales"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
         <div><label class="label-tiny">Status</label>
           {% set st = editing.status if editing else 'active' %}
           <select class="field" name="status">

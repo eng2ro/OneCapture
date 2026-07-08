@@ -359,6 +359,10 @@ class ClaimLine(Base):
     project_code: Mapped[str | None] = mapped_column(String)
     attendees: Mapped[list | None] = mapped_column(JSONB)
     mileage: Mapped[dict | None] = mapped_column(JSONB)
+    # The registered vehicle a mileage trip used (migration 0035) — feeds the
+    # CarbonNext distance-based vehicle_type. Any registry vehicle is selectable
+    # (claim-on-behalf / paid-in-advance), defaulting to the claimant's usual one.
+    vehicle_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("vehicle.id"))
     per_diem: Mapped[dict | None] = mapped_column(JSONB)
     policy_result: Mapped[str | None] = mapped_column(String)
 
@@ -491,6 +495,10 @@ class Claimant(Base):
     email: Mapped[str | None] = mapped_column(String)
     employee_ref: Mapped[str | None] = mapped_column(String)
     cost_centre: Mapped[str | None] = mapped_column(String)
+    # Cat-6 employee fields the CarbonNext specs require (migration 0035): the
+    # business-travel record forwards employee id/name/department/position.
+    position: Mapped[str | None] = mapped_column(String)
+    department: Mapped[str | None] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'active'"))
 
 
@@ -966,6 +974,47 @@ class DocumentIntake(Base):
     unit: Mapped[str | None] = mapped_column(String)
     expense_type: Mapped[str | None] = mapped_column(String)
 
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+VEHICLE_TYPES = (
+    "car_petrol", "car_diesel", "car_hybrid", "car_ev",
+    "motorcycle", "van", "truck", "other",
+)
+
+
+class Vehicle(Base):
+    """Client-scoped vehicle registry (Appendix H-C, migration 0035).
+
+    Deliberately NOT a field on the user: a claimant can claim on behalf of
+    someone else (or paid in advance), so a mileage line picks any registered
+    vehicle — defaulting to the claimant's usual one. ``vehicle_type`` is what
+    CarbonNext's distance-based method consumes (Cat 4/6)."""
+
+    __tablename__ = "vehicle"
+    __table_args__ = (
+        CheckConstraint(
+            "vehicle_type IN ('car_petrol','car_diesel','car_hybrid','car_ev',"
+            "'motorcycle','van','truck','other')",
+            name="ck_vehicle_type",
+        ),
+        UniqueConstraint("client_id", "label", name="uq_vehicle_client_label"),
+        Index("ix_vehicle_firm_client", "firm_id", "client_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    vehicle_type: Mapped[str] = mapped_column(String, nullable=False)
+    engine_size: Mapped[str | None] = mapped_column(String)
+    usual_claimant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("claimant.id"))
+    active: Mapped[bool] = mapped_column(nullable=False, server_default=text("true"))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

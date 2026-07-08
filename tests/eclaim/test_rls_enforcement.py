@@ -48,6 +48,7 @@ from eclaim.db.models import (
 DATA_TABLES = [
     "claim", "release_batch", "emission_entry", "audit_event", "approval_matrix_rule",
     "document_intake", "vendor", "ap_invoice", "ap_invoice_line", "exchange_rate",
+    "vehicle",
 ]
 
 
@@ -116,12 +117,18 @@ def _seed_firm(session: Session, label: str) -> dict:
     ))
     session.flush()
 
-    from eclaim.db.models import ExchangeRate
+    from eclaim.db.models import ExchangeRate, Vehicle
 
-    session.add(ExchangeRate(
-        firm_id=firm.id, client_id=client.id, currency="USD",
-        period=dt.date(2026, 7, 1), rate_to_myr=Decimal("4.700000"),
-    ))
+    session.add_all([
+        ExchangeRate(
+            firm_id=firm.id, client_id=client.id, currency="USD",
+            period=dt.date(2026, 7, 1), rate_to_myr=Decimal("4.700000"),
+        ),
+        Vehicle(
+            firm_id=firm.id, client_id=client.id, label=f"WXY {tag}",
+            vehicle_type="car_petrol",
+        ),
+    ])
     session.flush()
     return {"firm": firm.id, "client": client.id}
 
@@ -141,7 +148,8 @@ def two_firms(db_engine):
             fid = entry["firm"]
             for tbl in ["emission_entry", "audit_event", "release_batch",
                         "approval_matrix_rule", "document_intake", "exchange_rate",
-                        "ap_invoice_line", "ap_invoice", "vendor", "claim", "client"]:
+                        "vehicle", "ap_invoice_line", "ap_invoice", "vendor",
+                        "claim", "client"]:
                 owner.execute(text(f"DELETE FROM {tbl} WHERE firm_id = :f"), {"f": fid})
             owner.execute(text("DELETE FROM firm WHERE id = :f"), {"f": fid})
         owner.commit()

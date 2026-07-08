@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Vehicles · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Vehicle registry{% endblock %}
+{% block content %}
+{% include "_editorial.html" %}
+<div class="capx" id="screen-vehicles">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">Vehicles</h1>
+      <p class="page-sub">Registered vehicles for mileage trips. The vehicle type is what CarbonNext's distance-based method computes emissions from; any vehicle is selectable on a trip (claiming on someone's behalf is fine).</p>
+    </div>
+  </div>
+
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">{{ 'Edit vehicle' if editing else 'Register a vehicle' }}</div>
+    <form method="post" action="/admin/vehicles">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      {% if editing %}<input type="hidden" name="vehicle_id" value="{{ editing.id }}">{% endif %}
+      <div class="field-row">
+        <div><label class="label-tiny">Client</label>
+          <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}</select>
+        </div>
+        <div><label class="label-tiny">Plate / label</label><input class="field" name="label" value="{{ editing.label if editing else '' }}" placeholder="e.g. WXY 1234" required></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Vehicle type</label>
+          <select class="field" name="vehicle_type">
+            {% for vt in vehicle_types %}<option value="{{ vt }}" {{ 'selected' if editing and editing.vehicle_type == vt else '' }}>{{ vt.replace('_', ' ') }}</option>{% endfor %}
+          </select>
+        </div>
+        <div><label class="label-tiny">Engine size (optional)</label><input class="field" name="engine_size" value="{{ editing.engine_size or '' if editing else '' }}" placeholder="e.g. 1.6L"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Usual driver (optional)</label>
+          <select class="field" name="usual_claimant_id">
+            <option value="">— none —</option>
+            {% for cm in claimants %}<option value="{{ cm.id }}" {{ 'selected' if editing and editing.usual_claimant_id == cm.id else '' }}>{{ cm.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;">
+          <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i> {{ 'Save' if editing else 'Register' }}</button>
+          {% if editing %}<a class="btn" href="/admin/vehicles">Cancel</a>{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    {% if vehicles %}
+    <table class="data">
+      <thead><tr><th>Client</th><th>Label</th><th>Type</th><th>Engine</th><th>Usual driver</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for v in vehicles %}
+        <tr>
+          <td>{{ client_names.get(v.client_id, '—') }}</td>
+          <td style="font-weight:600;">{{ v.label }}</td>
+          <td>{{ v.vehicle_type.replace('_', ' ') }}</td>
+          <td>{{ v.engine_size or '—' }}</td>
+          <td>{{ claimant_names.get(v.usual_claimant_id, '—') if v.usual_claimant_id else '—' }}</td>
+          <td><span class="badge {{ 'success' if v.active else 'neutral' }}">{{ 'active' if v.active else 'inactive' }}</span></td>
+          <td style="text-align:right;">
+            <div style="display:inline-flex;gap:6px;">
+              <a class="btn" href="/admin/vehicles?edit={{ v.id }}" style="font-size:11px;padding:4px 9px;"><i class="ti ti-edit"></i></a>
+              <form method="post" action="/admin/vehicles/toggle" style="display:inline;">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <input type="hidden" name="vehicle_id" value="{{ v.id }}">
+                <button class="btn" type="submit" style="font-size:11px;padding:4px 9px;" title="{{ 'Deactivate' if v.active else 'Reactivate' }}"><i class="ti ti-power"></i></button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:44px;text-align:center;color:var(--graphite);">No vehicles registered — mileage trips can still file without one, but CarbonNext then estimates without a vehicle type.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

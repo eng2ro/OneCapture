@@ -418,12 +418,17 @@ class ClaimService:
         category_id: uuid.UUID | None = None,
         payment_method: str = "out_of_pocket",
         shortest_km: Decimal | None = None,
+        vehicle=None,
     ) -> ClaimLine:
         """Append a MILEAGE line — no receipt, the route is the evidence. The server
         passes the AUTHORITATIVE distance (``route`` from the Directions provider);
         ``amount = km × rate``. ``quantity``/``unit`` carry the km as activity data
         forwarded to CarbonNext (Mileage is carbon-relevant). The route detail lives
         in the ``mileage`` jsonb for the audit pack and the map view.
+
+        ``vehicle`` (a registry :class:`Vehicle`, Appendix H-C) records WHICH vehicle
+        made the trip — its type feeds CarbonNext's distance-based method. Any
+        registered vehicle is selectable (claim-on-behalf / paid-in-advance).
 
         ``shortest_km`` is the distance of the SHORTEST route Google offered for the
         same trip (the cheapest to reimburse). When the claimant picked a longer
@@ -469,7 +474,10 @@ class ClaimService:
                 "shortest_km": (str(shortest_km) if shortest_km is not None else None),
                 "over_shortest": over_shortest,
                 "route_description": getattr(route, "description", None),
+                "vehicle_label": (vehicle.label if vehicle is not None else None),
+                "vehicle_type": (vehicle.vehicle_type if vehicle is not None else None),
             },
+            vehicle_id=(vehicle.id if vehicle is not None else None),
             payment_method=payment_method,
             reimbursable=(payment_method == "out_of_pocket"),
             image_path=None,

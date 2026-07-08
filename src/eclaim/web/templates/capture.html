@@ -303,7 +303,12 @@
           </div>
           <div class="field-row" style="margin-top:14px;">
             <div><label class="label-tiny">Trip date</label><input class="field" type="date" id="m-date"></div>
-            <div></div>
+            <div><label class="label-tiny">Vehicle</label>
+              <select class="field" id="m-vehicle" title="Which registered vehicle made this trip — its type is what CarbonNext computes emissions from. Any vehicle is selectable (e.g. claiming on someone's behalf).">
+                <option value="">— not specified —</option>
+                {% for v in vehicles %}<option value="{{ v.id }}">{{ v.label }} · {{ v.vehicle_type.replace('_', ' ') }}</option>{% endfor %}
+              </select>
+            </div>
           </div>
           <div id="m-alts" class="route-alts" hidden></div>
           <div id="m-map" style="position:relative;height:200px;border-radius:var(--r);border:1px solid var(--rule);margin-top:14px;background:#eef1f4;overflow:hidden;">
@@ -664,7 +669,8 @@ window.updateSubmitBar = function () {
   var mf = document.getElementById("f-mileage");
   if (mf) mf.value = JSON.stringify(mileageLines.map(function (m) {
     return { origin: m.origin, destination: m.destination, waypoints: m.waypoints,
-             route_index: m.route_index, trip_date: m.trip_date };
+             route_index: m.route_index, trip_date: m.trip_date,
+             vehicle_id: m.vehicle_id || "" };
   }));
 };
 
@@ -737,9 +743,11 @@ function addTrip() {
   var r = _routeOpts[idx], km = parseFloat(r.distance_km);
   var stops = [];
   try { stops = JSON.parse(document.getElementById("m-waypoints").value || "[]"); } catch (e) { stops = []; }
+  var veh = document.getElementById("m-vehicle");
   mileageLines.push({
     origin: from, destination: to, waypoints: stops,
     route_index: idx, trip_date: date, km: km, over: overPct(km) > 0,
+    vehicle_id: veh ? veh.value : "",
   });
   renderMileageList();
   resetMileageEntry();

@@ -590,10 +590,15 @@ def build_claim(
                     try:
                         with repos.session.begin_nested():
                             route, shortest_km = resolve_route(providers.directions, origin, destination, wps, ridx)
+                            from . import vehicles as vehicle_service
+
                             _service.add_mileage_line(
                                 repos=repos, claim=claim, origin=origin, destination=destination,
                                 waypoints=wps, route=route, date=sdate or None,
                                 rate=providers.mileage_rate, shortest_km=shortest_km,
+                                vehicle=vehicle_service.resolve(
+                                    repos.session, claim.client_id, spec.get("vehicle_id")
+                                ),
                             )
                         added += 1
                     except (ClaimError, ValueError) as exc:
