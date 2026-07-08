@@ -118,7 +118,9 @@ def _nav_context(request: Request) -> dict:
                 )
             ).scalar_one())
         ctx["approvals_count"] = (
-            counts.get("submitted", 0) + counts.get("in_review", 0) + ap_pending
+            # 'submitted' = parked awaiting the UPLOADER's verification — the
+            # approver's badge counts only what an approver can act on.
+            counts.get("in_review", 0) + ap_pending
         )
     except Exception:  # nav chrome must never break a page render
         return ctx
@@ -1050,7 +1052,9 @@ def approvals_inbox(
     staff expenses awaiting review and vendor bills awaiting approval — plus the
     classifier's 'needs a check' pages. Deep-linkable via ?tab=."""
     ids = list(principal.allowed_client_ids)
-    claims = repos.claims.list_for_clients(ids, ("submitted", "in_review"))
+    # in_review only: a 'submitted' claim is parked awaiting the UPLOADER's
+    # verification (capture.submitter_verification) — not the approver's work yet.
+    claims = repos.claims.list_for_clients(ids, ("in_review",))
     invoices = [
         inv for inv in ap_service.list_invoices(repos.session, ids)
         if inv.status in ("coded", "pending_approval")
@@ -1316,7 +1320,7 @@ def web_capture_mileage(
         return _render_capture(request, _capture_categories(repos), _events_for(repos),
                                str(exc), form)
     _service.submit(repos=repos, claim=claim, actor=_actor(principal), line_count=1,
-                    attested=True)
+                    attested=True, self_verified=True)   # user-keyed trip: no OCR to verify
     return RedirectResponse(f"/claims/{claim.id}/review", status_code=303)
 
 
@@ -1635,7 +1639,10 @@ def _render_review(
             "can_review": can_review,
             "review_block_reason": review_block_reason,
             "can_edit": can_edit,
-            "can_resubmit": can_edit and claim.status in ("submitted", "sent_back"),
+            # sent_back → "Resubmit"; submitted (awaiting the uploader's content
+            # verification, setting capture.submitter_verification) → "Confirm".
+            "can_resubmit": can_edit and claim.status == "sent_back",
+            "can_confirm": can_edit and claim.status == "submitted",
             "can_release": claim.status in ("approved", "partially_approved")
             and principal.base_role != "viewer",
             # Re-attest affordance (punch-list R2): a claim that reimburses
@@ -2120,6 +2127,23 @@ def web_resubmit(
     return _action(
         request, repos, principal, claim_id,
         lambda: _service.resubmit(
+            repos=repos, claim_id=claim_id, actor=_actor(principal), principal=principal
+        ),
+    )
+
+
+@router.post("/claims/{claim_id}/confirm")
+def web_confirm_content(
+    request: Request,
+    claim_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """The uploader's verification confirmation (capture.submitter_verification):
+    submitted → in_review; only a verified transaction reaches the approver."""
+    return _action(
+        request, repos, principal, claim_id,
+        lambda: _service.confirm_content(
             repos=repos, claim_id=claim_id, actor=_actor(principal), principal=principal
         ),
     )

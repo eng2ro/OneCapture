@@ -558,6 +558,32 @@ class ClaimService:
         )
         return line
 
+    def confirm_content(
+        self, *, repos: "Repos", claim_id: uuid.UUID, actor: str,
+        principal: "Principal | None" = None,
+    ) -> Claim:
+        """The uploader's confirmation (setting ``capture.submitter_verification``):
+        "I checked the captured content and the document types are right" — moves
+        the parked claim ``submitted → in_review`` so it reaches the approver.
+        Only a verified transaction goes to the next step; the confirmation is a
+        distinct audited event carrying who verified."""
+        claim = self._lock(repos, claim_id)
+        self._require_writer(claim, principal)
+        if claim.status != "submitted":
+            raise IllegalTransition(
+                f"cannot confirm a claim in status {claim.status!r} — only a "
+                "submitted (awaiting-verification) claim confirms into review"
+            )
+        claim.status = "in_review"
+        record_event(
+            repos.audit, firm_id=claim.firm_id, client_id=claim.client_id,
+            entity_type="claim", entity_id=claim.id,
+            event_type="content_verified", actor=actor,
+            detail={"lines": len(repos.claims.lines(claim.id))},
+        )
+        repos.session.flush()
+        return claim
+
     def attach_intake_as_line(
         self, *, repos: "Repos", claim_id: uuid.UUID, intake,
         actor: str, principal: "Principal | None" = None,
@@ -715,7 +741,7 @@ class ClaimService:
 
     def submit(
         self, *, repos: "Repos", claim: Claim, actor: str, line_count: int,
-        attested: bool = False,
+        attested: bool = False, self_verified: bool = False,
     ) -> Claim:
         """Record the 'submitted' audit event for a multi-line claim once its lines
         are attached (the capture path). The header is already in_review.
@@ -725,7 +751,24 @@ class ClaimService:
         that they paid it themselves and won't be reimbursed elsewhere. The web
         capture route enforces the checkbox *before* the read phase; recording it here
         keeps the stamp on the same transaction as the claim for both the inline and
-        the async-ingestion path."""
+        the async-ingestion path.
+
+        SUBMITTER VERIFICATION (setting ``capture.submitter_verification``, owner
+        request 2026-07-08): when ON, an OCR-built claim parks at ``submitted`` —
+        the UPLOADER must verify the read content (and the claim-vs-vendor-bill
+        routing) and explicitly confirm before it enters the review queue; only a
+        verified transaction reaches the approver. ``self_verified`` bypasses the
+        park for content the user keyed themselves (a mileage trip has no OCR to
+        verify — the server computed the km)."""
+        from . import settings as settings_service
+
+        if (
+            not self_verified
+            and settings_service.get(
+                repos.session, claim.client_id, "capture.submitter_verification"
+            ) == "on"
+        ):
+            claim.status = "submitted"
         lines = repos.claims.lines(claim.id)
         if attested and any(ln.payment_method == "out_of_pocket" for ln in lines):
             claim.attested_by = actor
@@ -785,6 +828,14 @@ class ClaimService:
         if attested and line.payment_method == "out_of_pocket":
             claim.attested_by = actor
             claim.attested_at = dt.datetime.now(dt.timezone.utc)
+        # Submitter verification (same rule as submit()): an OCR-built upload parks
+        # at 'submitted' until the uploader confirms the read content.
+        from . import settings as settings_service
+
+        if settings_service.get(
+            repos.session, claim.client_id, "capture.submitter_verification"
+        ) == "on":
+            claim.status = "submitted"
         record_event(
             repos.audit,
             firm_id=firm_id,

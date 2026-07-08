@@ -132,6 +132,11 @@
   </div>
 
   {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+  {% if can_confirm %}
+  <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-checklist"></i>
+    <strong>This claim is waiting for YOUR verification.</strong> Open each line, correct anything the OCR misread, check nothing here is really a vendor bill (use the switch if it is) — then press <strong>Confirm content &amp; send to review</strong> below. It reaches the approver only after you confirm.
+  </div>
+  {% endif %}
   {% if diverted %}
   <div class="hint-warn" style="margin-bottom:12px;"><i class="ti ti-file-invoice"></i>
     {{ diverted }} uploaded page{{ '' if diverted == 1 else 's' }} looked like a vendor bill and {{ 'was' if diverted == 1 else 'were' }} sent to <a href="/intake/holding">Vendor bills</a> instead of this claim. If that's wrong, bring {{ 'it' if diverted == 1 else 'them' }} back below.
@@ -446,6 +451,11 @@
     {% if can_resubmit %}
       <form method="post" action="/claims/{{ claim.id }}/resubmit" style="flex:1;">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-send"></i>Resubmit to review</button></form>
+    {% endif %}
+    {% if can_confirm %}
+      <form method="post" action="/claims/{{ claim.id }}/confirm" style="flex:1;"
+            onsubmit="return confirm('Confirm the captured content is correct? The claim then goes to the review queue.');">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}"><button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;" title="Only a verified transaction reaches the approver."><i class="ti ti-checkbox"></i>Confirm content &amp; send to review</button></form>
     {% endif %}
     {% if can_release %}
       <form method="post" action="/claims/{{ claim.id }}/release" style="flex:1;">

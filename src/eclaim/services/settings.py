@@ -50,6 +50,19 @@ REGISTRY: tuple[Setting, ...] = (
         ),
     ),
     Setting(
+        key="capture.submitter_verification",
+        label="Submitter verification",
+        choices=("off", "on"),
+        default="off",
+        description=(
+            "on: an OCR-built claim parks at 'submitted' until the UPLOADER "
+            "verifies the captured content (and the claim-vs-vendor-bill routing) "
+            "and confirms — only a verified transaction reaches the approver. "
+            "Mileage trips skip the park (the user keyed them; the server computed "
+            "the distance). off: captures go straight to the review queue."
+        ),
+    ),
+    Setting(
         key="fx.auto_prefill",
         label="FX auto-prefill",
         choices=("on", "off"),
