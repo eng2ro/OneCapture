@@ -702,13 +702,16 @@ vehicle must not hang off the submitter:
   beneficiary is context, not the attester.
 
 ## H-D. Build order
-1. Vehicle registry + user-profile extensions (self-contained, no CarbonNext
-   dependency) — feeds Cat-6/vehicle-type immediately.
-2. Cat-6 handoff fields (employee ref/name/department/position, travel purpose,
-   vehicle_type) — small migration + release change.
+1. ✅ BUILT 2026-07-07 — Vehicle registry + claimant position/department
+   (migration 0035, Admin → Vehicles, capture vehicle picker, both paths).
+2. ✅ BUILT 2026-07-07 — Cat-6 handoff fields (migration 0036: employee_ref/
+   name/position, travel_purpose, vehicle_type on release + reversal).
 3. site_ref cache + header dropdowns + bill-to soft validation — GATED on
    CarbonNext's sites API answer (F-C asks). Build the cache/UI against the
    stub once the shape is confirmed.
+   (The FX module — Appendix G-C — was also BUILT 2026-07-07: migration 0034,
+   exchange_rate table, auto-prefill, Admin → Exchange rates, release
+   fx_missing note, and the base_amount=gross-for-foreign bug fix.)
 
 ---
 
