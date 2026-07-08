@@ -91,3 +91,20 @@ def test_mileage_skips_the_park(client, db_session):
 def test_setting_off_keeps_captures_going_straight_to_review(client, fake_ocr, db_session):
     cid = _upload(client, fake_ocr, marker=b"sv4")       # default: off
     assert db_session.get(Claim, uuid.UUID(cid)).status == "in_review"
+
+
+def test_nav_shows_to_verify_entry_only_while_uploads_are_parked(client, fake_ocr, db_session):
+    _enable(db_session)
+    # Nothing parked yet → no "To verify" nav entry cluttering the sidebar.
+    assert "To verify (uploads)" not in client.get("/claims").text
+
+    cid = _upload(client, fake_ocr, marker=b"sv5")
+    page = client.get("/claims").text
+    assert "To verify (uploads)" in page                 # entry appears...
+    assert "/claims?status=submitted" in page            # ...linking the filter
+    # The filtered list actually surfaces the parked claim.
+    assert f"/claims/{cid}/review" in client.get("/claims?status=submitted").text
+
+    # Verified → the queue is empty and the entry disappears again.
+    client.post(f"/claims/{cid}/confirm", follow_redirects=False)
+    assert "To verify (uploads)" not in client.get("/claims").text

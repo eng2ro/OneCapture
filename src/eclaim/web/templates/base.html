@@ -105,6 +105,11 @@
       <div class="oc-nav-h">INBOX</div>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/claims' and not request.url.query else '' }}" href="/claims">
         <i class="ti ti-inbox"></i><span class="lab">All claims</span>{% if nav_total %}<span class="oc-cnt">{{ nav_total }}</span>{% endif %}</a>
+      {% if nav_counts.get('submitted') %}
+      <a class="oc-nav-i {{ 'active' if 'status=submitted' in request.url.query else '' }}" href="/claims?status=submitted"
+         title="Uploads parked for the submitter's content verification — confirm each so it reaches the approver (setting: submitter verification)">
+        <i class="ti ti-checklist"></i><span class="lab">To verify (uploads)</span><span class="oc-cnt warn">{{ nav_counts['submitted'] }}</span></a>
+      {% endif %}
       <a class="oc-nav-i {{ 'active' if 'status=in_review' in request.url.query else '' }}" href="/claims?status=in_review">
         <i class="ti ti-clock"></i><span class="lab">Awaiting review</span>{% if nav_counts.get('in_review') %}<span class="oc-cnt warn">{{ nav_counts['in_review'] }}</span>{% endif %}</a>
       <a class="oc-nav-i {{ 'active' if 'status=attention' in request.url.query else '' }}" href="/claims?status=attention">
