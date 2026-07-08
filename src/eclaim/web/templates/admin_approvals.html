@@ -123,6 +123,12 @@
             {% for role in roles %}<option value="{{ role }}">{{ role | capitalize }}</option>{% endfor %}
           </select>
         </div>
+        <div><label class="label-tiny">Applies to</label>
+          <select class="field" name="scope_module" title="Which approvals this band governs">
+            <option value="eclaim">Staff expenses (e-Claim)</option>
+            <option value="ap">Vendor bills (AP invoices)</option>
+          </select>
+        </div>
         <div><label class="label-tiny">Approvals required</label><input class="field" value="1 (single sign-off)" disabled title="Multi-approval counting arrives in Phase-2"></div>
       </div>
       <div style="margin-top:12px;"><button class="btn btn-accent" type="submit" {{ 'disabled' if not selected_client_id else '' }}><i class="ti ti-plus"></i> Add band</button></div>

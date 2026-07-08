@@ -65,6 +65,34 @@ def test_no_matrix_falls_back_to_legacy(client, fake_ocr, db_session, tmp_path):
     check_can_approve(claim, _p(ids, "manager"))          # no rule → any approver ok
 
 
+def test_ap_scoped_rule_does_not_bind_a_claim(client, fake_ocr, db_session, tmp_path):
+    """F7 direction pin (previously untested): a matrix band scoped to VENDOR BILLS
+    must not govern e-Claim approvals — the reverse of the pinned eclaim-not-AP rule.
+    A mutation making matrix_rule_for select module='ap' would fail here."""
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    _rule(db_session, ids, min_amount=None, max_amount=None,
+          approver_role="partner", scope_module="ap")
+    claim = _claim_of(svc, repos, fake_ocr, tmp_path, ids, "1500")
+    assert matrix_rule_for(repos, claim) is None          # the ap band is invisible here
+    check_can_approve(claim, _p(ids, "manager"))          # manager approves fine
+
+
+def test_eclaim_scoped_rule_binds_a_claim(client, fake_ocr, db_session, tmp_path):
+    """F7 fixture blind spot (previously only NULL-scoped rules were tested): real
+    post-0029 data is 'eclaim'-scoped — such a rule must still govern claims."""
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    _rule(db_session, ids, min_amount=Decimal("1000"), max_amount=None,
+          approver_role="partner", scope_module="eclaim")
+    claim = _claim_of(svc, repos, fake_ocr, tmp_path, ids, "1500")
+    rule = matrix_rule_for(repos, claim)
+    assert rule is not None                               # the eclaim band binds
+    with pytest.raises(SoDViolation):
+        check_can_approve(claim, _p(ids, "manager"), matrix_rule=rule)
+    check_can_approve(claim, _p(ids, "partner"), matrix_rule=rule)
+
+
 def test_partner_band_blocks_manager_allows_partner(client, fake_ocr, db_session, tmp_path):
     svc, repos = ClaimService(), Repos.for_session(db_session)
     ids = db_session.info["principal"]

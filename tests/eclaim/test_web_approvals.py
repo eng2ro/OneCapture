@@ -162,6 +162,30 @@ def test_add_band_ignores_supplied_count(client, db_session):
         "crafted POST persisted an unenforced multi-approval control"
 
 
+def test_admin_can_add_an_ap_scoped_band(client, db_session):
+    """F7 residual: the admin UI can now SET the module — an AP band is creatable
+    from the form, not only by direct SQL."""
+    cid = _cid(db_session)
+    client.post("/admin/approvals/add", data={
+        "client_id": str(cid), "min_amount": "100", "max_amount": "",
+        "approver_role": "partner", "scope_module": "ap",
+    }, follow_redirects=False)
+    rules = Repos.for_session(db_session).approvals.rules_for_client(cid)
+    assert len(rules) == 1 and rules[0].scope_module == "ap"
+
+
+def test_add_band_clamps_junk_scope_to_eclaim(client, db_session):
+    """A crafted scope (blank would mean NULL = governs EVERY module) clamps to
+    'eclaim' — the all-modules state stays a DB-only escape hatch."""
+    cid = _cid(db_session)
+    client.post("/admin/approvals/add", data={
+        "client_id": str(cid), "min_amount": "", "max_amount": "",
+        "approver_role": "partner", "scope_module": "",
+    }, follow_redirects=False)
+    rules = Repos.for_session(db_session).approvals.rules_for_client(cid)
+    assert len(rules) == 1 and rules[0].scope_module == "eclaim"
+
+
 def test_applied_template_governs_approval(client, fake_ocr, db_session, tmp_path):
     cid = _cid(db_session)
     ids = db_session.info["principal"]

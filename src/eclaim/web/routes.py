@@ -2235,6 +2235,7 @@ def admin_add_rule(
     min_amount: str = Form(""),
     max_amount: str = Form(""),
     approver_role: str = Form(""),
+    scope_module: str = Form("eclaim"),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.require_firm_scope),
 ):
@@ -2243,7 +2244,12 @@ def admin_add_rule(
     ``approvals_required`` is fixed at :data:`PHASE1_APPROVALS_REQUIRED` (1) and not
     taken from the form: the engine enforces a single sign-off per band in Phase-1,
     so accepting a caller-supplied count would let a crafted POST persist an
-    unenforced multi-approval control (punch-list P1)."""
+    unenforced multi-approval control (punch-list P1).
+
+    ``scope_module`` picks WHICH approvals the band governs — staff expenses
+    (``eclaim``) or vendor bills (``ap``). Anything else (including a crafted blank,
+    which would mean "all modules") clamps to ``eclaim``; the NULL=all state stays a
+    deliberate DB-only escape hatch, never creatable from the UI (F7)."""
     try:
         cid = uuid.UUID(client_id)
         mn = Decimal(min_amount) if min_amount.strip() else None
@@ -2256,9 +2262,10 @@ def admin_add_rule(
         return _render_approvals(request, repos, principal, client_id=cid,
                                  error="The band's maximum is below its minimum.")
     role = approver_role if approver_role in APPROVER_ROLES else None
+    module = scope_module if scope_module in ("eclaim", "ap") else "eclaim"
     repos.approvals.add(ApprovalMatrixRule(
         firm_id=principal.firm_id, client_id=cid, min_amount=mn, max_amount=mx,
-        step_order=1, approver_role=role, scope_module="eclaim",   # e-Claim only (F7)
+        step_order=1, approver_role=role, scope_module=module,
         approvals_required=PHASE1_APPROVALS_REQUIRED, active=True,
     ))
     return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
