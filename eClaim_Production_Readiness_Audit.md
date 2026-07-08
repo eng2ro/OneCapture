@@ -612,6 +612,81 @@ ERP is a new connector implementing the same Protocol — never a customer fork.
 
 ---
 
+# Appendix G — CarbonNext UI-spec field mapping (Yan Ling specs, 2026-07-07)
+
+> Source: 22 "UI Structure" xlsx specs from the CarbonNext team (Scope 1
+> stationary/mobile/fugitive, Scope 2 electricity/cooling/heat/steam, Scope 3
+> categories 1–15). Fields that are CarbonNext-internal (emission factors,
+> GWP versions, generation mix, calculation methods/tiers, market/location
+> basis, per-gas breakdown) are IGNORED per the owner — CarbonNext resolves
+> those. What matters is what OneCapture must CAPTURE and FORWARD.
+
+## G-A. What every CarbonNext record needs that we now know
+
+| CarbonNext field | OneCapture answer | Status |
+|------------------|-------------------|:---:|
+| **Site** (FK to their `sites` master) | NOT captured anywhere — new dimension needed on claims + AP invoices, master synced/pulled from CarbonNext | 🔴 GAP #1 |
+| Emission Source Name | derive: vendor + category + description | ✅ |
+| Date | doc_date (ISO since F-E fix) | ✅ |
+| Activity Data — Quantity + Unit | quantity/unit (L, kWh, m3, km, kg) | ✅ (after this round) |
+| **Amount Spent (MYR)** — all Scope-3 spend fields | base_amount (MYR) on the handoff — REQUIRES the FX table below for foreign receipts | ⚠️ GAP #2 |
+| Data Source / Data Type (their vocabularies) | map from provenance (receipt/invoice/channel); confirm their lists | ❓ ask |
+| Fuel Type / Gas Type | expense_type + category + line description (ERP item codes distinguish e.g. R134A) | ✅ mapping |
+
+## G-B. Per-source mapping (transactional sources OneCapture feeds)
+
+- **S1 Mobile/Stationary (fleet fuel, natural gas, LPG):** fuel type + litres/m3/kg ✅.
+- **S1 Fugitive (refrigerant):** quantity kg ✅; gas type from item/category/description.
+- **S2 Electricity/Heat/Cooling/Steam:** consumption kWh ✅ (TNB-style bills via AP).
+- **S3 Cat 1/2 (purchased goods / capital goods):** supplier id+name ✅ (vendor +
+  erp_vendor_code), goods name ✅ (description), amount MYR ⚠️ (FX), NAICS → their
+  category mapping.
+- **S3 Cat 3 (fuel & energy upstream):** volume of purchased fuel ✅.
+- **S3 Cat 4/9 (freight T&D):** fuel L ✅ / distance km + vehicle type ⚠️ (vehicle
+  type not captured — add to freight/mileage capture, small) / spend MYR ⚠️ (FX).
+- **S3 Cat 6 (business travel — THE e-Claim category):** employee id/name/
+  department/position + travel purpose + fuel L / km / spend. We HAVE claimant
+  (name + employee_ref), department, claim purpose, mileage km — but the handoff
+  does NOT forward the employee fields or purpose. 🔴 GAP #3: add
+  claimant_ref/employee_name + travel purpose (+ vehicle type) to the handoff.
+- **S3 Cat 5/12 (waste):** tonnage + waste type — needs waste categories in the
+  category master when a client wants this (config, not code).
+- **S3 Cat 7 (commuting), 8/13 (leased assets), 10/11 (sold products), 14
+  (franchises), 15 (investments):** NOT transactional expense data — CarbonNext-
+  side data entry (surveys, asset registers, investees). OneCapture out of scope.
+
+## G-C. GAP #2 — the exchange-rate table (owner decision, 2026-07-07)
+
+Every Scope-3 spend field is "(MYR)". Foreign transactions must convert. Design:
+
+- **`exchange_rate` table** (tenant-scoped, RLS): client_id, currency (ISO-3),
+  period (month, DATE truncated), rate_to_myr Numeric(18,6), source
+  ('manual' | 'erp' | 'carbonnext'), created_by, timestamps.
+  UNIQUE (client_id, currency, period). Audited on change.
+- **Precedence at line level:** human-entered fx_rate on the line (exists) →
+  table lookup by doc-date month → none (line flagged "needs FX", release warns).
+  Auto-prefill fx_rate + derived base_amount at capture/edit when currency ≠ MYR;
+  the reviewer can always override (fx_rate is already editable + audited).
+- **Sources:** manual admin UI (/admin/rates) day one; `pull_fx_rates()` on the
+  ERP connector seam (AutoCount/SQL/SAP all carry rate tables); CarbonNext pull
+  if they own rates — ASK (F-C question added): whoever owns the rate must be
+  single source of truth, and both systems must use the SAME rate or the
+  reconcile-by-reference breaks.
+
+## G-D. Build order for the gaps
+
+1. **FX table + auto-prefill + admin page** — self-contained, unblocks correct
+   MYR amounts (build now).
+2. **Handoff employee/purpose fields (Cat 6)** — columns exist on claim/claimant;
+   forward them (small migration + release change).
+3. **Site dimension** — gated on CarbonNext: need their `sites` list (pull/sync
+   API) before the dropdown means anything. Capture-side: site_id on claim
+   header + ap_invoice, default per client, forwarded on the handoff.
+4. **Vehicle type on mileage/freight** — small dropdown, feeds Cat 4/6
+   distance-based method.
+
+---
+
 # Appendix F — CarbonNext handoff contract: partial documents (owner, 2026-07-07)
 
 > **Owner question resolved:** a single bill (claim OR vendor bill) may contain

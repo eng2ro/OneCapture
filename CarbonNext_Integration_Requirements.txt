@@ -71,6 +71,25 @@ replace "endpoint / payload" items with "target table(s) + column mapping".
       batch: carbonnext_company_id, batch_hash, source_channel
              (eclaim | erpsync | ap)
 
+[ ] FROM THE UI-STRUCTURE SPECS (Yan Ling, reviewed 2026-07-07) — new asks:
+      [ ] SITES MASTER: every record keys to a Site (your `sites` table).
+          Give us a pull/sync API (list of sites per company) so our capture
+          UI can offer the same dropdown; we will forward site_id per line.
+      [ ] FX RATES: all Scope-3 spend fields are "(MYR)". We will send
+          base_amount_myr (human-verified gross x fx_rate). QUESTION: do you
+          own an exchange-rate table we should pull (single source of truth),
+          or do you accept our converted figure as-is? Both systems must use
+          the SAME rate or reconciliation breaks.
+      [ ] DATA SOURCE / DATA TYPE vocabularies (your `data_sources` /
+          `data_types` tables): send us the allowed values so we can map our
+          provenance (receipt / supplier invoice / ERP import) onto them.
+      [ ] BUSINESS TRAVEL (Cat 6): we will forward employee ref + name,
+          department, travel purpose, and fuel L / km / spend MYR per line —
+          confirm these field names/shapes.
+      [ ] Non-transactional sources (Cat 7 commuting, 8/13 leased assets,
+          10/11 sold products, 14 franchises, 15 investments) are entered in
+          CarbonNext directly — confirm OneCapture is out of scope for them.
+
 [ ] PARTIAL DOCUMENTS (owner decision 2026-07-07 — confirm CarbonNext side):
     OneCapture forwards PER LINE, never per document: a bill mixing carbon
     and non-carbon lines posts only its carbon lines, so the amount received
