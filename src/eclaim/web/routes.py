@@ -1575,11 +1575,22 @@ def _render_review(
         and claim.total_claimed is not None
         and claim.total_claimed > principal.authority_limit
     )
-    # The "verify one by one" queue across other in_review claims.
-    queue = [
-        c for c in repos.claims.list_for_clients(principal.allowed_client_ids, "in_review")
-        if c.id != claim_id
-    ]
+    # The "verify one by one" CONVEYOR across the other in-review claims. The list
+    # is newest-first, so naively taking queue[0] made "Verify next" ping-pong
+    # between the newest two claims forever (live report: "looks like no
+    # function"). Instead: stable oldest-first order, and NEXT = the first claim
+    # AFTER the current one (wrapping to the start), so repeated clicks walk the
+    # whole inbox exactly once. Hidden for viewers — they cannot verify anything.
+    _order = lambda c: (c.created_at, str(c.id))  # noqa: E731 — tie-break equal timestamps
+    conveyor = sorted(
+        repos.claims.list_for_clients(principal.allowed_client_ids, "in_review"),
+        key=_order,
+    )
+    queue = [c for c in conveyor if c.id != claim_id]
+    next_claim = None
+    if queue and principal.base_role != "viewer":
+        later = [c for c in queue if _order(c) > _order(claim)]
+        next_claim = later[0] if later else queue[0]
     # When the approve controls are hidden on an in-review claim, say WHY (instead of
     # silently dropping them) — most often separation of duties: the user who keyed
     # the claim cannot approve it.
@@ -1644,7 +1655,8 @@ def _render_review(
             "can_reopen": claim.status in ("approved", "partially_approved")
             and principal.base_role != "viewer"
             and principal.can_access_client(claim.client_id),
-            "next_review_id": queue[0].id if queue else None,
+            "next_review_id": next_claim.id if next_claim else None,
+            "next_review_no": (next_claim.claim_no or "") if next_claim else "",
             "review_remaining": len(queue),
             "error": error,
             # Pages the classifier routed to the vendor-bills queue on this capture (F2).

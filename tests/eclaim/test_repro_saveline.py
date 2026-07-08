@@ -61,3 +61,33 @@ def test_review_page_carries_the_reopen_script(client, fake_ocr):
     cid = _upload(client, fake_ocr)
     page = client.get(f"/claims/{cid}/review")
     assert 'URLSearchParams' in page.text and '"open"' in page.text
+
+
+def test_verify_next_walks_the_inbox_without_ping_pong(client, fake_ocr, db_session):
+    """Live report: 'Verify next looks like no function'. The queue was
+    newest-first and next=queue[0], so the button ping-ponged between the newest
+    two claims forever. It must be a CONVEYOR: oldest-first, next = the first
+    claim after the current one, wrapping — every in-review claim visited once."""
+    import re
+
+    cids = [_upload(client, fake_ocr) for _ in range(3)]
+
+    def next_of(cid):
+        page = client.get(f"/claims/{cid}/review").text
+        m = re.search(r'href="/claims/([0-9a-f-]{36})/review"[^>]*>Verify next', page)
+        return m.group(1) if m else None
+
+    # Order the three claims the way the conveyor does (created_at asc). The
+    # walk must visit each exactly once and wrap — never bounce A<->B.
+    hops = {cid: next_of(cid) for cid in cids}
+    assert all(hops.values()), "Verify next missing on an in-review claim"
+    # Follow the chain from any start: three hops must return to the start
+    # having visited all three claims (a single cycle, not a 2-cycle).
+    start = cids[0]
+    seen = [start]
+    cur = start
+    for _ in range(3):
+        cur = hops[cur]
+        seen.append(cur)
+    assert cur == start, f"conveyor did not cycle: {seen}"
+    assert set(seen[:-1]) == set(cids), f"conveyor skipped claims: {seen}"

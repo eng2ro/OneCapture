@@ -124,7 +124,7 @@
     {% if next_review_id %}
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">
       <span style="font-size:11px;color:var(--text-secondary);">{{ review_remaining }} more to verify</span>
-      <a class="btn btn-accent" style="font-size:11px;" href="/claims/{{ next_review_id }}/review">Verify next<i class="ti ti-chevron-right"></i></a>
+      <a class="btn btn-accent" style="font-size:11px;" href="/claims/{{ next_review_id }}/review" title="Walks the whole in-review inbox claim by claim{% if next_review_no %} — next: {{ next_review_no }}{% endif %}">Verify next{% if next_review_no %} · {{ next_review_no }}{% endif %}<i class="ti ti-chevron-right"></i></a>
     </div>
     {% elif claim.status == 'in_review' %}
     <span style="margin-left:auto;font-size:11px;color:var(--text-secondary);">Last one to verify</span>
