@@ -88,6 +88,15 @@
         <form method="post" action="/ap/{{ invoice.id }}/approve"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i> Approve</button></form>
         {% endif %}
+        {% if invoice.status in ('captured', 'coded', 'held') %}
+        <form method="post" action="/ap/{{ invoice.id }}/to-expense"
+              onsubmit="return confirm('Convert this bill to a staff expense claim? It leaves AP and lands in the e-Claim review queue.');">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn" type="submit" title="This is a staff expense, not a vendor bill — switchable until approval (Appendix E3).">
+            <i class="ti ti-user-dollar"></i> This is a staff expense →
+          </button>
+        </form>
+        {% endif %}
         {% if invoice.status not in ('posted', 'paid', 'rejected') %}
         <form method="post" action="/ap/{{ invoice.id }}/reject"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <button class="btn btn-danger" type="submit">Reject</button></form>

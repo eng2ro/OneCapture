@@ -553,6 +553,83 @@ class ClaimService:
         )
         return line
 
+    def switch_line_to_vendor_bill(
+        self, *, repos: "Repos", claim_id: uuid.UUID, line_id: uuid.UUID,
+        actor: str, principal: "Principal | None" = None,
+    ):
+        """Appendix E3: a receipt line that is really a VENDOR BILL moves to the
+        AP side — allowed only pre-approval (afterwards corrections go through
+        reject/reversal, never a silent switch).
+
+        Mechanics: an open holding-queue intake is created carrying the SAME image
+        provenance and every field the line held (the reviewer files it as an AP
+        invoice from there), then the line is removed; a claim left with no lines
+        is voided (→ rejected, noted). The switcher is recorded as the intake's
+        creator, so the SoD maker≠checker rule carries over to whatever the page
+        becomes. Idempotent: the removed line cannot be switched twice."""
+        from ..db.models import DocumentIntake
+
+        claim = self._lock(repos, claim_id)
+        self._require_writer(claim, principal)
+        if claim.status not in ("submitted", "in_review", "sent_back"):
+            raise IllegalTransition(
+                f"cannot switch a line on a claim in status {claim.status!r} — "
+                "after approval, corrections go through reject/reversal"
+            )
+        line = repos.claims.line(line_id)
+        if line is None or line.claim_id != claim.id:
+            raise ClaimError("line not found for this claim (already switched?)")
+        if not line.image_path:
+            raise ClaimError("a mileage line has no document to switch — remove it instead")
+
+        intake = DocumentIntake(
+            firm_id=claim.firm_id,
+            client_id=claim.client_id,
+            created_by_user_id=(principal.user_id if principal else claim.created_by_user_id),
+            document_type="vendor_invoice",
+            routed_to="ap_holding",
+            routed_by="user",
+            needs_manual=False,
+            status="open",
+            image_path=line.image_path,
+            image_sha256=line.image_sha256,
+            vendor=line.vendor,
+            doc_no=line.doc_no,
+            doc_date=line.doc_date,
+            total_amount=line.total_amount,
+            currency=line.currency,
+            tax_amount=line.tax_amount,
+            tax_code=line.tax_code,
+            quantity=line.quantity,
+            unit=line.unit,
+            expense_type=line.expense_type,
+        )
+        repos.session.add(intake)
+        repos.session.flush()
+        record_event(
+            repos.audit, firm_id=claim.firm_id, client_id=claim.client_id,
+            entity_type="document_intake", entity_id=intake.id,
+            event_type="converted_from_claim", actor=actor,
+            detail={"claim_id": str(claim.id), "line_no": line.line_no},
+        )
+
+        line_no = line.line_no
+        repos.claims.delete_line(line)
+        remaining = repos.claims.lines(claim.id)
+        self._recompute_totals(claim, remaining)
+        if not remaining:
+            claim.status = "rejected"
+            claim.approver_note = "voided — its only page was switched to a vendor bill"
+        record_event(
+            repos.audit, firm_id=claim.firm_id, client_id=claim.client_id,
+            entity_type="claim", entity_id=claim.id,
+            event_type="line_switched_to_ap", actor=actor,
+            detail={"line_no": line_no, "intake_id": str(intake.id),
+                    "claim_voided": not remaining},
+        )
+        repos.session.flush()
+        return intake
+
     def submit(
         self, *, repos: "Repos", claim: Claim, actor: str, line_count: int,
         attested: bool = False,

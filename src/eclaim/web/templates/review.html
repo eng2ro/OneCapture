@@ -560,6 +560,16 @@
                   <button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;"><i class="ti ti-check"></i> Save line</button>
                 </div>
               </form>
+              {% if ln.image_path and claim.status in ('submitted', 'in_review', 'sent_back') %}
+              <form method="post" action="/claims/{{ claim.id }}/lines/{{ ln.id }}/to-vendor-bill" style="margin-top:8px;"
+                    onsubmit="return confirm('Move this page to Vendor bills? It leaves this claim (a claim with no pages left is voided) and finance processes it as an AP invoice instead.');">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="btn" type="submit" style="width:100%;justify-content:center;font-size:12px;"
+                        title="This is a bill finance pays, not a staff expense — switchable until approval (Appendix E3).">
+                  <i class="ti ti-file-invoice"></i> This is a vendor bill →
+                </button>
+              </form>
+              {% endif %}
             </div>
             {% endfor %}
             {% else %}

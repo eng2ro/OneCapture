@@ -571,6 +571,71 @@ def mark_paid(
     return invoice
 
 
+def switch_to_expense(
+    session: Session, *, invoice_id: uuid.UUID, editor: Principal, actor: str,
+):
+    """Appendix E3: a filed vendor bill that is really a STAFF EXPENSE moves to
+    e-Claim — allowed only pre-approval (afterwards corrections go through
+    reject/reversal). A new in_review claim is created carrying the same image
+    provenance and the bill's fields; the invoice is rejected with a note. The
+    switcher becomes the claim's creator, so maker≠checker carries over — they
+    cannot approve what they converted. Idempotent: a rejected invoice cannot be
+    switched twice."""
+    from ..db.models import Claim, ClaimLine
+    from .claims import ClaimService, Repos
+
+    invoice = get_invoice(session, invoice_id)
+    _require_writer(editor, invoice)
+    if invoice.status not in ("captured", "coded", "held"):
+        raise IllegalApTransition(
+            f"cannot switch an invoice in status {invoice.status!r} to an expense — "
+            "after approval, corrections go through reject/reversal"
+        )
+    vendor = session.get(Vendor, invoice.vendor_id)
+    lump = _lines(session, invoice.id)
+    src = lump[0] if lump else None
+
+    svc, repos = ClaimService(), Repos.for_session(session)
+    claim = svc.start_claim(
+        repos=repos, firm_id=invoice.firm_id, client_id=invoice.client_id,
+        title=f"Converted vendor bill {invoice.doc_no or ''}".strip(),
+        created_by_user_id=editor.user_id,
+    )
+    line = ClaimLine(
+        firm_id=invoice.firm_id,
+        client_id=invoice.client_id,
+        claim_id=claim.id,
+        line_no=1,
+        vendor=(vendor.name if vendor else None),
+        doc_no=invoice.doc_no,
+        doc_date=(invoice.doc_date.isoformat() if invoice.doc_date else None),
+        currency=invoice.currency,
+        total_amount=invoice.total_amount,
+        tax_amount=invoice.tax_amount,
+        expense_type="other",            # the reviewer classifies on the e-Claim side
+        quantity=(src.quantity if src else None),
+        unit=(src.uom if src else None),
+        image_path=invoice.image_path,
+        image_sha256=invoice.image_sha256,
+    )
+    svc._recompute_line_money(line)
+    session.add(line)
+    session.flush()
+    svc._recompute_totals(claim, [line])
+
+    invoice.status = "rejected"
+    invoice.hold_reason = "converted to a staff expense claim"
+    _audit(session, invoice, "ap_converted_to_expense", actor,
+           {"claim_id": str(claim.id)})
+    record_event(
+        AuditRepository(session), firm_id=claim.firm_id, client_id=claim.client_id,
+        entity_type="claim", entity_id=claim.id, event_type="converted_from_ap",
+        actor=actor, detail={"ap_invoice_id": str(invoice.id)},
+    )
+    session.flush()
+    return claim
+
+
 def reject(session: Session, *, invoice_id: uuid.UUID, actor: str, reason: str | None = None) -> ApInvoice:
     invoice = get_invoice(session, invoice_id)
     if invoice.status in ("posted", "paid"):

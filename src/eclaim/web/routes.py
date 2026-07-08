@@ -827,6 +827,59 @@ def ap_edit_header(
     )
 
 
+@router.post("/claims/{claim_id}/lines/{line_id}/to-vendor-bill")
+def claim_line_to_vendor_bill(
+    request: Request,
+    claim_id: uuid.UUID,
+    line_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """E3: this receipt is really a vendor bill — move it to the holding queue
+    (pre-approval only; the switcher can't approve what it becomes)."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot modify claims")
+    try:
+        _service.switch_line_to_vendor_bill(
+            repos=repos, claim_id=claim_id, line_id=line_id,
+            actor=_actor(principal), principal=principal,
+        )
+        repos.session.commit()
+    except (ClaimError, SoDViolation) as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        status = 403 if isinstance(exc, SoDViolation) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+    return RedirectResponse("/intake/holding?routed=1", status_code=303)
+
+
+@router.post("/ap/{invoice_id}/to-expense")
+def ap_to_expense(
+    request: Request,
+    invoice_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """E3: this vendor bill is really a staff expense — convert it to an
+    in-review claim (pre-approval only)."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot modify invoices")
+    try:
+        claim = ap_service.switch_to_expense(
+            repos.session, invoice_id=invoice_id, editor=principal,
+            actor=_actor(principal),
+        )
+        repos.session.commit()
+    except (ap_service.ApError, SoDViolation, ClaimError) as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        if isinstance(exc, ap_service.ApNotFound):
+            raise HTTPException(status_code=404, detail=str(exc))
+        status = 403 if isinstance(exc, SoDViolation) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+    return RedirectResponse(f"/claims/{claim.id}/review", status_code=303)
+
+
 @router.post("/ap/{invoice_id}/lines/add")
 def ap_add_line(
     request: Request,
