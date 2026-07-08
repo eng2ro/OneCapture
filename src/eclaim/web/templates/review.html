@@ -491,6 +491,22 @@
                   <div><label class="label-tiny">Doc date</label><input class="field" name="doc_date" value="{{ ln.doc_date or '' }}"></div>
                   <div><label class="label-tiny">Total</label><input class="field" name="total_amount" value="{{ ln.total_amount or '' }}"></div>
                 </div>
+                {% set vcat = cat_by_id.get(ln.category_id) %}
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Quantity (activity)</label><input class="field" name="quantity" value="{{ ln.quantity or '' }}" placeholder="e.g. 34.146"></div>
+                  <div><label class="label-tiny">Unit</label>
+                    <select class="field" name="unit">
+                      <option value="" {{ 'selected' if not ln.unit else '' }}>—</option>
+                      {% for u in ['L', 'kWh', 'm3', 'km'] %}<option value="{{ u }}" {{ 'selected' if ln.unit == u else '' }}>{{ u }}</option>{% endfor %}
+                      {% if ln.unit and ln.unit not in ['L', 'kWh', 'm3', 'km'] %}<option value="{{ ln.unit }}" selected>{{ ln.unit }}</option>{% endif %}
+                    </select>
+                  </div>
+                </div>
+                {% if vcat and vcat.carbon_relevant and ln.quantity is none %}
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;"><i class="ti ti-leaf"></i> This line posts to CarbonNext — without a quantity (litres / kWh / km) the emissions fall back to a less accurate spend-based estimate. Check the receipt: fuel receipts usually print the litres.</div>
+                {% else %}
+                <div style="font-size:10px;color:var(--text-tertiary);margin-top:4px;">The activity quantity (litres / kWh / km) is what CarbonNext computes emissions from.</div>
+                {% endif %}
                 <div class="field-row" style="margin-top:8px;">
                   <div><label class="label-tiny">Payment</label>
                     <select class="field" name="payment_method">{% for p in payment_methods %}<option value="{{ p }}" {{ 'selected' if ln.payment_method == p else '' }}>{{ p.replace('_',' ') }}</option>{% endfor %}</select>

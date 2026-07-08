@@ -161,6 +161,42 @@ def test_review_shows_gl_inherited_from_category(client, fake_ocr, db_session):
     assert "From category" in page.text        # and labelled as inherited
 
 
+def test_quantity_is_verifiable_and_the_correction_reaches_the_handoff(client, fake_ocr, db_session):
+    """The litres on a fuel receipt are THE activity datum CarbonNext computes CO2e
+    from (OneCapture forwards raw data; CarbonNext does the math). The verify form
+    must expose quantity/unit for human correction — OCR here misread 341.46 L —
+    and the CORRECTED value must be what the carbon handoff forwards on release."""
+    import uuid as _uuid
+
+    from eclaim.db.models import CarbonHandoff, ClaimLine
+
+    fake_ocr.extraction = Extraction(
+        expense_type="fuel_diesel", quantity=Decimal("341.46"), unit="L",
+        total_amount=Decimal("70.00"), vendor="PETRONAS",
+    )
+    files = {"file": ("r.png", b"\x89PNG\r\n petronas", "image/png")}
+    cid = client.post("/api/claims/upload", files=files,
+                      data={"attested": "true"}).json()["id"]
+
+    page = client.get(f"/claims/{cid}/review")
+    assert 'name="quantity"' in page.text and 'name="unit"' in page.text
+    assert "341.46" in page.text                        # the OCR value is inspectable
+
+    client.post(f"/claims/{cid}/edit",
+                data={"line_id": "", "quantity": "34.146", "unit": "L"},
+                follow_redirects=False)
+    line = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == _uuid.UUID(cid))
+    ).scalars().one()
+    assert line.quantity == Decimal("34.146")           # human correction persisted
+
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+    assert client.post(f"/api/claims/{cid}/release").status_code == 200
+    handoff = db_session.query(CarbonHandoff).filter_by(line_id=line.id).one()
+    assert handoff.quantity == Decimal("34.146")        # CarbonNext gets the truth
+    assert handoff.unit == "L"
+
+
 def test_receipt_image_endpoint_downloads_with_filename(client, fake_ocr):
     """The download button must SAVE the receipt, not just open it — the endpoint
     sends Content-Disposition: attachment with a friendly filename."""
