@@ -72,9 +72,15 @@ replace "endpoint / payload" items with "target table(s) + column mapping".
              (eclaim | erpsync | ap)
 
 [ ] FROM THE UI-STRUCTURE SPECS (Yan Ling, reviewed 2026-07-07) — new asks:
-      [ ] SITES MASTER: every record keys to a Site (your `sites` table).
-          Give us a pull/sync API (list of sites per company) so our capture
-          UI can offer the same dropdown; we will forward site_id per line.
+      [ ] SITES MASTER (refined 2026-07-07): CarbonNext owns the full
+          company -> branch -> site hierarchy (multi-tenant). Give us a
+          pull/sync API returning that hierarchy per registered company, with
+          stable ids. OneCapture will: cache it read-only, let the user pick
+          branch -> site per document (claim / AP invoice header), forward
+          your site_id per line, and soft-validate the OCR bill-to name
+          against the registered company/branch names (wrong-entity and
+          personal-bill catch). Confirm: endpoint shape, id stability, and
+          how site renames/deactivations propagate.
       [ ] FX RATES: all Scope-3 spend fields are "(MYR)". We will send
           base_amount_myr (human-verified gross x fx_rate). QUESTION: do you
           own an exchange-rate table we should pull (single source of truth),

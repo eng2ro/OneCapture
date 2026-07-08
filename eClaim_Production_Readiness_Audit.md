@@ -612,6 +612,63 @@ ERP is a new connector implementing the same Protocol — never a customer fork.
 
 ---
 
+# Appendix H — Site hierarchy, user profile, vehicle registry (owner, 2026-07-07)
+
+> Owner decisions following the UI-spec review. Three connected pieces that
+> complete the Cat-6 / Site requirements from Appendix G.
+
+## H-A. Site hierarchy — CarbonNext-owned, OneCapture-cached
+CarbonNext (multi-tenant) owns company → branch → site. OneCapture NEVER
+maintains its own site master:
+- **`site_ref` cache table** (client-scoped, read-mostly): carbonnext_branch_id,
+  carbonnext_site_id, branch_name, site_name, active, synced_at. Populated by a
+  `pull_sites(company_id)` call on the CarbonNext client (stub until their API
+  answer arrives); admin can trigger a re-sync. NO manual site creation — if a
+  site is missing, it is created in CarbonNext and re-synced.
+- **Selection**: branch → site cascading dropdown on the CLAIM HEADER and the
+  AP INVOICE header (per document, not per line — a utility bill is one site).
+  Defaults from the user profile (H-B). Forwarded on the handoff as
+  carbonnext_site_id.
+- **Bill-to validation (owner's control)**: OCR already reads the bill-to name
+  on vendor invoices — cross-check it against the registered company/branch
+  names; SOFT-warn on mismatch ("this bill is addressed to X, not a registered
+  entity of yours"), reviewer can override with a note (audited). Catches
+  personal bills claimed as company expenses and wrong-entity postings in a
+  group. Never a hard block (OCR misreads letterheads).
+
+## H-B. User details page
+Extend the `claimant` master (name/phone/email/employee_ref/cost_centre exist)
+with: **position, department, default_branch/site (FK site_ref), and a link to
+their usual vehicle** (H-C). This page is the single source of the CarbonNext
+Cat-6 fields (employee id/name/department/position) and speeds capture
+(defaults). Admin CRUD under the existing /admin/claimants page; a self-service
+"My profile" follows once real auth lands.
+
+## H-C. Vehicle registry — separate module, NOT a user field
+Because a user can claim on behalf of someone else (or paid in advance), the
+vehicle must not hang off the submitter:
+- **`vehicle` table** (client-scoped): label/plate, vehicle_type (car_petrol /
+  car_diesel / car_hybrid / car_ev / motorcycle / van / truck…, matching
+  CarbonNext's distance-based factor classes), engine_size (optional),
+  usual_claimant_id (nullable — the default owner), active.
+- A MILEAGE line picks a vehicle from the registry (defaults to the
+  submitter's usual vehicle, freely selectable). vehicle_type forwards on the
+  handoff (Cat 4/6 distance-based method).
+- Paid-in-advance nuance: attestation is the PAYER's declaration ("paid with my
+  own money") — it remains true when the trip/vehicle was someone else's; the
+  beneficiary is context, not the attester.
+
+## H-D. Build order
+1. Vehicle registry + user-profile extensions (self-contained, no CarbonNext
+   dependency) — feeds Cat-6/vehicle-type immediately.
+2. Cat-6 handoff fields (employee ref/name/department/position, travel purpose,
+   vehicle_type) — small migration + release change.
+3. site_ref cache + header dropdowns + bill-to soft validation — GATED on
+   CarbonNext's sites API answer (F-C asks). Build the cache/UI against the
+   stub once the shape is confirmed.
+
+---
+
 # Appendix G — CarbonNext UI-spec field mapping (Yan Ling specs, 2026-07-07)
 
 > Source: 22 "UI Structure" xlsx specs from the CarbonNext team (Scope 1
