@@ -199,13 +199,24 @@ def create_from_intake(
         session, firm_id=intake.firm_id, client_id=intake.client_id,
         name=intake.vendor or "Unknown vendor",
     )
+    from .claims import parse_receipt_date
+
     invoice = create_invoice(
         session, firm_id=intake.firm_id, client_id=intake.client_id,
         created_by_user_id=intake.created_by_user_id, vendor_id=vendor.id, actor=actor,
-        doc_no=intake.doc_no, currency=intake.currency or "MYR",
+        doc_no=intake.doc_no, doc_date=parse_receipt_date(intake.doc_date),
+        currency=intake.currency or "MYR",
+        tax_amount=intake.tax_amount,
         total_amount=intake.total_amount, po_ref=None,
         image_sha256=intake.image_sha256, image_path=intake.image_path, intake_id=intake.id,
-        lines=[LineInput(description=(intake.doc_no or "Vendor bill"), line_total=intake.total_amount)],
+        # The seeded line carries the OCR's activity read (litres/kWh/kg) so the
+        # carbon datum survives filing — the coder refines it, never re-keys it.
+        lines=[LineInput(
+            description=(intake.doc_no or "Vendor bill"),
+            line_total=intake.total_amount,
+            quantity=intake.quantity, uom=intake.unit,
+            tax_code=intake.tax_code,
+        )],
     )
     intake.status = "consumed"
     session.flush()
@@ -220,10 +231,17 @@ def code_line(
     gl_code: str | None = None, tax_code: str | None = None,
     category_id: uuid.UUID | None = None, department: str | None = None,
     project_code: str | None = None,
+    description: str | None = None, quantity: Decimal | None = None,
+    uom: str | None = None, line_total: Decimal | None = None,
 ) -> ApInvoice:
-    """Apply accounting coding (GL / tax / carbon category / cost dims) to one line and
-    record the coder on the invoice (the maker, for the SoD check at approval). Only
-    while the invoice is still pre-approval."""
+    """Apply accounting coding (GL / tax / carbon category / cost dims) AND correct the
+    line's substance (description / quantity / uom / amount — the OCR read the coder
+    verifies, F-E item 12) on one line; record the coder on the invoice (the maker,
+    for the SoD check at approval). Only while the invoice is still pre-approval.
+
+    Assigning a category SNAPSHOTS its ``carbon_relevant`` onto the line (like
+    claim_line at classify time) so a later category toggle never rewrites which
+    lines forward to CarbonNext."""
     line = session.get(ApInvoiceLine, line_id)
     if line is None:
         raise ApNotFound(str(line_id))
@@ -235,15 +253,160 @@ def code_line(
     for field, value in (
         ("gl_code", gl_code), ("tax_code", tax_code), ("category_id", category_id),
         ("department", department), ("project_code", project_code),
+        ("description", description), ("quantity", quantity),
+        ("uom", uom), ("line_total", line_total),
     ):
         if value is not None:
             setattr(line, field, value)
+    if category_id is not None:
+        from ..db.models import Category
+
+        cat = session.get(Category, category_id)
+        line.carbon_relevant = bool(cat.carbon_relevant) if cat is not None else None
     invoice.coded_by_user_id = coder.user_id
     if invoice.status == "captured":
         invoice.status = "coded"
     _audit(session, invoice, "ap_coded", actor, {"line_id": str(line_id)})
     session.flush()
     return invoice
+
+
+def edit_header(
+    session: Session, *, invoice_id: uuid.UUID, editor: Principal, actor: str,
+    doc_no: str | None = None, doc_date=None, total_amount: Decimal | None = None,
+    currency: str | None = None, po_ref: str | None = None, do_ref: str | None = None,
+    vendor_name: str | None = None,
+) -> ApInvoice:
+    """Correct the OCR-read header fields (F-E item 12) — pre-approval only. Every
+    field here feeds either the CarbonNext handoff (doc_no/doc_gross_total/currency/
+    date) or the duplicate-payment control, so a misread MUST be correctable.
+
+    After a doc_no/amount correction the duplicate check RE-RUNS: a bill whose
+    corrected identity now collides with an existing one is put on hold (the
+    original misread would otherwise have defeated the double-pay control).
+
+    ``vendor_name`` renames the vendor master row ONLY while this invoice is the
+    vendor's sole bill (a fresh mint from the misread) — renaming an established
+    vendor would rewrite other bills' history and needs an admin decision."""
+    invoice = get_invoice(session, invoice_id)
+    _require_writer(editor, invoice)
+    if invoice.status not in ("captured", "coded", "held"):
+        raise IllegalApTransition(
+            f"cannot edit the header of an invoice in status {invoice.status!r}"
+        )
+    changed: dict = {}
+    for field, value in (
+        ("doc_no", doc_no), ("doc_date", doc_date), ("total_amount", total_amount),
+        ("currency", currency), ("po_ref", po_ref), ("do_ref", do_ref),
+    ):
+        if value is not None and getattr(invoice, field) != value:
+            changed[field] = {"from": str(getattr(invoice, field)), "to": str(value)}
+            setattr(invoice, field, value)
+
+    if vendor_name is not None and vendor_name.strip():
+        vendor = session.get(Vendor, invoice.vendor_id)
+        if vendor is not None and vendor.name != vendor_name.strip():
+            others = session.execute(
+                select(func.count()).select_from(ApInvoice).where(
+                    ApInvoice.vendor_id == vendor.id, ApInvoice.id != invoice.id
+                )
+            ).scalar_one()
+            if others:
+                raise ApError(
+                    f"vendor {vendor.name!r} has {others} other bill(s) — renaming it "
+                    "would rewrite their history; ask an admin to manage the vendor master"
+                )
+            changed["vendor_name"] = {"from": vendor.name, "to": vendor_name.strip()}
+            vendor.name = vendor_name.strip()
+
+    if ("doc_no" in changed or "total_amount" in changed) and invoice.status != "held":
+        dup = find_duplicate(
+            session, client_id=invoice.client_id, vendor_id=invoice.vendor_id,
+            doc_no=invoice.doc_no, total_amount=invoice.total_amount,
+            exclude_id=invoice.id,
+        )
+        if dup is not None:
+            invoice.status = "held"
+            invoice.hold_reason = f"possible duplicate of invoice {dup.id} (after header correction)"
+
+    if changed:
+        _audit(session, invoice, "ap_header_edited", actor, changed)
+    session.flush()
+    return invoice
+
+
+def add_line(
+    session: Session, *, invoice_id: uuid.UUID, editor: Principal, actor: str,
+    line: LineInput,
+) -> ApInvoiceLine:
+    """Add a line to a pre-approval invoice — how a reviewer SPLITS a lump-filed
+    bill into its real lines (F-E item 11), so a mixed carbon/non-carbon vendor
+    bill can forward only its carbon share (Appendix F-A)."""
+    invoice = get_invoice(session, invoice_id)
+    _require_writer(editor, invoice)
+    if invoice.status not in ("captured", "coded", "held"):
+        raise IllegalApTransition(
+            f"cannot add a line to an invoice in status {invoice.status!r}"
+        )
+    next_no = 1 + (session.execute(
+        select(func.coalesce(func.max(ApInvoiceLine.line_no), 0)).where(
+            ApInvoiceLine.ap_invoice_id == invoice.id
+        )
+    ).scalar_one())
+    row = ApInvoiceLine(
+        firm_id=invoice.firm_id, client_id=invoice.client_id,
+        ap_invoice_id=invoice.id, line_no=next_no,
+        description=line.description, quantity=line.quantity, uom=line.uom,
+        unit_price=line.unit_price, line_total=line.line_total, gl_code=line.gl_code,
+        tax_code=line.tax_code, category_id=line.category_id,
+        department=line.department, project_code=line.project_code,
+    )
+    session.add(row)
+    _audit(session, invoice, "ap_line_added", actor, {"line_no": next_no})
+    session.flush()
+    return row
+
+
+def remove_line(
+    session: Session, *, line_id: uuid.UUID, editor: Principal, actor: str,
+) -> ApInvoice:
+    """Remove a line from a pre-approval invoice (the counterpart of add_line when
+    re-splitting). The LAST line cannot be removed — an invoice always keeps at
+    least one line to code."""
+    line = session.get(ApInvoiceLine, line_id)
+    if line is None:
+        raise ApNotFound(str(line_id))
+    invoice = session.get(ApInvoice, line.ap_invoice_id)
+    _require_writer(editor, invoice)
+    if invoice.status not in ("captured", "coded", "held"):
+        raise IllegalApTransition(
+            f"cannot remove a line from an invoice in status {invoice.status!r}"
+        )
+    count = session.execute(
+        select(func.count()).select_from(ApInvoiceLine).where(
+            ApInvoiceLine.ap_invoice_id == invoice.id
+        )
+    ).scalar_one()
+    if count <= 1:
+        raise ApError("an invoice keeps at least one line — edit it instead of removing it")
+    _audit(session, invoice, "ap_line_removed", actor, {"line_no": line.line_no})
+    session.delete(line)
+    session.flush()
+    return invoice
+
+
+def _require_categories(session: Session, invoice: ApInvoice) -> None:
+    """Carbon coding gate (F-E item 13): every line must carry a category — an
+    explicit choice, including a non-carbon category for non-emitting spend —
+    otherwise a carbon-relevant bill could be approved, posted and paid having
+    silently contributed nothing to the CarbonNext handoff. Enforced at BOTH
+    submit and approve (approve accepts a coded invoice directly)."""
+    uncoded = [str(ln.line_no) for ln in _lines(session, invoice.id) if ln.category_id is None]
+    if uncoded:
+        raise IllegalApTransition(
+            f"every line needs a category before approval (line {', '.join(uncoded)} "
+            "has none) — pick a non-carbon category if the spend isn't carbon-related"
+        )
 
 
 def submit_for_approval(
@@ -262,6 +425,7 @@ def submit_for_approval(
         raise IllegalApTransition(
             f"only a coded invoice can be sent for approval (status {invoice.status!r})"
         )
+    _require_categories(session, invoice)
     invoice.status = "pending_approval"
     if submitter is not None:
         invoice.submitted_by_user_id = submitter.user_id
@@ -336,6 +500,7 @@ def approve(
         raise IllegalApTransition(
             f"cannot approve an invoice in status {invoice.status!r}"
         )
+    _require_categories(session, invoice)
     rule = matrix_rule_for_invoice(session, invoice)
     try:
         check_can_approve_invoice(invoice, approver, matrix_rule=rule)

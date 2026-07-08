@@ -731,9 +731,19 @@ def ap_code(
     category_id: str = Form(""),
     department: str = Form(""),
     project_code: str = Form(""),
+    description: str = Form(""),
+    quantity: str = Form(""),
+    uom: str = Form(""),
+    line_total: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ):
+    def _dec(v: str):
+        try:
+            return Decimal(v.strip()) if v.strip() else None
+        except InvalidOperation:
+            return None
+
     return _ap_action(
         request, repos, principal, invoice_id,
         lambda: ap_service.code_line(
@@ -742,6 +752,87 @@ def ap_code(
             gl_code=gl_code.strip() or None, tax_code=tax_code.strip() or None,
             category_id=uuid.UUID(category_id) if category_id.strip() else None,
             department=department.strip() or None, project_code=project_code.strip() or None,
+            description=description.strip() or None,
+            quantity=_dec(quantity), uom=uom.strip() or None, line_total=_dec(line_total),
+        ),
+    )
+
+
+@router.post("/ap/{invoice_id}/header")
+def ap_edit_header(
+    request: Request,
+    invoice_id: uuid.UUID,
+    doc_no: str = Form(""),
+    doc_date: str = Form(""),
+    total_amount: str = Form(""),
+    currency: str = Form(""),
+    po_ref: str = Form(""),
+    do_ref: str = Form(""),
+    vendor_name: str = Form(""),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Correct the OCR-read header (doc no / date / total / currency / refs / a
+    freshly-minted vendor's name) — every field feeds the CarbonNext handoff or the
+    duplicate-payment control (F-E item 12)."""
+    import datetime as _dt
+
+    def _dec(v: str):
+        try:
+            return Decimal(v.strip()) if v.strip() else None
+        except InvalidOperation:
+            return None
+
+    parsed_date = None
+    if doc_date.strip():
+        try:
+            parsed_date = _dt.date.fromisoformat(doc_date.strip())
+        except ValueError:
+            parsed_date = None
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.edit_header(
+            repos.session, invoice_id=invoice_id, editor=principal,
+            actor=_actor(principal),
+            doc_no=doc_no.strip() or None, doc_date=parsed_date,
+            total_amount=_dec(total_amount),
+            currency=(currency.strip().upper() or None),
+            po_ref=po_ref.strip() or None, do_ref=do_ref.strip() or None,
+            vendor_name=vendor_name.strip() or None,
+        ),
+    )
+
+
+@router.post("/ap/{invoice_id}/lines/add")
+def ap_add_line(
+    request: Request,
+    invoice_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Add an empty line — how a reviewer SPLITS a lump-filed bill into its real
+    lines so a mixed bill can forward only its carbon share (F-E item 11)."""
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.add_line(
+            repos.session, invoice_id=invoice_id, editor=principal,
+            actor=_actor(principal), line=ap_service.LineInput(description="(new line)"),
+        ),
+    )
+
+
+@router.post("/ap/{invoice_id}/lines/{line_id}/delete")
+def ap_delete_line(
+    request: Request,
+    invoice_id: uuid.UUID,
+    line_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.remove_line(
+            repos.session, line_id=line_id, editor=principal, actor=_actor(principal),
         ),
     )
 

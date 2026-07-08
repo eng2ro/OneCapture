@@ -12,6 +12,18 @@ from eclaim.db.models import ApInvoice, AppUser, Claim, DocumentIntake
 from eclaim.services import ap
 from eclaim.services import payables as payables_service
 
+def _cat_id(db_session):
+    """Any seeded category for this client — the coding gate requires every AP line
+    to carry an explicit category before submit/approve (F-E item 13)."""
+    from sqlalchemy import select as _sel
+
+    from eclaim.db.models import Category as _Cat
+    ids = db_session.info["principal"]
+    return db_session.execute(
+        _sel(_Cat.id).where(_Cat.client_id == ids["client"]).limit(1)
+    ).scalar_one()
+
+
 
 # --- staff reimbursement (an approved out-of-pocket claim) ------------------ #
 def _approved_out_of_pocket_claim(client, amount="100"):
@@ -64,7 +76,7 @@ def _approved_invoice(db_session, ids, total="300", filer_id=None):
     inv = ap.create_from_intake(db_session, intake=intake, actor="t")
     coder = _principal(ids, _user(db_session, ids, "pc@seed.test").id, "pc@seed.test")
     approver = _principal(ids, _user(db_session, ids, "pa@seed.test").id, "pa@seed.test")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="pc", gl_code="6000")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="pc", gl_code="6000", category_id=_cat_id(db_session))
     ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="pa")
     return inv
 
@@ -224,7 +236,7 @@ def test_mixed_currencies_are_not_summed_into_one_rm_figure(client, db_session):
     inv2 = ap.create_from_intake(db_session, intake=intake, actor="t")
     coder = _principal(ids, _user(db_session, ids, "pc2@seed.test").id, "pc2@seed.test")
     approver = _principal(ids, _user(db_session, ids, "pa2@seed.test").id, "pa2@seed.test")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv2.id)[0].id, coder=coder, actor="pc", gl_code="6000")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv2.id)[0].id, coder=coder, actor="pc", gl_code="6000", category_id=_cat_id(db_session))
     ap.approve(db_session, invoice_id=inv2.id, approver=approver, actor="pa")
 
     p = payables_service.payables(db_session, frozenset({ids["client"]}))

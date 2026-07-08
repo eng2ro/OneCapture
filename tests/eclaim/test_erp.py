@@ -12,6 +12,18 @@ from eclaim.auth.principal import Principal
 from eclaim.db.models import ApInvoice, AppUser, Vendor
 from eclaim.services import ap, erp
 
+def _cat_id(db_session):
+    """Any seeded category for this client — the coding gate requires every AP line
+    to carry an explicit category before submit/approve (F-E item 13)."""
+    from sqlalchemy import select as _sel
+
+    from eclaim.db.models import Category as _Cat
+    ids = db_session.info["principal"]
+    return db_session.execute(
+        _sel(_Cat.id).where(_Cat.client_id == ids["client"]).limit(1)
+    ).scalar_one()
+
+
 
 def _user(db_session, ids, email) -> AppUser:
     u = AppUser(firm_id=ids["firm"], email=email, display_name=email, base_role="partner")
@@ -43,7 +55,7 @@ def _approved(db_session, ids):
     inv = _invoice(db_session, ids)
     coder = _principal(ids, _user(db_session, ids, "ec@seed.test").id, "ec@seed.test")
     approver = _principal(ids, _user(db_session, ids, "ea@seed.test").id, "ea@seed.test")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="ec", gl_code="6000")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="ec", gl_code="6000", category_id=_cat_id(db_session))
     ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="ea")
     return inv
 

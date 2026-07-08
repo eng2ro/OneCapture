@@ -26,6 +26,18 @@ from eclaim.services import erp as erp
 from eclaim.services.claims import Repos
 from eclaim.services.sod import SoDViolation
 
+def _cat_id(db_session):
+    """Any seeded category for this client — the coding gate requires every AP line
+    to carry an explicit category before submit/approve (F-E item 13)."""
+    from sqlalchemy import select as _sel
+
+    from eclaim.db.models import Category as _Cat
+    ids = db_session.info["principal"]
+    return db_session.execute(
+        _sel(_Cat.id).where(_Cat.client_id == ids["client"]).limit(1)
+    ).scalar_one()
+
+
 
 def _user(db_session, ids, email) -> AppUser:
     u = AppUser(firm_id=ids["firm"], email=email, display_name=email, base_role="partner")
@@ -109,7 +121,7 @@ def test_release_hold_lets_a_false_positive_proceed(client, db_session):
     # and it now flows through to approval instead of dead-ending.
     coder = _principal(ids, _user(db_session, ids, "hc@seed.test").id, email="hc@seed.test")
     approver = _principal(ids, _user(db_session, ids, "ha@seed.test").id, email="ha@seed.test")
-    ap.code_line(db_session, line_id=ap.lines(db_session, dup.id)[0].id, coder=coder, actor="hc")
+    ap.code_line(db_session, line_id=ap.lines(db_session, dup.id)[0].id, coder=coder, actor="hc", category_id=_cat_id(db_session))
     ap.submit_for_approval(db_session, invoice_id=dup.id, actor="hc")
     ap.approve(db_session, invoice_id=dup.id, approver=approver, actor="ha")
     assert db_session.get(ApInvoice, dup.id).status == "approved"
@@ -131,7 +143,7 @@ def test_release_hold_returns_a_coded_invoice_to_coded(client, db_session):
     dup = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
     assert dup.status == "held"
     ap.code_line(db_session, line_id=ap.lines(db_session, dup.id)[0].id,
-                 coder=coder, actor="hbc", gl_code="6000")   # coding allowed while held
+                 coder=coder, actor="hbc", gl_code="6000", category_id=_cat_id(db_session))   # coding allowed while held
     released = ap.release_hold(db_session, invoice_id=dup.id, actor="mgr")
     assert released.status == "coded"
     assert released.coded_by_user_id == coder.user_id
@@ -208,7 +220,7 @@ def test_code_then_approve_by_a_different_user(client, db_session):
 
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
     line = ap.lines(db_session, inv.id)[0]
-    ap.code_line(db_session, line_id=line.id, coder=coder, actor="coder", gl_code="6000")
+    ap.code_line(db_session, line_id=line.id, coder=coder, actor="coder", gl_code="6000", category_id=_cat_id(db_session))
     assert db_session.get(ApInvoice, inv.id).status == "coded"
 
     ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="boss")
@@ -221,7 +233,7 @@ def test_coder_cannot_approve_their_own_invoice(client, db_session):
     coder = _principal(ids, _user(db_session, ids, "self@seed.test").id, email="self@seed.test")
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
     line = ap.lines(db_session, inv.id)[0]
-    ap.code_line(db_session, line_id=line.id, coder=coder, actor="self", gl_code="6000")
+    ap.code_line(db_session, line_id=line.id, coder=coder, actor="self", gl_code="6000", category_id=_cat_id(db_session))
 
     with pytest.raises(SoDViolation):
         ap.approve(db_session, invoice_id=inv.id, approver=coder, actor="self")
@@ -240,7 +252,7 @@ def test_denied_approval_written_in_own_txn_not_request_session(client, db_sessi
     ids = db_session.info["principal"]
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
     seed = _principal(ids, ids["user"], email="partner@seed.test")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=seed, actor="c")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=seed, actor="c", category_id=_cat_id(db_session))
 
     commits: list[int] = []
     monkeypatch.setattr(db_session, "commit", lambda: commits.append(1))
@@ -276,7 +288,7 @@ def test_filer_cannot_approve_even_when_someone_else_codes(client, db_session):
     filer = _principal(ids, ids["user"], email="partner@seed.test")   # = created_by
     coder = _principal(ids, _user(db_session, ids, "cx@seed.test").id, email="cx@seed.test")
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="filer")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="cx")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="cx", category_id=_cat_id(db_session))
 
     with pytest.raises(SoDViolation, match="filed"):
         ap.approve(db_session, invoice_id=inv.id, approver=filer, actor="filer")
@@ -287,7 +299,7 @@ def test_double_approve_is_rejected(client, db_session):
     coder = _principal(ids, _user(db_session, ids, "cc@seed.test").id, email="cc@seed.test")
     approver = _principal(ids, _user(db_session, ids, "aa@seed.test").id, email="aa@seed.test")
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="cc")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="cc", category_id=_cat_id(db_session))
     ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="aa")
     with pytest.raises(ap.IllegalApTransition):
         ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="aa")
@@ -324,9 +336,9 @@ def test_viewer_cannot_code_or_approve(client, db_session):
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
     line = ap.lines(db_session, inv.id)[0]
     with pytest.raises(SoDViolation):
-        ap.code_line(db_session, line_id=line.id, coder=viewer, actor="v", gl_code="6000")
+        ap.code_line(db_session, line_id=line.id, coder=viewer, actor="v", gl_code="6000", category_id=_cat_id(db_session))
     # Code it for real, then a viewer still cannot approve.
-    ap.code_line(db_session, line_id=line.id, coder=coder, actor="c", gl_code="6000")
+    ap.code_line(db_session, line_id=line.id, coder=coder, actor="c", gl_code="6000", category_id=_cat_id(db_session))
     with pytest.raises(SoDViolation):
         ap.approve(db_session, invoice_id=inv.id, approver=viewer, actor="v")
 
@@ -364,7 +376,7 @@ def test_submitter_is_recorded_and_cannot_approve(client, db_session):
     coder = _principal(ids, _user(db_session, ids, "sc@seed.test").id, email="sc@seed.test")
     submitter = _principal(ids, _user(db_session, ids, "ss@seed.test").id, email="ss@seed.test")
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="sc", gl_code="6000")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="sc", gl_code="6000", category_id=_cat_id(db_session))
     ap.submit_for_approval(db_session, invoice_id=inv.id, actor="ss", submitter=submitter)
 
     assert inv.submitted_by_user_id == submitter.user_id   # recorded
@@ -394,7 +406,7 @@ def test_ap_matrix_band_requires_partner(client, db_session):
     partner = _principal(ids, _user(db_session, ids, "p2@seed.test").id, role="partner", email="p2@seed.test")
 
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids, total="500"), actor="t")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="c")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="c", category_id=_cat_id(db_session))
 
     with pytest.raises(SoDViolation):
         ap.approve(db_session, invoice_id=inv.id, approver=manager, actor="m")   # too junior
@@ -423,7 +435,7 @@ def test_csv_export_of_approved_invoices(client, db_session):
     coder = _principal(ids, _user(db_session, ids, "c3@seed.test").id, email="c3@seed.test")
     approver = _principal(ids, _user(db_session, ids, "a3@seed.test").id, email="a3@seed.test")
     inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids, doc_no="INV-CSV"), actor="t")
-    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="c", gl_code="6000")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="c", gl_code="6000", category_id=_cat_id(db_session))
     ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="a")
 
     csv_text = erp.export_ap_csv(db_session, [db_session.get(ApInvoice, inv.id)])
@@ -473,3 +485,195 @@ def test_web_file_ap_from_holding_then_list(client, db_session):
     export = client.get("/ap/export.csv")
     assert export.status_code == 200
     assert export.headers["content-type"].startswith("text/csv")
+
+
+# --------------------------------------------------------------------------- #
+# AP carbon readiness (F-E items 9-13): the chain from OCR to a future handoff
+# --------------------------------------------------------------------------- #
+def _rich_intake(db_session, ids, **kw) -> DocumentIntake:
+    base = dict(
+        firm_id=ids["firm"], client_id=ids["client"], created_by_user_id=ids["user"],
+        document_type="vendor_invoice", routed_to="ap_holding",
+        vendor="Petronas Bulk", doc_no="INV-Q", total_amount=Decimal("530.00"),
+        currency="MYR", type_signals=[],
+        doc_date="26 SEP 2025", tax_amount=Decimal("30.00"), tax_code="SR",
+        quantity=Decimal("200"), unit="L", expense_type="fuel_diesel",
+    )
+    base.update(kw)
+    row = DocumentIntake(**base)
+    db_session.add(row)
+    db_session.flush()
+    return row
+
+
+def test_intake_keeps_and_invoice_inherits_the_full_ocr_read(client, db_session):
+    """F-E item 10: quantity/unit/date/tax were read by OCR then DISCARDED at the
+    divert step — every AP bill forwarded dateless and quantity-less. The intake now
+    keeps them and filing seeds them onto the invoice + its line."""
+    import datetime as _dt
+
+    ids = db_session.info["principal"]
+    intake = _rich_intake(db_session, ids)
+    inv = ap.create_from_intake(db_session, intake=intake, actor="t")
+
+    assert inv.doc_date == _dt.date(2025, 9, 26)          # parsed, not lost
+    assert inv.tax_amount == Decimal("30.00")
+    line = ap.lines(db_session, inv.id)[0]
+    assert line.quantity == Decimal("200")                # the litres survive filing
+    assert line.uom == "L"
+    assert line.tax_code == "SR"
+
+
+def test_coding_gate_blocks_uncategorized_approval(client, db_session):
+    """F-E item 13: every line needs an explicit category before submit/approve —
+    otherwise a carbon-relevant bill approves having contributed nothing to the
+    future handoff. Enforced on BOTH paths (approve accepts coded directly)."""
+    ids = db_session.info["principal"]
+    coder = _principal(ids, _user(db_session, ids, "cg@seed.test").id, email="cg@seed.test")
+    approver = _principal(ids, _user(db_session, ids, "ca@seed.test").id, email="ca@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_rich_intake(db_session, ids, doc_no="INV-G"), actor="t")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id,
+                 coder=coder, actor="cg", gl_code="6000")      # NO category
+    with pytest.raises(ap.IllegalApTransition, match="category"):
+        ap.submit_for_approval(db_session, invoice_id=inv.id, actor="cg")
+    with pytest.raises(ap.IllegalApTransition, match="category"):
+        ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="ca")
+    assert db_session.get(ApInvoice, inv.id).status == "coded"
+
+
+def test_coding_snapshots_carbon_relevance(client, db_session):
+    """Like claim_line at classify time: assigning a category snapshots its
+    carbon_relevant so a later category toggle cannot rewrite which lines forward."""
+    from eclaim.db.models import Category
+
+    ids = db_session.info["principal"]
+    coder = _principal(ids, _user(db_session, ids, "cs@seed.test").id, email="cs@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_rich_intake(db_session, ids, doc_no="INV-S"), actor="t")
+    cat = db_session.get(Category, _cat_id(db_session))
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id,
+                 coder=coder, actor="cs", category_id=cat.id)
+    line = ap.lines(db_session, inv.id)[0]
+    assert line.carbon_relevant == cat.carbon_relevant
+
+
+def test_header_edit_corrects_ocr_and_rearms_the_duplicate_check(client, db_session):
+    """F-E item 12: a misread doc_no defeated the double-pay control with no way to
+    correct it. The header edit fixes the OCR fields and RE-RUNS the duplicate
+    check — a corrected identity that now collides goes on hold."""
+    ids = db_session.info["principal"]
+    editor = _principal(ids, ids["user"], email="partner@seed.test")
+    ap.create_from_intake(db_session, intake=_rich_intake(db_session, ids, doc_no="INV-77"), actor="t")
+    misread = ap.create_from_intake(
+        db_session, intake=_rich_intake(db_session, ids, doc_no="INV-7Z"), actor="t"
+    )
+    assert misread.status == "captured"                 # misread doc_no dodged the hold
+
+    fixed = ap.edit_header(
+        db_session, invoice_id=misread.id, editor=editor, actor="p", doc_no="INV-77"
+    )
+    assert fixed.doc_no == "INV-77"
+    assert fixed.status == "held"                       # correction re-armed the control
+    assert "duplicate" in (fixed.hold_reason or "").lower()
+    chain = Repos.for_session(db_session).audit.chain("ap_invoice", misread.id)
+    assert any(e.event_type == "ap_header_edited" for e in chain)
+
+
+def test_header_edit_locked_after_approval(client, db_session):
+    ids = db_session.info["principal"]
+    editor = _principal(ids, ids["user"], email="partner@seed.test")
+    coder = _principal(ids, _user(db_session, ids, "hl@seed.test").id, email="hl@seed.test")
+    approver = _principal(ids, _user(db_session, ids, "ha2@seed.test").id, email="ha2@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_rich_intake(db_session, ids, doc_no="INV-L"), actor="t")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id,
+                 coder=coder, actor="hl", category_id=_cat_id(db_session))
+    ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="ha2")
+    with pytest.raises(ap.IllegalApTransition):
+        ap.edit_header(db_session, invoice_id=inv.id, editor=editor, actor="p", doc_no="X")
+
+
+def test_vendor_rename_only_while_sole_bill(client, db_session):
+    """A misread vendor name silently mints a wrong vendor master that attracts
+    future bills. Renaming is allowed only while this invoice is the vendor's sole
+    bill; an established vendor needs an admin decision."""
+    ids = db_session.info["principal"]
+    editor = _principal(ids, ids["user"], email="partner@seed.test")
+    inv = ap.create_from_intake(
+        db_session, intake=_rich_intake(db_session, ids, vendor="Petronsa", doc_no="INV-V1"), actor="t"
+    )
+    ap.edit_header(db_session, invoice_id=inv.id, editor=editor, actor="p", vendor_name="Petronas")
+    from eclaim.db.models import Vendor as _V
+
+    assert db_session.get(_V, inv.vendor_id).name == "Petronas"
+
+    # A second bill lands on the vendor - renaming is now refused.
+    inv2 = ap.create_from_intake(
+        db_session, intake=_rich_intake(db_session, ids, vendor="Petronas", doc_no="INV-V2"), actor="t"
+    )
+    with pytest.raises(ap.ApError, match="other bill"):
+        ap.edit_header(db_session, invoice_id=inv2.id, editor=editor, actor="p", vendor_name="Petronas Bhd")
+
+
+def test_split_a_lump_bill_into_lines(client, db_session):
+    """F-E item 11: a filed bill is one lump line, so a mixed carbon/non-carbon bill
+    could only forward 100% or 0% — the anti-pattern Appendix F forbids. Splitting
+    lets the coder carve the carbon share out."""
+    ids = db_session.info["principal"]
+    editor = _principal(ids, ids["user"], email="partner@seed.test")
+    coder = _principal(ids, _user(db_session, ids, "sp@seed.test").id, email="sp@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_rich_intake(db_session, ids, doc_no="INV-SP"), actor="t")
+
+    lump = ap.lines(db_session, inv.id)[0]
+    ap.code_line(db_session, line_id=lump.id, coder=coder, actor="sp",
+                 description="Diesel 200L", quantity=Decimal("200"), uom="L",
+                 line_total=Decimal("500.00"), category_id=_cat_id(db_session))
+    new = ap.add_line(db_session, invoice_id=inv.id, editor=editor, actor="p",
+                      line=ap.LineInput(description="Delivery charge", line_total=Decimal("30.00")))
+    assert new.line_no == 2
+    rows = ap.lines(db_session, inv.id)
+    assert len(rows) == 2
+    assert sum(r.line_total for r in rows) == inv.total_amount   # lines re-add to the doc
+
+    # the last line can never be removed; a second one can.
+    ap.remove_line(db_session, line_id=new.id, editor=editor, actor="p")
+    assert len(ap.lines(db_session, inv.id)) == 1
+    with pytest.raises(ap.ApError, match="at least one line"):
+        ap.remove_line(db_session, line_id=lump.id, editor=editor, actor="p")
+
+
+def test_handoff_schema_accepts_an_ap_parent(client, db_session):
+    """F-E item 9: carbon_handoff previously REQUIRED a claim parent — an AP row
+    could not be inserted at all. The parent CHECK now accepts exactly one parent
+    pair (claim+line XOR ap_invoice+ap_line) and rejects mixed parents."""
+    from eclaim.db.models import CarbonHandoff, ReleaseBatch
+
+    ids = db_session.info["principal"]
+    coder = _principal(ids, _user(db_session, ids, "hp@seed.test").id, email="hp@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_rich_intake(db_session, ids, doc_no="INV-H"), actor="t")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id,
+                 coder=coder, actor="hp", category_id=_cat_id(db_session))
+    line = ap.lines(db_session, inv.id)[0]
+
+    batch = ReleaseBatch(
+        firm_id=ids["firm"], client_id=ids["client"], source_type="eclaim",
+        created_by="t", batch_hash="x" * 64, record_count=1, status="released",
+    )
+    db_session.add(batch)
+    db_session.flush()
+    db_session.add(CarbonHandoff(
+        firm_id=ids["firm"], client_id=ids["client"],
+        ap_invoice_id=inv.id, ap_line_id=line.id, release_batch_id=batch.id,
+        category_name="Fuel", amount=Decimal("500.00"), currency="MYR",
+        quantity=Decimal("200"), unit="L", doc_no=inv.doc_no,
+        doc_gross_total=inv.total_amount,
+        direction="forward", idempotency_key="ap-handoff-test", carbon_ref="CARB-APTEST",
+    ))
+    db_session.flush()                                   # schema-ready: no IntegrityError
+
+    with pytest.raises(IntegrityError):                  # mixed parents rejected
+        db_session.add(CarbonHandoff(
+            firm_id=ids["firm"], client_id=ids["client"],
+            ap_invoice_id=inv.id, ap_line_id=None, release_batch_id=batch.id,
+            direction="forward", idempotency_key="ap-handoff-bad", carbon_ref="X",
+        ))
+        db_session.flush()
+    db_session.rollback()

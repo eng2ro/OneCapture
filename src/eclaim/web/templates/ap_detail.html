@@ -42,6 +42,28 @@
         <div><span class="l">PO ref</span><span class="v mono">{{ invoice.po_ref or '—' }}</span></div>
         <div><span class="l">ERP key</span><span class="v mono">{{ invoice.erp_doc_entry or '— not posted' }}</span></div>
       </div>
+      {% if can_act and invoice.status in ('captured', 'coded', 'held') %}
+      <details style="margin-top:14px;">
+        <summary style="cursor:pointer;font-size:12px;color:var(--graphite);"><i class="ti ti-edit"></i> Correct the OCR-read header</summary>
+        <form method="post" action="/ap/{{ invoice.id }}/header" style="margin-top:10px;">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <div class="field-row">
+            <div><label class="label-tiny">Doc no</label><input class="field" name="doc_no" value="{{ invoice.doc_no or '' }}"></div>
+            <div><label class="label-tiny">Doc date</label><input class="field" type="date" name="doc_date" value="{{ invoice.doc_date if invoice.doc_date else '' }}"></div>
+          </div>
+          <div class="field-row" style="margin-top:8px;">
+            <div><label class="label-tiny">Total</label><input class="field" name="total_amount" value="{{ invoice.total_amount or '' }}"></div>
+            <div><label class="label-tiny">Currency</label><input class="field" name="currency" value="{{ invoice.currency or '' }}" maxlength="3" style="text-transform:uppercase;"></div>
+          </div>
+          <div class="field-row" style="margin-top:8px;">
+            <div><label class="label-tiny">PO ref</label><input class="field" name="po_ref" value="{{ invoice.po_ref or '' }}"></div>
+            <div><label class="label-tiny">Vendor name (new vendors only)</label><input class="field" name="vendor_name" value="{{ vendor.name if vendor else '' }}" title="Renames the vendor only while this is its sole bill — fixing a misread before it attracts other bills"></div>
+          </div>
+          <div style="margin-top:10px;"><button class="btn" type="submit"><i class="ti ti-check"></i> Save header</button>
+            <span class="page-sub" style="font-size:11px;">A corrected doc no re-runs the duplicate check.</span></div>
+        </form>
+      </details>
+      {% endif %}
     </div>
 
     <div class="card">
@@ -82,7 +104,8 @@
     {% set cat_name = {} %}{% for c in categories %}{% set _ = cat_name.__setitem__(c.id, c.name) %}{% endfor %}
     <table class="data" style="margin-top:12px;">
       <thead>
-        <tr><th>#</th><th>Description</th><th style="text-align:right;">Amount</th><th>GL</th><th>Tax</th>
+        <tr><th>#</th><th>Description</th><th style="text-align:right;">Qty</th><th>Unit</th>
+            <th style="text-align:right;">Amount</th><th>GL</th><th>Tax</th>
             <th>Carbon category</th><th>Dept</th>{% if can_act %}<th>Code</th>{% endif %}</tr>
       </thead>
       <tbody>
@@ -90,10 +113,16 @@
         <tr>
           <td style="color:var(--faint);">{{ ln.line_no }}</td>
           <td>{{ ln.description or '—' }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ ln.quantity if ln.quantity is not none else '—' }}</td>
+          <td>{{ ln.uom or '—' }}</td>
           <td style="text-align:right;font-variant-numeric:tabular-nums;">{% if ln.line_total is not none %}{{ '%.2f' | format(ln.line_total) }}{% else %}—{% endif %}</td>
           <td class="mono">{{ ln.gl_code or '—' }}</td>
           <td class="mono">{{ ln.tax_code or '—' }}</td>
-          <td>{{ cat_name.get(ln.category_id, '—') if ln.category_id else '—' }}</td>
+          <td>{{ cat_name.get(ln.category_id, '—') if ln.category_id else '—' }}
+            {% if ln.category_id and ln.carbon_relevant and ln.quantity is none %}
+            <span class="page-sub" title="Carbon-relevant with no activity quantity — CarbonNext will fall back to a spend-based estimate. Fuel/energy bills usually print the quantity."><i class="ti ti-leaf"></i> qty?</span>
+            {% endif %}
+          </td>
           <td>{{ ln.department or '—' }}</td>
           {% if can_act %}
           <td>
@@ -101,6 +130,14 @@
             <form method="post" action="/ap/{{ invoice.id }}/code" class="code-form">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <input type="hidden" name="line_id" value="{{ ln.id }}">
+              <input class="field" name="description" placeholder="Description" value="{{ ln.description or '' }}" style="width:130px;">
+              <input class="field" name="quantity" placeholder="Qty" value="{{ ln.quantity or '' }}" style="width:70px;" title="Activity quantity — what CarbonNext computes emissions from (litres / kWh / kg)">
+              <select class="field" name="uom" style="width:64px;" title="Unit">
+                <option value="" {{ 'selected' if not ln.uom else '' }}>—</option>
+                {% for u in ['L', 'kWh', 'm3', 'km', 'kg'] %}<option value="{{ u }}" {{ 'selected' if ln.uom == u else '' }}>{{ u }}</option>{% endfor %}
+                {% if ln.uom and ln.uom not in ['L', 'kWh', 'm3', 'km', 'kg'] %}<option value="{{ ln.uom }}" selected>{{ ln.uom }}</option>{% endif %}
+              </select>
+              <input class="field" name="line_total" placeholder="Amount" value="{{ ln.line_total or '' }}" style="width:80px;">
               <input class="field" name="gl_code" placeholder="GL" value="{{ ln.gl_code or '' }}" style="width:72px;">
               <input class="field" name="tax_code" placeholder="Tax" value="{{ ln.tax_code or '' }}" style="width:64px;">
               <select class="field" name="category_id" style="width:150px;">
@@ -110,6 +147,12 @@
               <input class="field" name="department" placeholder="Dept" value="{{ ln.department or '' }}" style="width:74px;">
               <button class="btn" type="submit" style="height:32px;">Save</button>
             </form>
+            {% if lines | length > 1 %}
+            <form method="post" action="/ap/{{ invoice.id }}/lines/{{ ln.id }}/delete" style="display:inline;" onsubmit="return confirm('Remove line {{ ln.line_no }}?');">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button class="btn" type="submit" style="height:32px;font-size:11px;" title="Remove this line"><i class="ti ti-trash"></i></button>
+            </form>
+            {% endif %}
             {% else %}<span style="color:var(--faint);">locked</span>{% endif %}
           </td>
           {% endif %}
@@ -117,6 +160,18 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if can_act and invoice.status in ('captured', 'coded', 'held') %}
+    {% set lines_sum = lines | map(attribute='line_total') | select('ne', None) | sum %}
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 22px 16px;">
+      <form method="post" action="/ap/{{ invoice.id }}/lines/add">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn" type="submit" title="Split this bill: add a line so a mixed carbon / non-carbon bill forwards only its carbon share"><i class="ti ti-plus"></i> Add line (split the bill)</button>
+      </form>
+      {% if invoice.total_amount is not none and lines_sum != invoice.total_amount %}
+      <span class="page-sub" title="The lines should add up to the document total"><i class="ti ti-alert-triangle"></i> Lines {{ '%.2f' | format(lines_sum) }} ≠ document total {{ '%.2f' | format(invoice.total_amount) }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
 
   <div class="card" style="margin-top:16px;">

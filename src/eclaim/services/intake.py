@@ -142,6 +142,15 @@ def record_intake(
         doc_no=extraction.doc_no,
         total_amount=extraction.total_amount,
         currency=extraction.currency,
+        # The rest of the OCR read (F-E item 10): previously discarded here, which
+        # left every AP invoice dateless and quantity-less — the activity data
+        # CarbonNext computes CO2e from.
+        doc_date=extraction.date,
+        tax_amount=extraction.tax_amount,
+        tax_code=extraction.tax_code,
+        quantity=extraction.quantity,
+        unit=extraction.unit,
+        expense_type=extraction.expense_type,
     )
     session.add(intake)
     session.flush()

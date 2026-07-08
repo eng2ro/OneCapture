@@ -656,6 +656,13 @@ class CarbonHandoff(Base):
         CheckConstraint(
             "direction IN ('forward','reversal')", name="ck_carbon_handoff_direction"
         ),
+        CheckConstraint(
+            "(claim_id IS NOT NULL AND line_id IS NOT NULL "
+            "AND ap_invoice_id IS NULL AND ap_line_id IS NULL) OR "
+            "(ap_invoice_id IS NOT NULL AND ap_line_id IS NOT NULL "
+            "AND claim_id IS NULL AND line_id IS NULL)",
+            name="ck_carbon_handoff_parent",
+        ),
         UniqueConstraint("idempotency_key", name="uq_carbon_handoff_idem"),
         Index("ix_carbon_handoff_client", "client_id"),
         Index("ix_carbon_handoff_firm", "firm_id"),
@@ -666,8 +673,13 @@ class CarbonHandoff(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
     firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
     client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
-    claim_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("claim.id"), nullable=False)
-    line_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("claim_line.id"), nullable=False)
+    # Parent: EITHER an e-Claim line (claim_id + line_id) OR an AP invoice line
+    # (ap_invoice_id + ap_line_id) — exactly one pair, enforced by
+    # ck_carbon_handoff_parent (migration 0033).
+    claim_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("claim.id"))
+    line_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("claim_line.id"))
+    ap_invoice_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ap_invoice.id"))
+    ap_line_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ap_invoice_line.id"))
     release_batch_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("release_batch.id"), nullable=False
     )
@@ -944,6 +956,15 @@ class DocumentIntake(Base):
     doc_no: Mapped[str | None] = mapped_column(String)
     total_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     currency: Mapped[str | None] = mapped_column(String)
+    # The rest of the OCR read (migration 0033): previously discarded at the divert
+    # step, which left every AP invoice dateless and quantity-less — the exact
+    # activity data CarbonNext computes CO2e from (F-E item 10).
+    doc_date: Mapped[str | None] = mapped_column(String)
+    tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    tax_code: Mapped[str | None] = mapped_column(String)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(14, 4))
+    unit: Mapped[str | None] = mapped_column(String)
+    expense_type: Mapped[str | None] = mapped_column(String)
 
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -1078,6 +1099,9 @@ class ApInvoiceLine(Base):
     gl_code: Mapped[str | None] = mapped_column(String)
     tax_code: Mapped[str | None] = mapped_column(String)
     category_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("category.id"))
+    # Snapshot of category.carbon_relevant at coding time (migration 0033) — like
+    # claim_line, so a later category toggle never rewrites which lines forward.
+    carbon_relevant: Mapped[bool | None] = mapped_column()
     department: Mapped[str | None] = mapped_column(String)
     project_code: Mapped[str | None] = mapped_column(String)
 
