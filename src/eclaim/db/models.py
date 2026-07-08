@@ -974,7 +974,8 @@ class ApInvoice(Base):
 
     Lifecycle: ``captured → coded → pending_approval → approved → posted → paid``
     (plus ``held`` / ``rejected``). Separation of duties is enforced at BOTH the DB
-    (``ck_ap_invoice_sod``: coder ≠ approver) and the service layer. ``erp_doc_entry``
+    (``ck_ap_invoice_sod``: filer, coder and submitter each ≠ approver, null-safe)
+    and the service layer. ``erp_doc_entry``
     is the ERP's key once posted; ERP posting itself is a stub in this phase (a CSV
     export). ``idempotency_key`` blocks a double-insert of the same source document."""
 
@@ -985,8 +986,12 @@ class ApInvoice(Base):
             name="ck_ap_invoice_status",
         ),
         CheckConstraint(
-            "coded_by_user_id IS NULL OR approved_by_user_id IS NULL "
-            "OR coded_by_user_id <> approved_by_user_id",
+            "(coded_by_user_id IS NULL OR approved_by_user_id IS NULL "
+            "OR coded_by_user_id <> approved_by_user_id) AND "
+            "(created_by_user_id IS NULL OR approved_by_user_id IS NULL "
+            "OR created_by_user_id <> approved_by_user_id) AND "
+            "(submitted_by_user_id IS NULL OR approved_by_user_id IS NULL "
+            "OR submitted_by_user_id <> approved_by_user_id)",
             name="ck_ap_invoice_sod",
         ),
         Index("ix_ap_invoice_firm_client", "firm_id", "client_id"),
@@ -1020,6 +1025,7 @@ class ApInvoice(Base):
     idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
 
     coded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
+    submitted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
     approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
     approved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     hold_reason: Mapped[str | None] = mapped_column(String)

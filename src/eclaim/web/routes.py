@@ -742,7 +742,8 @@ def ap_submit(
     return _ap_action(
         request, repos, principal, invoice_id,
         lambda: ap_service.submit_for_approval(
-            repos.session, invoice_id=invoice_id, actor=_actor(principal)
+            repos.session, invoice_id=invoice_id, actor=_actor(principal),
+            submitter=principal,
         ),
     )
 

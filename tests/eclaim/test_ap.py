@@ -290,6 +290,39 @@ def test_db_check_blocks_coder_equals_approver(client, db_session):
     db_session.rollback()
 
 
+def test_db_check_blocks_filer_equals_approver(client, db_session):
+    """F5 parity: the widened ck_ap_invoice_sod backs the filer≠approver service rule
+    at the database, like e-Claim's ck_claim_sod."""
+    ids = db_session.info["principal"]
+    inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    inv.created_by_user_id = ids["user"]
+    inv.coded_by_user_id = _user(db_session, ids, "dbcoder@seed.test").id
+    inv.approved_by_user_id = ids["user"]        # approver == filer → DB rejects
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_submitter_is_recorded_and_cannot_approve(client, db_session):
+    """F5 residual: the SUBMITTER of a coded invoice is a preparer too — recorded on
+    the invoice and barred from approving it, at the service and at the DB."""
+    ids = db_session.info["principal"]
+    coder = _principal(ids, _user(db_session, ids, "sc@seed.test").id, email="sc@seed.test")
+    submitter = _principal(ids, _user(db_session, ids, "ss@seed.test").id, email="ss@seed.test")
+    inv = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id, coder=coder, actor="sc", gl_code="6000")
+    ap.submit_for_approval(db_session, invoice_id=inv.id, actor="ss", submitter=submitter)
+
+    assert inv.submitted_by_user_id == submitter.user_id   # recorded
+    with pytest.raises(SoDViolation, match="submitted"):
+        ap.approve(db_session, invoice_id=inv.id, approver=submitter, actor="ss")
+    # And the DB backstop: submitter == approver is rejected even if the guard were bypassed.
+    inv.approved_by_user_id = submitter.user_id
+    with pytest.raises(IntegrityError):
+        db_session.flush()
+    db_session.rollback()
+
+
 # --------------------------------------------------------------------------- #
 # Module-scoped approval matrix
 # --------------------------------------------------------------------------- #

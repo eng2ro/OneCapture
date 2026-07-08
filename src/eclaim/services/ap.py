@@ -246,16 +246,25 @@ def code_line(
     return invoice
 
 
-def submit_for_approval(session: Session, *, invoice_id: uuid.UUID, actor: str) -> ApInvoice:
+def submit_for_approval(
+    session: Session, *, invoice_id: uuid.UUID, actor: str,
+    submitter: Principal | None = None,
+) -> ApInvoice:
     """Send a CODED invoice for approval (→ ``pending_approval``). Only a coded invoice
     qualifies (F5): accepting ``captured`` let an uncoded bill reach approval with no
-    coder on record, which the SoD self-approval check then couldn't catch."""
+    coder on record, which the SoD self-approval check then couldn't catch.
+
+    The submitter is RECORDED (``submitted_by_user_id``) and becomes a third preparer
+    role the SoD gate compares at approval — filer, coder and submitter are all barred
+    from approving, at the service AND via ``ck_ap_invoice_sod`` at the DB."""
     invoice = get_invoice(session, invoice_id)
     if invoice.status != "coded":
         raise IllegalApTransition(
             f"only a coded invoice can be sent for approval (status {invoice.status!r})"
         )
     invoice.status = "pending_approval"
+    if submitter is not None:
+        invoice.submitted_by_user_id = submitter.user_id
     _audit(session, invoice, "ap_submitted", actor, {})
     session.flush()
     return invoice
@@ -284,6 +293,11 @@ def check_can_approve_invoice(
         raise SoDViolation("the user who coded an invoice cannot approve it")
     if invoice.created_by_user_id is not None and invoice.created_by_user_id == approver.user_id:
         raise SoDViolation("the user who filed an invoice cannot approve it")
+    if (
+        invoice.submitted_by_user_id is not None
+        and invoice.submitted_by_user_id == approver.user_id
+    ):
+        raise SoDViolation("the user who submitted an invoice for approval cannot approve it")
     amount = invoice.total_amount
     if (
         amount is not None and approver.authority_limit is not None
