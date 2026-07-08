@@ -50,6 +50,22 @@
 > (bare 422 alert otherwise); comment the latent streamed-response edge in
 > `api/limits.py:74-87`; note upload-concurrency/proxy cap as a B8 deploy item.
 >
+> ### ROUND-5 AUDIT + FIXES — 2026-07-07 (F1–F9, F-B and 8 extra commits)
+> All 18 builder commits (F1–F9, F-B, plus 8 unrequested extras) were
+> re-verified by 3 adversarial agents. F1–F4, F6, F8, F9, F-B: DONE. New
+> findings were then FIXED in 7 commits (93f45f7..this): OCR NaN/Infinity +
+> junk-tax crash paths; the two HIGH payment traps (paid-before-release
+> stranded the CarbonNext handoff / paid AP bills dropped out of the CSV
+> export); settlement SoD (maker may not record payment) + AP row lock;
+> per-currency payables totals; quotation/PO compelled false declaration;
+> AP submitter tracked + ck_ap_invoice_sod widened (migration 0031); admin
+> UI can set the matrix module + both direction isolations pinned;
+> suppressed duplicate captures audited + stale pending rows upgraded;
+> async mixed-upload diverted banner; F6/F8 branch pins.
+> Suite: **502 passed, 0 skipped.** Remaining build item: **Appendix E**
+> (approvals inbox + switching — feature, not a bug). Launch gates (owner
+> actions) unchanged.
+>
 > ### ROUND-3 VERIFICATION — 2026-07-07 (R1–R5 + C1 + C2, pre-merge)
 > Suite: **427 passed, 0 skipped** (verified twice). Verdicts: R1, R4/R5,
 > C2-domain-schema — ✅ DONE. R2, R3, C1, C2-controls — ⚠️ PARTIAL.
