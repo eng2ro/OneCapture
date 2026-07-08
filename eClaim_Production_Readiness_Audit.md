@@ -675,6 +675,17 @@ Every carbon-relevant line posted to CarbonNext must carry:
 
 ## F-E. Field-study gap list (fix before wiring the real post)
 
+> **STATUS 2026-07-07 (evening):** items 1–5 (handoff net/tax/base/department/
+> resolved cost centre/ISO date; currency + expense_type verify inputs; kg unit
+> + tolerant unit coercion), 9–13 (the AP chain rebuild: migration 0033, intake
+> keeps the full read, line split/edit UI, header editor with duplicate
+> re-check, coding gate, carbon_relevant snapshot, handoff AP parents) and 14
+> (natural-gas category, petrol factor/rule/ownership) are FIXED and pushed —
+> suite 515 green. Still open: item 6 (clear-to-NULL edits), item 7 (e-Claim
+> release warning on category-NULL carbon lines), item 8 (ERP Sync payload
+> columns — build when wiring the real post), and coverage view including AP
+> (when the AP handoff wires).
+
 **e-Claim (chain mostly COMPLETE — quantity/unit fixed 2026-07-07):**
 1. `carbon_handoff` lacks `net_amount`/`tax_amount`/`base_amount` columns — the
    F-C "we can send both" promise is unfulfillable (migration + release/reverse).
