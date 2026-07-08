@@ -126,6 +126,17 @@ replace "endpoint / payload" items with "target table(s) + column mapping".
           amounts? We can send both; tell us which you use.
       [ ] Reversals: corrections arrive as negative-amount records marked
           direction='reversal' (never edits of prior records) — supported?
+      [ ] REVERSAL DISPOSITION (owner design 2026-07-08): when we send a
+          reversal, does CarbonNext check ITS OWN state of the original and
+          respond with a disposition we can store?
+            - original not yet approved on your side -> accepted (nets out)
+            - original already approved -> pending_approval (your carbon
+              manager approves the reversal in YOUR queue)
+            - period locked / report published -> adjusted_current_period
+              (closed periods never reopen; you book an adjustment in the
+              open period — the credit-note pattern for carbon)
+          If you don't have record-approval / period-lock states, tell us
+          what you do have — we will map to it.
       [ ] Do you dedup on your side across our channels (e-Claim / ERP Sync /
           AP invoices), or do you rely fully on our idempotency keys?
 [ ] Units & conventions:

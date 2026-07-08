@@ -832,6 +832,36 @@ Sequencing: F-B does NOT block Appendix E (E is all pre-release; the handoff
 fires at release). F-B + the F-C answers DO gate the AP carbon handoff wiring
 and the real CarbonNext client.
 
+## F-F. Cross-system reversal control (owner design, 2026-07-08 — DO NOT build
+## until CarbonNext confirms the disposition API)
+
+> Owner decision: a reversal is only AUTOMATIC while the downstream system has
+> not committed to the data. After that, the correction becomes a new
+> forward-going document — never a rewrite of theirs.
+
+1. **CarbonNext reversals carry a DISPOSITION** returned by their API, based on
+   THEIR state of the original record:
+   - not yet approved there → `accepted` (auto-reverse nets out silently);
+   - already approved by their carbon manager → `pending_approval` (the
+     reversal enters CARBONNEXT's approval queue; OneCapture displays
+     "reversal awaiting CarbonNext approval");
+   - period locked / report published → `adjusted_current_period` (closed
+     periods are never reopened; CarbonNext books an adjustment in the open
+     period — the accounting CN pattern applied to carbon).
+   OneCapture stores the disposition on the reversal handoff row.
+2. **ERP-posted bills correct via CREDIT NOTE, never reversal**: once
+   erp_doc_entry exists (or paid), no un-posting anywhere. The CN is raised in
+   the ERP (manual day one; `push_credit_note` connector seam later) and its
+   reference is recorded against the invoice (audited); when the AP carbon
+   handoff exists, the CN triggers the carbon reversal flow (which then
+   follows rule 1's dispositions).
+3. **Local tightening (build when 1 is confirmed):** `reverse` requires an
+   approver-level role + a MANDATORY reason; the reason rides the reversal
+   record and the audit event.
+
+Gated on the F-C answer below; nothing to build until the CarbonNext
+disposition contract is confirmed.
+
 ## F-D. The CarbonNext line payload — field contract v1 (field study, 2026-07-07)
 
 Every carbon-relevant line posted to CarbonNext must carry:
