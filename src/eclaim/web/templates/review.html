@@ -506,8 +506,8 @@
                   <div><label class="label-tiny">Unit</label>
                     <select class="field" name="unit">
                       <option value="" {{ 'selected' if not ln.unit else '' }}>—</option>
-                      {% for u in ['L', 'kWh', 'm3', 'km'] %}<option value="{{ u }}" {{ 'selected' if ln.unit == u else '' }}>{{ u }}</option>{% endfor %}
-                      {% if ln.unit and ln.unit not in ['L', 'kWh', 'm3', 'km'] %}<option value="{{ ln.unit }}" selected>{{ ln.unit }}</option>{% endif %}
+                      {% for u in ['L', 'kWh', 'm3', 'km', 'kg'] %}<option value="{{ u }}" {{ 'selected' if ln.unit == u else '' }}>{{ u }}</option>{% endfor %}
+                      {% if ln.unit and ln.unit not in ['L', 'kWh', 'm3', 'km', 'kg'] %}<option value="{{ ln.unit }}" selected>{{ ln.unit }}</option>{% endif %}
                     </select>
                   </div>
                 </div>

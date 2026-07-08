@@ -123,6 +123,22 @@ def test_coerce_junk_tax_fields_never_kill_the_read():
     assert Extraction.model_validate(data).tax_amount is None
 
 
+def test_coerce_unknown_unit_to_none_does_not_kill_the_read():
+    """unit is a strict Literal — a model answering 'gal'/'litre' previously raised
+    and lost the whole page (F4 class). Unknown units drop to None (quantity
+    survives for the reviewer); case variants normalize; kg is now valid."""
+    for junk in ("gal", "litre", "units"):
+        data = {"unit": junk, "quantity": "10"}
+        _coerce_classification(data)
+        assert data["unit"] is None, junk
+        assert Extraction.model_validate(data).quantity == Decimal("10")
+    for variant, want in (("KG", "kg"), ("l", "L"), ("KWH", "kWh"), ("kg", "kg")):
+        data = {"unit": variant}
+        _coerce_classification(data)
+        assert data["unit"] == want, variant
+        assert Extraction.model_validate(data).unit == want
+
+
 def test_coerce_drops_impossible_tax():
     # negative tax, and tax exceeding the document gross, are OCR errors — dropped so
     # the derived net can never go negative without a human keying it deliberately.

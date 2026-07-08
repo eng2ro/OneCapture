@@ -23,7 +23,7 @@ Extract this document as JSON with exactly these keys:
 vendor (string), doc_no (string|null), date (string|null), currency (string|null),
 total_amount (number|null), tax_amount (number|null), tax_code (string|null),
 expense_type ("fuel_diesel"|"fuel_petrol"|"electricity"|
-"natural_gas"|"air_travel"|"other"), quantity (number|null), unit ("L"|"kWh"|"m3"|"km"|null),
+"natural_gas"|"air_travel"|"other"), quantity (number|null), unit ("L"|"kWh"|"m3"|"km"|"kg"|null),
 confidence (number 0..1),
 document_type ("expense_receipt"|"vendor_invoice"|"delivery_order"|"quotation"|"purchase_order"|"unknown"),
 type_confidence (number 0..1),
@@ -74,6 +74,8 @@ _VALID_DOC_TYPES = {
     "quotation", "purchase_order", "unknown",
 }
 
+_VALID_UNITS = {"L", "kWh", "m3", "km", "kg"}
+
 
 def _drop_bad_decimal(data: dict, key: str, *, nonneg: bool = False) -> Decimal | None:
     """Normalize one numeric field IN PLACE: unparseable, non-finite (``NaN``/
@@ -118,6 +120,14 @@ def _coerce_classification(data: dict) -> None:
         data["type_signals"] = [str(s)[:120] for s in signals if str(s).strip()][:12]
     elif signals is not None:
         data.pop("type_signals", None)
+    # unit is a strict Literal downstream — a model answering "gal"/"litre"/"KG"
+    # previously raised ValidationError → OcrError → the WHOLE page read failed
+    # (the F4 class again). Normalize case-insensitively; unknown units drop to
+    # None (quantity survives; the reviewer fixes the unit on the verify form).
+    u = data.get("unit")
+    if u is not None:
+        match = next((v for v in _VALID_UNITS if v.lower() == str(u).strip().lower()), None)
+        data["unit"] = match
     _drop_bad_decimal(data, "type_confidence", nonneg=True)
     _drop_bad_decimal(data, "confidence", nonneg=True)
     _drop_bad_decimal(data, "quantity")

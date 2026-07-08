@@ -10,7 +10,8 @@ from pydantic import BaseModel, ConfigDict
 ExpenseType = Literal[
     "fuel_diesel", "fuel_petrol", "electricity", "natural_gas", "air_travel", "other"
 ]
-Unit = Literal["L", "kWh", "m3", "km"]
+# kg covers refrigerant top-ups and LPG cylinder purchases (Scope-1 staples).
+Unit = Literal["L", "kWh", "m3", "km", "kg"]
 
 # What KIND of document this is — the classifier output that the router (C1) uses to
 # send a captured page to the right queue: a staff-paid ``expense_receipt`` into
