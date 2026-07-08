@@ -270,6 +270,24 @@ def test_bring_back_appends_the_page_to_the_same_claim(client, fake_ocr, db_sess
     )
 
 
+def test_diverted_panels_show_honest_totals(client, fake_ocr, db_session):
+    """Owner request: show the money waiting in Vendor bills — per currency,
+    never a mixed sum labelled RM (a USD bill must not add into an RM figure)."""
+    ids = db_session.info["principal"]
+    cid = _upload_bill_as_expense(client, fake_ocr, doc_no="INV-TOT")
+    _open_diverted(db_session, ids, doc_no="INV-MYR")               # MYR 42.00
+    usd = _open_diverted(db_session, ids, doc_no="INV-USD")
+    usd.currency, usd.total_amount = "USD", Decimal("100.00")
+    db_session.commit()
+
+    page = client.get(f"/claims/{cid}/review").text
+    assert "RM 42.00" in page and "USD 100.00" in page              # per currency
+    assert "RM 142.00" not in page                                  # never mixed
+
+    holding = client.get("/intake/holding").text
+    assert "total" in holding and "USD 100.00" in holding
+
+
 def test_bring_back_locked_after_approval(client, fake_ocr, db_session):
     ids = db_session.info["principal"]
     cid = _upload_bill_as_expense(client, fake_ocr, doc_no="INV-BB2")

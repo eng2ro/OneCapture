@@ -139,7 +139,10 @@
   {% endif %}
   {% if my_diverted %}
   <div class="card" style="margin-bottom:12px;">
-    <div class="card-title" style="margin-bottom:6px;"><i class="ti ti-arrow-back-up"></i> Your pages in Vendor bills</div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px;">
+      <div class="card-title"><i class="ti ti-arrow-back-up"></i> Your pages in Vendor bills</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);">{{ my_diverted | length }} page{{ '' if my_diverted | length == 1 else 's' }} · total <strong style="font-variant-numeric:tabular-nums;">{{ my_diverted_total }}</strong></div>
+    </div>
     <p class="page-sub" style="margin-bottom:10px;">These pages from your uploads were classified as vendor bills. If one is really YOUR expense, bring it straight back into this claim — no need to visit the Vendor bills module.</p>
     <table class="data">
       <tbody>

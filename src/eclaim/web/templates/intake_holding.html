@@ -11,9 +11,10 @@
   .capx .row-actions .btn{height:32px;font-size:12px}
 </style>
 <div class="capx">
-  <div style="display:flex;align-items:center;gap:11px;">
+  <div style="display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;">
     <h1 class="page-title">Vendor bills</h1>
     <span class="badge">coming soon</span>
+    {% if rows %}<span style="margin-left:auto;font-size:13px;color:var(--text-secondary);">{{ rows | length }} page{{ '' if rows | length == 1 else 's' }} · total <strong style="font-variant-numeric:tabular-nums;">{{ rows_total }}</strong></span>{% endif %}
   </div>
   <p class="page-sub" style="max-width:780px;">
     AP-side pages — an invoice, delivery order, quotation or purchase order, or anything

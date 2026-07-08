@@ -54,6 +54,18 @@ def _merge(*dicts: dict[str, Decimal]) -> dict[str, Decimal]:
     return out
 
 
+def display_totals(pairs) -> str:
+    """Public honest-totals helper for any (currency, amount) iterable — used by
+    the vendor-bills panels: per-currency, never a mixed sum labelled RM."""
+    by_ccy: dict[str, Decimal] = {}
+    for ccy, amount in pairs:
+        if amount is None:
+            continue
+        c = (ccy or "MYR").upper()
+        by_ccy[c] = by_ccy.get(c, _ZERO) + amount
+    return _display(by_ccy)
+
+
 @dataclass
 class Payables:
     reimburse_total: Decimal

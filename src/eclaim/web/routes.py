@@ -581,7 +581,9 @@ def intake_holding(
     rows = intake_service.holding_queue(repos.session, principal.allowed_client_ids)
     return templates.TemplateResponse(
         request, "intake_holding.html",
-        {"rows": rows, "just_routed": bool(routed), "can_act": principal.base_role != "viewer"},
+        {"rows": rows, "just_routed": bool(routed), "can_act": principal.base_role != "viewer",
+         "rows_total": payables_service.display_totals(
+             (r.currency, r.total_amount) for r in rows)},
     )
 
 
@@ -1651,13 +1653,17 @@ def _render_review(
             # "bring back into THIS claim" (owner request: fixing a misroute must
             # not require a trip through the vendor-bills module). Only while the
             # claim is still editable.
-            "my_diverted": (
+            "my_diverted": (my_diverted := (
                 intake_service.open_diverted_for_user(
                     repos.session, principal.allowed_client_ids, principal.user_id
                 )
                 if claim.status in ("submitted", "in_review", "sent_back")
                 and principal.base_role != "viewer"
                 else []
+            )),
+            # Honest per-currency total of those pages (never a mixed RM sum).
+            "my_diverted_total": payables_service.display_totals(
+                (d.currency, d.total_amount) for d in my_diverted
             ),
         },
     )
