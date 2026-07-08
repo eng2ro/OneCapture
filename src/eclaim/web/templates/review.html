@@ -549,7 +549,8 @@
                       <input type="checkbox" name="tax_inclusive" value="1" {{ 'checked' if ln.tax_inclusive or ln.tax_inclusive is none else '' }}> Tax-inclusive total
                     </label>
                   </div>
-                  <div><label class="label-tiny">FX rate (to MYR, if foreign)</label><input class="field" name="fx_rate" value="{{ ln.fx_rate or '' }}"></div>
+                  <div><label class="label-tiny">FX rate (to MYR, if foreign)</label><input class="field" name="fx_rate" value="{{ ln.fx_rate or '' }}">
+                    {% if ln.currency and ln.currency.upper() not in ('MYR', 'RM') and not ln.fx_rate %}<div style="font-size:10px;color:var(--text-danger);margin-top:3px;"><i class="ti ti-alert-triangle"></i> Needs FX — no rate for this {{ ln.currency }} month yet (CarbonNext consumes MYR). Enter one here or in Admin → Exchange rates.</div>{% endif %}</div>
                 </div>
                 {% if ln.net_amount is not none or ln.base_amount is not none %}
                 <div style="font-size:11px;color:var(--text-secondary);margin-top:8px;">Net (ex-tax) RM {{ '%.2f' | format(ln.net_amount) if ln.net_amount is not none else '—' }} · Base (MYR) RM {{ '%.2f' | format(ln.base_amount) if ln.base_amount is not none else '—' }}</div>

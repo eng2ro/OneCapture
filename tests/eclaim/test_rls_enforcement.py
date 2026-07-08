@@ -18,6 +18,7 @@ Skips cleanly when no Postgres / no app-role DSN is reachable.
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from decimal import Decimal
 
@@ -46,7 +47,7 @@ from eclaim.db.models import (
 # GUC off (as here) it must still default-deny with no context and firm-scope with it.
 DATA_TABLES = [
     "claim", "release_batch", "emission_entry", "audit_event", "approval_matrix_rule",
-    "document_intake", "vendor", "ap_invoice", "ap_invoice_line",
+    "document_intake", "vendor", "ap_invoice", "ap_invoice_line", "exchange_rate",
 ]
 
 
@@ -114,6 +115,14 @@ def _seed_firm(session: Session, label: str) -> dict:
         line_no=1, description="seed", line_total=Decimal("100.00"),
     ))
     session.flush()
+
+    from eclaim.db.models import ExchangeRate
+
+    session.add(ExchangeRate(
+        firm_id=firm.id, client_id=client.id, currency="USD",
+        period=dt.date(2026, 7, 1), rate_to_myr=Decimal("4.700000"),
+    ))
+    session.flush()
     return {"firm": firm.id, "client": client.id}
 
 
@@ -131,7 +140,7 @@ def two_firms(db_engine):
         for entry in made.values():
             fid = entry["firm"]
             for tbl in ["emission_entry", "audit_event", "release_batch",
-                        "approval_matrix_rule", "document_intake",
+                        "approval_matrix_rule", "document_intake", "exchange_rate",
                         "ap_invoice_line", "ap_invoice", "vendor", "claim", "client"]:
                 owner.execute(text(f"DELETE FROM {tbl} WHERE firm_id = :f"), {"f": fid})
             owner.execute(text("DELETE FROM firm WHERE id = :f"), {"f": fid})

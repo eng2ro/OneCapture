@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Exchange rates · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Exchange rates{% endblock %}
+{% block content %}
+{% include "_editorial.html" %}
+<div class="capx" id="screen-rates">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">Exchange rates</h1>
+      <p class="page-sub">Monthly currency → MYR rates. CarbonNext consumes MYR, so a foreign receipt converts with the rate of its document month; a reviewer-entered rate on a line always wins.</p>
+    </div>
+  </div>
+
+  <div class="banner">
+    <i class="ti ti-info-circle"></i>
+    <span><strong>{{ rates | length }} rate{{ '' if rates | length == 1 else 's' }}</strong> · a foreign line with no rate for its month shows a "needs FX" hint and the release notes it — nothing converts silently at a guessed rate.</span>
+  </div>
+
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
+  <div class="card" style="margin-bottom:14px;">
+    <div class="card-title" style="margin-bottom:12px;">Add or update a rate</div>
+    <form method="post" action="/admin/rates">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="field-row">
+        <div><label class="label-tiny">Client</label>
+          <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+        </div>
+        <div><label class="label-tiny">Currency (ISO)</label><input class="field" name="currency" placeholder="USD" maxlength="3" required style="text-transform:uppercase;"></div>
+      </div>
+      <div class="field-row" style="margin-top:8px;">
+        <div><label class="label-tiny">Month</label><input class="field" type="month" name="period" required></div>
+        <div><label class="label-tiny">Rate to MYR (1 unit = X MYR)</label><input class="field" name="rate_to_myr" placeholder="4.700000" required></div>
+      </div>
+      <div style="margin-top:12px;"><button class="btn btn-accent" type="submit"><i class="ti ti-plus"></i> Save rate</button>
+        <span class="page-sub" style="font-size:11px;">Saving an existing (currency, month) pair updates it — audited old → new.</span></div>
+    </form>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden;">
+    {% if rates %}
+    <table class="data">
+      <thead><tr><th>Client</th><th>Month</th><th>Currency</th><th style="text-align:right;">Rate to MYR</th><th>Source</th><th>By</th><th></th></tr></thead>
+      <tbody>
+        {% for r in rates %}
+        <tr>
+          <td>{{ client_names.get(r.client_id, '—') }}</td>
+          <td class="mono">{{ r.period.strftime('%Y-%m') }}</td>
+          <td class="mono">{{ r.currency }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ r.rate_to_myr }}</td>
+          <td>{{ r.source }}</td>
+          <td class="page-sub">{{ r.created_by or '—' }}</td>
+          <td style="text-align:right;">
+            <form method="post" action="/admin/rates/delete" onsubmit="return confirm('Delete this rate? Lines already converted keep their applied rate.');" style="display:inline;">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="rate_id" value="{{ r.id }}">
+              <button class="btn" type="submit" style="font-size:11px;padding:4px 9px;"><i class="ti ti-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div style="padding:44px;text-align:center;color:var(--graphite);">No rates yet — foreign receipts will show "needs FX" until their month's rate is entered.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

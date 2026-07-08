@@ -154,6 +154,11 @@ class ClaimService:
             line.base_amount = None
         elif line.fx_rate:
             line.base_amount = (gross * line.fx_rate).quantize(Decimal("0.01"))
+        elif line.currency and line.currency.upper() not in ("MYR", "RM"):
+            # A FOREIGN line with no FX has no honest MYR value — leaving it None
+            # keeps it flagged ("needs FX") instead of forwarding 100 USD to
+            # CarbonNext dressed up as RM 100 (base_amount is the MYR figure).
+            line.base_amount = None
         else:
             line.base_amount = gross
 
@@ -376,10 +381,28 @@ class ClaimService:
         )
         # Derive net/base now so the ERP export carries them from capture, not only
         # after a reviewer happens to touch a money field.
+        self._apply_fx_default(repos, line)
         self._recompute_line_money(line)
         repos.claims.add_line(line)
         self._recompute_totals(claim, repos.claims.lines(claim.id))
         return line
+
+    @staticmethod
+    def _apply_fx_default(repos: "Repos", line: ClaimLine) -> None:
+        """Auto-prefill a foreign line's fx_rate from the exchange_rate table
+        (Appendix G-C) so the MYR base derives at capture — the reviewer sees and
+        can override it. A human-entered fx_rate always wins (never overwritten);
+        no rate for the document month leaves fx empty → the 'needs FX' hint."""
+        if line.fx_rate is not None:
+            return
+        if not line.currency or line.currency.upper() in ("MYR", "RM"):
+            return
+        from . import fx as fx_service
+
+        on = parse_receipt_date(line.doc_date) or line.posting_date
+        rate = fx_service.rate_for(repos.session, line.client_id, line.currency, on)
+        if rate is not None:
+            line.fx_rate = rate
 
     def add_mileage_line(
         self,
@@ -674,8 +697,13 @@ class ClaimService:
                 setattr(line, key, value)
         if "payment_method" in fields:
             line.reimbursable = line.payment_method == "out_of_pocket"
-        # Re-derive net/base whenever any money-affecting field was touched.
-        if {"total_amount", "tax_amount", "tax_inclusive", "fx_rate"} & set(fields):
+        # Re-derive net/base whenever any money-affecting field was touched. A
+        # currency change re-runs the FX default lookup (an explicit fx_rate in the
+        # same edit still wins — _apply_fx_default never overwrites a set rate).
+        if {"total_amount", "tax_amount", "tax_inclusive", "fx_rate", "currency"} & set(fields):
+            if "currency" in fields and "fx_rate" not in fields:
+                line.fx_rate = None
+                self._apply_fx_default(repos, line)
             self._recompute_line_money(line)
 
         if category_id is not None:
@@ -1407,6 +1435,21 @@ class ClaimService:
                     )
                 claim.status = "released"
 
+                # Foreign lines released without any conversion (no line fx, no
+                # table rate for their month) are NOTED on the release event —
+                # CarbonNext consumes MYR, so an unconverted forward is auditable
+                # (never silently normal, never a hard block).
+                fx_missing = [
+                    ln.line_no for ln, _cat in items
+                    if ln.currency and ln.currency.upper() not in ("MYR", "RM")
+                    and ln.fx_rate is None
+                ]
+                release_detail = {
+                    "batch_hash": digest, "carbon_ref": carbon_ref,
+                    "record_count": len(relevant),
+                }
+                if fx_missing:
+                    release_detail["fx_missing_lines"] = fx_missing
                 released = record_event(
                     repos.audit,
                     firm_id=claim.firm_id,
@@ -1415,7 +1458,7 @@ class ClaimService:
                     entity_id=claim.id,
                     event_type="released",
                     actor=actor,
-                    detail={"batch_hash": digest, "carbon_ref": carbon_ref, "record_count": len(relevant)},
+                    detail=release_detail,
                 )
                 record_event(
                     repos.audit,

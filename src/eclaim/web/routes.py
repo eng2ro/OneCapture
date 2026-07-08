@@ -47,6 +47,7 @@ from ..repositories import ClaimRepository, LedgerRepository
 from ..services import ap as ap_service
 from ..services import coverage as coverage_service
 from ..services import erp as erp_service
+from ..services import fx as fx_service
 from ..services import payables as payables_service
 from ..services import ingestion, routing
 from ..services import intake as intake_service
@@ -2034,6 +2035,75 @@ def admin_save_category(
             error="A category with that name already exists for this client.",
         )
     return RedirectResponse("/admin/categories", status_code=303)
+
+
+def _render_rates(request, repos, principal, *, error=None) -> HTMLResponse:
+    clients = list_visible_clients(repos.session, principal)
+    return templates.TemplateResponse(
+        request,
+        "admin_rates.html",
+        {
+            "rates": fx_service.list_rates(repos.session, [c.id for c in clients]),
+            "clients": clients,
+            "client_names": {c.id: c.name for c in clients},
+            "error": error,
+        },
+    )
+
+
+@router.get("/admin/rates", response_class=HTMLResponse)
+def admin_rates(
+    request: Request,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+) -> HTMLResponse:
+    return _render_rates(request, repos, principal)
+
+
+@router.post("/admin/rates")
+def admin_save_rate(
+    request: Request,
+    client_id: str = Form(...),
+    currency: str = Form(...),
+    period: str = Form(...),          # <input type=month> → "YYYY-MM"
+    rate_to_myr: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    import datetime as _dt
+
+    try:
+        cid = uuid.UUID(client_id)
+        month = _dt.date.fromisoformat(period.strip() + "-01")
+        rate = Decimal(rate_to_myr.strip())
+    except (ValueError, InvalidOperation):
+        return _render_rates(request, repos, principal, error="Invalid month or rate.")
+    if cid not in principal.allowed_client_ids:
+        return _render_rates(request, repos, principal, error="You cannot manage that client.")
+    ccy = currency.strip().upper()
+    if len(ccy) != 3 or not ccy.isalpha() or ccy == "MYR":
+        return _render_rates(request, repos, principal,
+                             error="Currency must be a 3-letter ISO code (not MYR).")
+    if rate <= 0:
+        return _render_rates(request, repos, principal, error="The rate must be positive.")
+    fx_service.upsert_rate(
+        repos.session, firm_id=principal.firm_id, client_id=cid,
+        currency=ccy, period=month, rate_to_myr=rate, actor=_actor(principal),
+    )
+    return RedirectResponse("/admin/rates", status_code=303)
+
+
+@router.post("/admin/rates/delete")
+def admin_delete_rate(
+    request: Request,
+    rate_id: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    rid = _opt_uuid(rate_id)
+    if rid is not None:
+        fx_service.delete_rate(repos.session, rate_id=rid, actor=_actor(principal))
+    return RedirectResponse("/admin/rates", status_code=303)
 
 
 def _render_claimants(request, repos, principal, *, editing=None, error=None) -> HTMLResponse:

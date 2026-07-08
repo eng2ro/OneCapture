@@ -974,6 +974,38 @@ class DocumentIntake(Base):
     )
 
 
+class ExchangeRate(Base):
+    """Monthly currency → MYR rate per client (Appendix G-C, migration 0034).
+
+    CarbonNext consumes MYR; a foreign line's fx resolves: human-entered line
+    fx_rate (wins) → this table's rate for the document month → none (flagged).
+    ``source``: manual admin entry, ERP connector pull, or CarbonNext pull —
+    whoever owns the rate must be the single source of truth."""
+
+    __tablename__ = "exchange_rate"
+    __table_args__ = (
+        CheckConstraint("source IN ('manual','erp','carbonnext')", name="ck_fx_source"),
+        CheckConstraint("rate_to_myr > 0", name="ck_fx_rate_positive"),
+        UniqueConstraint("client_id", "currency", "period", name="uq_fx_client_ccy_period"),
+        Index("ix_fx_firm_client", "firm_id", "client_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    currency: Mapped[str] = mapped_column(String, nullable=False)
+    period: Mapped[dt.date] = mapped_column(Date, nullable=False)   # first of month
+    rate_to_myr: Mapped[Decimal] = mapped_column(Numeric(18, 6), nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'manual'"))
+    created_by: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Vendor(Base):
     """Supplier master for the AP module (C2, migration 0026). One per client; the
     ERP vendor code is filled once the vendor is mapped to the customer's ERP."""
