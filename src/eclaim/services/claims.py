@@ -610,6 +610,27 @@ class ClaimService:
         )
         return line
 
+    def switch_lines_to_vendor_bills(
+        self, *, repos: "Repos", claim_id: uuid.UUID, line_ids: list,
+        actor: str, principal: "Principal | None" = None,
+    ) -> int:
+        """Batch of :meth:`switch_line_to_vendor_bill` — the whole-table case a
+        supplier-invoice dump filed as one expense claim needs (24 vendor lines
+        shouldn't take 24 clicks-into-modals). Returns the count moved. A line
+        with no image (mileage) is skipped, not fatal; the claim is voided once
+        its last page leaves, exactly as the single switch does."""
+        moved = 0
+        for lid in line_ids:
+            line = repos.claims.line(lid)
+            if line is None or line.claim_id != claim_id or not line.image_path:
+                continue
+            self.switch_line_to_vendor_bill(
+                repos=repos, claim_id=claim_id, line_id=lid,
+                actor=actor, principal=principal,
+            )
+            moved += 1
+        return moved
+
     def switch_line_to_vendor_bill(
         self, *, repos: "Repos", claim_id: uuid.UUID, line_id: uuid.UUID,
         actor: str, principal: "Principal | None" = None,

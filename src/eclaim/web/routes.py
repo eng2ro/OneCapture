@@ -864,6 +864,39 @@ def claim_line_to_vendor_bill(
     return RedirectResponse("/intake/holding?routed=1", status_code=303)
 
 
+@router.post("/claims/{claim_id}/lines/to-vendor-bills")
+def claim_lines_to_vendor_bills(
+    request: Request,
+    claim_id: uuid.UUID,
+    line_ids: list[str] = Form(default=[]),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """E3 (batch): move MANY selected receipt lines to Vendor bills at once — the
+    supplier-invoice-dump case (e.g. 24 vendor lines filed as one expense claim)."""
+    if principal.base_role == "viewer":
+        raise HTTPException(status_code=403, detail="viewers cannot modify claims")
+    ids = [u for u in (_opt_uuid(x) for x in line_ids) if u is not None]
+    if not ids:
+        return RedirectResponse(f"/claims/{claim_id}/review", status_code=303)
+    try:
+        _service.switch_lines_to_vendor_bills(
+            repos=repos, claim_id=claim_id, line_ids=ids,
+            actor=_actor(principal), principal=principal,
+        )
+        repos.session.commit()
+    except (ClaimError, SoDViolation) as exc:
+        repos.session.rollback()
+        set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
+        status = 403 if isinstance(exc, SoDViolation) else 409
+        raise HTTPException(status_code=status, detail=str(exc))
+    # A claim voided (all pages left) has nowhere to return to — send to the queue.
+    claim = repos.claims.get(claim_id)
+    if claim is not None and claim.status == "rejected":
+        return RedirectResponse("/intake/holding?routed=1", status_code=303)
+    return RedirectResponse(f"/claims/{claim_id}/review", status_code=303)
+
+
 @router.post("/ap/{invoice_id}/to-expense")
 def ap_to_expense(
     request: Request,

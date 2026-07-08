@@ -98,6 +98,61 @@ def test_switch_is_locked_after_approval_and_idempotent(client, fake_ocr, db_ses
     assert len(intakes) == 1
 
 
+def test_batch_switch_moves_many_lines_at_once(client, fake_ocr, db_session):
+    """The supplier-invoice-dump case (screenshot: 24 vendor lines filed as one
+    expense claim): tick lines and move them all to Vendor bills in one action,
+    not 24 clicks-into-modals. The claim voids when its last page leaves."""
+    from eclaim.services.claims import ClaimService, Repos
+
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    # Build one claim with three vendor-invoice-looking lines.
+    claim = svc.start_claim(repos=repos, firm_id=ids["firm"], client_id=ids["client"])
+    line_ids = []
+    for i in range(3):
+        fake_ocr.extraction = Extraction(
+            vendor="Lucky Frozen Sdn Bhd", doc_no=f"J826-{i}",
+            total_amount=Decimal("100.00") + i, expense_type="other",
+        )
+        ln = svc.add_line(
+            repos=repos, claim=claim, image_bytes=b"\x89PNG dump " + bytes([i]),
+            media_type="image/png", ocr=fake_ocr, image_dir=_img_dir(),
+            payment_method="corporate_card",
+        )
+        line_ids.append(ln.id)
+    svc.submit(repos=repos, claim=claim, actor="t", line_count=3, attested=False)
+    db_session.commit()
+
+    r = client.post(f"/claims/{claim.id}/lines/to-vendor-bills",
+                    data={"line_ids": [str(lid) for lid in line_ids[:2]]},
+                    follow_redirects=False)                  # move 2 of the 3
+    assert r.status_code == 303 and r.headers["location"].endswith("/review")
+
+    db_session.expire_all()
+    from eclaim.db.models import Claim, DocumentIntake
+
+    assert len(db_session.execute(select(ClaimLine).where(
+        ClaimLine.claim_id == claim.id)).scalars().all()) == 1     # one line left
+    assert len(db_session.execute(select(DocumentIntake)).scalars().all()) == 2
+    assert db_session.get(Claim, claim.id).status == "in_review"   # not voided (1 left)
+
+    # Move the last one → the claim voids and the redirect goes to the queue.
+    r2 = client.post(f"/claims/{claim.id}/lines/to-vendor-bills",
+                     data={"line_ids": [str(line_ids[2])]}, follow_redirects=False)
+    assert r2.headers["location"].startswith("/intake/holding")
+    db_session.expire_all()
+    assert db_session.get(Claim, claim.id).status == "rejected"
+    assert len(db_session.execute(select(DocumentIntake)).scalars().all()) == 3
+
+
+def _img_dir():
+    import tempfile
+    from pathlib import Path
+    d = Path(tempfile.gettempdir()) / "oc-switch-test"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 def test_mileage_line_cannot_switch(client, db_session):
     r = client.post("/capture/mileage", data={
         "origin": "KL", "destination": "Ipoh", "trip_date": "2026-07-04",

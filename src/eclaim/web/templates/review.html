@@ -304,11 +304,12 @@
       <div class="card-title">Lines <span style="font-weight:400;color:var(--text-tertiary);">({{ lines | length }})</span></div>
       <div style="display:flex;gap:8px;align-items:center;">
         {% if allow_split %}<button type="button" class="btn" id="merge-btn" onclick="submitMerge()" disabled style="font-size:11px;padding:5px 10px;"><i class="ti ti-arrows-join"></i> Merge selected (<span id="merge-n">0</span>)</button>{% endif %}
+        {% if can_edit %}<button type="button" class="btn" id="tovendor-btn" onclick="submitToVendor()" disabled style="font-size:11px;padding:5px 10px;" title="Move the ticked lines to Vendor bills — for supplier invoices filed here by mistake"><i class="ti ti-file-invoice"></i> → Vendor bills (<span id="tovendor-n">0</span>)</button>{% endif %}
         {% if can_edit %}<button type="button" class="btn" style="font-size:11px;padding:5px 10px;" onclick="openModal('mileage-modal')"><i class="ti ti-map-2"></i> Add mileage</button>{% endif %}
       </div>
     </div>
 
-    <div style="font-size:11px;color:var(--text-secondary);margin:4px 0 0;"><i class="ti ti-click"></i> Click any line to view its receipt and verify the captured details.{% if allow_split %} Tick two or more lines to <b>merge</b> pages of one invoice; a multi-page line can be <b>split</b> back into pages.{% endif %}</div>
+    <div style="font-size:11px;color:var(--text-secondary);margin:4px 0 0;"><i class="ti ti-click"></i> Click any line to view its receipt and verify the captured details.{% if allow_split %} Tick two or more lines to <b>merge</b> pages of one invoice; a multi-page line can be <b>split</b> back into pages.{% endif %}{% if can_edit %} Tick lines that are really <b>vendor bills</b> (a supplier invoice filed here by mistake) and move them across.{% endif %}</div>
 
     <form method="post" action="/claims/{{ claim.id }}/decide" id="decide-form">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
@@ -329,7 +330,7 @@
         <tr class="line-row" data-line="{{ ln.id }}" data-no="{{ ln.line_no }}"
             data-vendor="{{ ln.vendor or 'Receipt' }}" style="cursor:pointer;">
           <td style="text-align:center;white-space:nowrap;">
-            {% if allow_split and not ln.mileage %}<input type="checkbox" class="merge-chk" value="{{ ln.id }}" title="Select to merge" onclick="event.stopPropagation();">{% endif %}
+            {% if can_edit and not ln.mileage %}<input type="checkbox" class="merge-chk" value="{{ ln.id }}" title="Select — merge pages of one invoice, or move to Vendor bills" onclick="event.stopPropagation();">{% endif %}
             <i class="ti ti-eye" title="View &amp; verify" style="color:var(--text-tertiary);"></i>
           </td>
           <td>{{ ln.line_no }}</td>
@@ -396,6 +397,10 @@
     <input type="hidden" name="_csrf" value="{{ csrf_token }}">
     <input type="hidden" name="line_id" id="split-line-id">
   </form>
+  {% endif %}
+  {% if can_edit %}
+  <form id="tovendor-form" method="post" action="/claims/{{ claim.id }}/lines/to-vendor-bills" hidden>
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}"></form>
   {% endif %}
 
   {# -- Approval chain (audit trail) ---------------------------------------- #}
@@ -1106,16 +1111,38 @@ function _mergeChecked() {
     .filter(function (c) { return c.checked; });
 }
 function _syncMergeBtn() {
-  var btn = document.getElementById("merge-btn");
-  if (!btn) return;
   var n = _mergeChecked().length;
-  var span = document.getElementById("merge-n");
-  if (span) span.textContent = n;
-  btn.disabled = n < 2;   // merge needs at least two lines
+  var mbtn = document.getElementById("merge-btn");
+  if (mbtn) {
+    var mspan = document.getElementById("merge-n");
+    if (mspan) mspan.textContent = n;
+    mbtn.disabled = n < 2;   // merge needs at least two lines
+  }
+  var vbtn = document.getElementById("tovendor-btn");
+  if (vbtn) {
+    var vspan = document.getElementById("tovendor-n");
+    if (vspan) vspan.textContent = n;
+    vbtn.disabled = n < 1;   // moving to Vendor bills works from one line up
+  }
 }
 document.querySelectorAll(".merge-chk").forEach(function (c) {
   c.addEventListener("change", _syncMergeBtn);
 });
+function submitToVendor() {
+  var checked = _mergeChecked();
+  if (!checked.length) return;
+  if (!confirm("Move " + checked.length + " selected line(s) to Vendor bills? "
+      + "They leave this claim and finance processes them as AP invoices. "
+      + "A claim with no lines left is voided.")) return;
+  var form = document.getElementById("tovendor-form");
+  if (!form) return;
+  checked.forEach(function (c) {
+    var inp = document.createElement("input");
+    inp.type = "hidden"; inp.name = "line_ids"; inp.value = c.value;
+    form.appendChild(inp);
+  });
+  form.submit();
+}
 function submitMerge() {
   var checked = _mergeChecked();
   if (checked.length < 2) return;
