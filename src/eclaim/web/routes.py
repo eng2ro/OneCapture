@@ -1785,7 +1785,7 @@ def mileage_route_preview(
 # --------------------------------------------------------------------------- #
 # Review actions (thin wrappers over ClaimService; the service is the gate)
 # --------------------------------------------------------------------------- #
-def _action(request, repos, principal, claim_id, fn) -> HTMLResponse | RedirectResponse:
+def _action(request, repos, principal, claim_id, fn, *, open_line=None) -> HTMLResponse | RedirectResponse:
     try:
         fn()
     except ClaimError as exc:
@@ -1796,7 +1796,11 @@ def _action(request, repos, principal, claim_id, fn) -> HTMLResponse | RedirectR
         repos.session.rollback()
         set_tenant_context(repos.session, principal.firm_id, principal.allowed_client_ids)
         return _render_review(request, repos, principal, claim_id, error=str(exc))
-    return RedirectResponse(f"/claims/{claim_id}/review", status_code=303)
+    # ``open_line``: a per-LINE action (Save line / Assign category) reloads the
+    # page, which closed the verify modal and lost the reviewer's place mid
+    # "1 of N" — reopen the modal on that line after the redirect instead.
+    suffix = f"?open={open_line}" if open_line is not None else ""
+    return RedirectResponse(f"/claims/{claim_id}/review{suffix}", status_code=303)
 
 
 @router.post("/claims/{claim_id}/edit")
@@ -1862,6 +1866,7 @@ def web_edit(
             repos=repos, claim_id=claim_id, fields=fields, line_id=lid,
             actor=_actor(principal), principal=principal,
         ),
+        open_line=lid,
     )
 
 
@@ -1997,6 +2002,7 @@ def web_assign_category(
             actor=_actor(principal), principal=principal,
             category_id=uuid.UUID(category_id),
         ),
+        open_line=lid,
     )
 
 

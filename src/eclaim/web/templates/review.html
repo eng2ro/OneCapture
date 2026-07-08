@@ -1066,6 +1066,18 @@ document.querySelectorAll(".line-row").forEach(function (row) {
   });
 });
 
+// After Save line / Assign category the page reloads with ?open=<line id> —
+// reopen the verify modal on that line so the reviewer keeps their place in
+// "1 of N" instead of the modal vanishing on every save.
+window.addEventListener("DOMContentLoaded", function () {
+  var openId = new URLSearchParams(window.location.search).get("open");
+  if (!openId) return;
+  var row = document.querySelector('.line-row[data-line="' + openId + '"]');
+  if (row) openLine(openId, row.dataset.no, row);
+  // Clean the param so a manual refresh doesn't force the modal back open.
+  window.history.replaceState(null, "", window.location.pathname);
+});
+
 // ---- Prev / Next line navigator -------------------------------------------
 // Page through the claim's lines inside the open modal — verify item-by-item
 // without closing and re-opening. The lines are already all in the DOM, so this
