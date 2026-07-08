@@ -346,14 +346,18 @@ def release_claim(
 @router.post("/claims/{claim_id}/reverse", response_model=BatchOut)
 def reverse_claim(
     claim_id: uuid.UUID,
+    reason: str = "",
     repos: Repos = Depends(deps.get_repos),
     principal: Principal = Depends(deps.get_principal),
 ) -> BatchOut:
-    """Correct a released claim with a reversing (negative-quantity) batch."""
+    """Correct a released claim with a reversing (negative-quantity) batch.
+    ``reason`` is required when the client's ``carbon.auto_reverse`` setting is
+    ``approver_reason``; it rides the audit event."""
     actor = principal.email or str(principal.user_id)
     try:
         return BatchOut.of(
-            _service.reverse(repos=repos, claim_id=claim_id, actor=actor, principal=principal)
+            _service.reverse(repos=repos, claim_id=claim_id, actor=actor,
+                             principal=principal, reason=reason or None)
         )
     except ClaimError as exc:
         raise _handle(exc)

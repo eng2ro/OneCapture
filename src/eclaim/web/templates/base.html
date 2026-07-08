@@ -126,6 +126,7 @@
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/approvals' else '' }}" href="/admin/approvals"><i class="ti ti-checkup-list"></i><span class="lab">Approval matrix</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/rates' else '' }}" href="/admin/rates"><i class="ti ti-currency-dollar"></i><span class="lab">Exchange rates</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/vehicles' else '' }}" href="/admin/vehicles"><i class="ti ti-car"></i><span class="lab">Vehicles</span></a>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/settings' else '' }}" href="/admin/settings"><i class="ti ti-settings"></i><span class="lab">Settings</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/intake/holding' else '' }}" href="/intake/holding"><i class="ti ti-file-invoice"></i><span class="lab">Vendor bills</span>{% if intake_holding_count %}<span class="oc-cnt">{{ intake_holding_count }}</span>{% endif %}</a>
       <a class="oc-nav-i {{ 'active' if request.url.path.startswith('/ap') else '' }}" href="/ap"><i class="ti ti-cash-banknote"></i><span class="lab">AP invoices</span></a>
       {% endif %}

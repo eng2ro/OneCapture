@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Settings · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Company settings{% endblock %}
+{% block content %}
+{% include "_editorial.html" %}
+<div class="capx" id="screen-settings">
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
+    <div>
+      <h1 class="page-title">Company settings</h1>
+      <p class="page-sub" style="max-width:760px;">Behaviour controls, per company. Every change is audited. Integrity rules (separation of duties, the append-only ledger, the post-approval lock) are not settable — by design.</p>
+    </div>
+  </div>
+
+  {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+
+  <div class="card" style="margin-bottom:14px;">
+    <form method="get" action="/admin/settings">
+      <label class="label-tiny">Company</label>
+      <select class="field" name="client_id" onchange="this.form.submit()" style="max-width:340px;">
+        {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if c.id == selected_client_id else '' }}>{{ c.name }}</option>{% endfor %}
+      </select>
+    </form>
+  </div>
+
+  {% for s in registry %}
+  <div class="card" style="margin-bottom:12px;">
+    <form method="post" action="/admin/settings">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="client_id" value="{{ selected_client_id }}">
+      <input type="hidden" name="key" value="{{ s.key }}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+        <div style="max-width:560px;">
+          <div class="card-title" style="margin-bottom:4px;">{{ s.label }} <span class="mono" style="font-size:10px;color:var(--text-tertiary);">{{ s.key }}</span></div>
+          <p class="page-sub" style="font-size:12px;">{{ s.description }}</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <div>
+            <label class="label-tiny">Value</label>
+            <select class="field" name="value" style="min-width:170px;">
+              {% for choice in s.choices %}<option value="{{ choice }}" {{ 'selected' if values.get(s.key) == choice else '' }}>{{ choice.replace('_', ' + ') }}{{ ' (default)' if choice == s.default else '' }}</option>{% endfor %}
+            </select>
+          </div>
+          <button class="btn btn-accent" type="submit" style="height:38px;"><i class="ti ti-check"></i> Save</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

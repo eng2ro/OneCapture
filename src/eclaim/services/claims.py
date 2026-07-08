@@ -415,10 +415,15 @@ class ClaimService:
         """Auto-prefill a foreign line's fx_rate from the exchange_rate table
         (Appendix G-C) so the MYR base derives at capture — the reviewer sees and
         can override it. A human-entered fx_rate always wins (never overwritten);
-        no rate for the document month leaves fx empty → the 'needs FX' hint."""
+        no rate for the document month leaves fx empty → the 'needs FX' hint.
+        Governed by the per-client ``fx.auto_prefill`` setting."""
         if line.fx_rate is not None:
             return
         if not line.currency or line.currency.upper() in ("MYR", "RM"):
+            return
+        from . import settings as settings_service
+
+        if settings_service.get(repos.session, line.client_id, "fx.auto_prefill") == "off":
             return
         from . import fx as fx_service
 
@@ -1682,14 +1687,41 @@ class ClaimService:
 
     def reverse(
         self, *, repos: "Repos", claim_id: uuid.UUID, actor: str,
-        principal: "Principal | None" = None,
+        principal: "Principal | None" = None, reason: str | None = None,
     ) -> ReleaseBatch:
         """Correct a released claim by forwarding REVERSAL rows to CarbonNext — one
         per relevant line of the original release, with negated amount/quantity and
         ``direction='reversal'``. Never edits or deletes the originals; a correction
-        is a new, opposite-signed handoff batch."""
+        is a new, opposite-signed handoff batch.
+
+        Governed by the per-client ``carbon.auto_reverse`` setting (owner request
+        2026-07-08): ``allow`` = any authorised editor; ``approver_reason`` = only
+        a manager/partner AND a written reason (which rides the audit event);
+        ``off`` = reversals disabled for this company."""
         claim = self._lock(repos, claim_id)
         self._require_writer(claim, principal)
+        from . import settings as settings_service
+
+        mode = settings_service.get(repos.session, claim.client_id, "carbon.auto_reverse")
+        if mode == "off":
+            raise IllegalTransition(
+                "carbon reversals are disabled for this company (setting "
+                "carbon.auto_reverse) — coordinate the correction with your "
+                "administrator / carbon team"
+            )
+        if mode == "approver_reason":
+            from .sod import SoDViolation
+
+            if principal is not None and principal.base_role not in ("manager", "partner"):
+                raise SoDViolation(
+                    "this company requires a manager or partner to reverse "
+                    "carbon records (setting carbon.auto_reverse)"
+                )
+            if not (reason or "").strip():
+                raise ClaimError(
+                    "this company requires a written reason for a carbon "
+                    "reversal (setting carbon.auto_reverse)"
+                )
         if claim.status != "released":
             raise IllegalTransition("only a released claim can be reversed")
 
@@ -1766,6 +1798,9 @@ class ClaimService:
                             carbon_ref=f"CARB-REV-{digest[:12].upper()}",
                         )
                     )
+                reversed_detail = {"batch_hash": digest, "record_count": len(relevant)}
+                if (reason or "").strip():
+                    reversed_detail["reason"] = reason.strip()
                 record_event(
                     repos.audit,
                     firm_id=claim.firm_id,
@@ -1774,7 +1809,7 @@ class ClaimService:
                     entity_id=claim.id,
                     event_type="reversed",
                     actor=actor,
-                    detail={"batch_hash": digest, "record_count": len(relevant)},
+                    detail=reversed_detail,
                 )
         except IntegrityError:
             prior = self._recover_release(repos, claim, digest)

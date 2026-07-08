@@ -2311,6 +2311,58 @@ def admin_delete_rate(
     return RedirectResponse("/admin/rates", status_code=303)
 
 
+def _render_settings(request, repos, principal, *, client_id=None, error=None) -> HTMLResponse:
+    from ..services import settings as settings_service
+
+    clients = list_visible_clients(repos.session, principal)
+    selected = client_id or (clients[0].id if clients else None)
+    return templates.TemplateResponse(
+        request,
+        "admin_settings.html",
+        {
+            "registry": settings_service.REGISTRY,
+            "values": (settings_service.effective(repos.session, selected) if selected else {}),
+            "clients": clients,
+            "selected_client_id": selected,
+            "error": error,
+        },
+    )
+
+
+@router.get("/admin/settings", response_class=HTMLResponse)
+def admin_settings(
+    request: Request,
+    client_id: str = "",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+) -> HTMLResponse:
+    return _render_settings(request, repos, principal, client_id=_opt_uuid(client_id))
+
+
+@router.post("/admin/settings")
+def admin_save_setting(
+    request: Request,
+    client_id: str = Form(...),
+    key: str = Form(...),
+    value: str = Form(...),
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.require_firm_scope),
+):
+    from ..services import settings as settings_service
+
+    cid = _opt_uuid(client_id)
+    if cid is None or cid not in principal.allowed_client_ids:
+        return _render_settings(request, repos, principal, error="You cannot manage that client.")
+    try:
+        settings_service.set_setting(
+            repos.session, firm_id=principal.firm_id, client_id=cid,
+            key=key, value=value, actor=_actor(principal),
+        )
+    except ValueError as exc:
+        return _render_settings(request, repos, principal, client_id=cid, error=str(exc))
+    return RedirectResponse(f"/admin/settings?client_id={cid}", status_code=303)
+
+
 def _render_vehicles(request, repos, principal, *, editing=None, error=None) -> HTMLResponse:
     from ..db.models import VEHICLE_TYPES
 

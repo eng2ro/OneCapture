@@ -990,6 +990,31 @@ class DocumentIntake(Base):
     )
 
 
+class ClientSetting(Base):
+    """Per-client behaviour flag (migration 0037): key-value validated against
+    the code-side registry in services/settings.py. Configuration, never a
+    per-customer code branch (Appendix B); integrity rules are NOT settable."""
+
+    __tablename__ = "client_setting"
+    __table_args__ = (
+        UniqueConstraint("client_id", "key", name="uq_client_setting"),
+        Index("ix_client_setting_firm_client", "firm_id", "client_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=_UUID_DEFAULT)
+    firm_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("firm.id"), nullable=False)
+    client_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("client.id"), nullable=False)
+    key: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(String, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 VEHICLE_TYPES = (
     "car_petrol", "car_diesel", "car_hybrid", "car_ev",
     "motorcycle", "van", "truck", "other",
