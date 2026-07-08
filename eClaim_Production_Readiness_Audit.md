@@ -644,6 +644,17 @@ ALTERNATIVE to evaluate before building passwords: "Sign in with CarbonNext"
 both systems, less security surface here. The USER LIST stays in OneCapture
 either way; only the password check differs. OWNER TO DECIDE.
 
+BUILT 2026-07-09 — the /admin/users registry UI (services/users.py,
+admin_users.html, partner/manager only): list/create/edit users, role,
+authority limit, active status, company grants for client-scoped roles;
+audited old→new on the app_user hash chain. Lockout + escalation guards
+(NEVER configurable): no self deactivate/demote/promote, no self
+authority-limit change, and role assignment/editing capped by the actor's
+rank — a manager can never mint or edit a partner. Login probe normalised
+to the lowercased registry. STILL OPEN here: the password/SSO decision
+above (today's login remains passwordless dev-mode), and the activation
+endpoint (I-A) that will provision each company's first user.
+
 ## I-C. Posting identity + attribution
 All posts to CarbonNext authenticate as the company_dataentry SERVICE identity
 (matches the existing IR-6 client stub). Per record, forward BOTH:
