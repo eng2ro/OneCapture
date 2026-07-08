@@ -116,6 +116,49 @@ def test_admin_vehicle_crud_and_toggle(client, db_session):
     assert db_session.get(Vehicle, v.id).active is False
 
 
+def test_handoff_carries_cat6_travel_context(client, db_session):
+    """Migration 0036: the CarbonNext Cat-6 record needs the employee (ref/name/
+    position), travel purpose and vehicle type — all captured before, none
+    forwarded. Release now stamps them on the handoff."""
+    import uuid as _uuid
+
+    from eclaim.db.models import CarbonHandoff, Claim
+
+    ids = db_session.info["principal"]
+    cm = Claimant(firm_id=ids["firm"], client_id=ids["client"], name="Aina",
+                  phone="+60166", employee_ref="E-12", position="Sales Executive",
+                  department="Sales")
+    db_session.add(cm)
+    db_session.flush()
+    v = _vehicle(db_session, ids, label="Aina Bezza", vtype="car_petrol",
+                 usual_claimant_id=cm.id)
+    db_session.commit()
+
+    r = client.post("/capture/mileage", data={
+        "origin": "KL Sentral", "destination": "Melaka",
+        "trip_date": "2026-07-03", "attested": "yes", "vehicle_id": str(v.id),
+    }, follow_redirects=False)
+    assert r.status_code == 303
+    cid = r.headers["location"].split("/claims/")[1].split("/")[0]
+
+    claim = db_session.get(Claim, _uuid.UUID(cid))
+    claim.submitted_by_claimant_id = cm.id       # the traveler
+    claim.purpose = "Client visit — Melaka"
+    db_session.commit()
+
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+    assert client.post(f"/api/claims/{cid}/release").status_code == 200
+    handoff = db_session.query(CarbonHandoff).filter_by(
+        claim_id=claim.id, direction="forward"
+    ).one()
+    assert handoff.employee_ref == "E-12"
+    assert handoff.employee_name == "Aina"
+    assert handoff.position == "Sales Executive"
+    assert handoff.travel_purpose == "Client visit — Melaka"
+    assert handoff.vehicle_type == "car_petrol"
+    assert handoff.unit == "km" and handoff.quantity is not None
+
+
 def test_claimant_position_and_department_persist(client, db_session):
     """H-B: the Cat-6 employee fields (position/department) save via the admin page."""
     ids = db_session.info["principal"]

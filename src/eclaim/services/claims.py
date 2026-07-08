@@ -162,6 +162,29 @@ class ClaimService:
         else:
             line.base_amount = gross
 
+    @staticmethod
+    def _travel_claimant(repos: "Repos", claim: Claim):
+        """The claimant behind a claim (Cat-6 employee context for the handoff) —
+        None for firm-keyed claims with no claimant binding."""
+        if claim.submitted_by_claimant_id is None:
+            return None
+        return repos.session.get(Claimant, claim.submitted_by_claimant_id)
+
+    @staticmethod
+    def _line_vehicle_type(repos: "Repos", line: ClaimLine) -> str | None:
+        """The vehicle type a mileage trip used (Cat-6 distance-based input): the
+        snapshot in the mileage evidence wins (captured at trip time — registry
+        edits never rewrite history); the registry row is the fallback."""
+        snap = (line.mileage or {}).get("vehicle_type")
+        if snap:
+            return snap
+        if line.vehicle_id is not None:
+            from ..db.models import Vehicle
+
+            v = repos.session.get(Vehicle, line.vehicle_id)
+            return v.vehicle_type if v is not None else None
+        return None
+
     def _resolved_cost_centre(self, repos: "Repos", line: ClaimLine, claim: Claim) -> str | None:
         """The cost centre a line posts to: its own override, else the claimant's,
         else the event's. Mirrors how Finance inherits the dimension."""
@@ -1412,6 +1435,7 @@ class ClaimService:
                         status="released",
                     )
                 )
+                travel_cm = self._travel_claimant(repos, claim)
                 for ln, cat in items:
                     repos.handoffs.add(
                         CarbonHandoff(
@@ -1434,6 +1458,11 @@ class ClaimService:
                             unit=ln.unit,
                             cost_centre=self._resolved_cost_centre(repos, ln, claim),
                             department=ln.department or claim.department,
+                            employee_ref=(travel_cm.employee_ref if travel_cm else None),
+                            employee_name=(travel_cm.name if travel_cm else None),
+                            position=(travel_cm.position if travel_cm else None),
+                            travel_purpose=claim.purpose,
+                            vehicle_type=self._line_vehicle_type(repos, ln),
                             doc_no=ln.doc_no,
                             doc_gross_total=doc_totals.get(_doc_key(ln)),
                             direction="forward",
@@ -1538,6 +1567,7 @@ class ClaimService:
                         status="released",
                     )
                 )
+                travel_cm = self._travel_claimant(repos, claim)
                 for (ln, cat), idem in zip(items, rev_keys):
                     repos.handoffs.add(
                         CarbonHandoff(
@@ -1560,6 +1590,11 @@ class ClaimService:
                             unit=ln.unit,
                             cost_centre=self._resolved_cost_centre(repos, ln, claim),
                             department=ln.department or claim.department,
+                            employee_ref=(travel_cm.employee_ref if travel_cm else None),
+                            employee_name=(travel_cm.name if travel_cm else None),
+                            position=(travel_cm.position if travel_cm else None),
+                            travel_purpose=claim.purpose,
+                            vehicle_type=self._line_vehicle_type(repos, ln),
                             doc_no=ln.doc_no,
                             doc_gross_total=doc_totals.get(_doc_key(ln)),
                             direction="reversal",

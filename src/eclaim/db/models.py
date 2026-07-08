@@ -712,6 +712,14 @@ class CarbonHandoff(Base):
     # claimant's, else the event's — not just the override); department likewise.
     cost_centre: Mapped[str | None] = mapped_column(String)
     department: Mapped[str | None] = mapped_column(String)
+    # Cat-6 business-travel context (migration 0036): the CarbonNext spec wants the
+    # employee, travel purpose and vehicle type per record. NULL for non-travel
+    # lines and claimant-less (firm-keyed) claims.
+    employee_ref: Mapped[str | None] = mapped_column(String)
+    employee_name: Mapped[str | None] = mapped_column(String)
+    position: Mapped[str | None] = mapped_column(String)
+    travel_purpose: Mapped[str | None] = mapped_column(String)
+    vehicle_type: Mapped[str | None] = mapped_column(String)
     # Parent-document reference (F-B): which document this line came from, and that
     # document's GROSS total (across ALL its lines, carbon + non-carbon). The forwarded
     # ``amount`` is this line only, so ``doc_gross_total`` explains why it can be less
