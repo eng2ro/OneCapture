@@ -612,6 +612,49 @@ ERP is a new connector implementing the same Protocol — never a customer fork.
 
 ---
 
+# Appendix I — Provisioning & identity: activation from CarbonNext (owner, 2026-07-07)
+
+> Owner decision: OneCapture tenants are ACTIVATED FROM CarbonNext. Only company
+> info copies across; OneCapture keeps its own user registry; posting back uses
+> the service identity with per-record attribution.
+
+## I-A. Activation flow (CarbonNext → OneCapture)
+1. A CarbonNext company enables the e-Claims module → CarbonNext calls
+   OneCapture's **activation endpoint** (authenticated: shared secret/signed;
+   IDEMPOTENT on carbonnext_company_id — re-activation never duplicates).
+2. Payload: carbonnext_company_id, company name, registration no, currency,
+   branch → site hierarchy (H-A pull can piggyback), contact email.
+3. OneCapture creates: Firm + Client (1:1 for CarbonNext-activated tenants —
+   the accounting-firm multi-client mode remains for firm-onboarded tenants),
+   the site_ref cache, and the DEFAULT USER.
+4. Default user = a locked-down SERVICE IDENTITY: display "CarbonNext Bridge",
+   principal bridge@<company-id>.onecapture, a role that can NEVER approve /
+   attest / pay / login interactively. It exists for provisioning provenance
+   and as the posting identity.
+5. Deactivation: CarbonNext can suspend a company → client.status flips;
+   define whether data stays readable.
+
+## I-B. User registry (OneCapture-owned)
+Users (claimants + approvers + admins) are registered and managed IN OneCapture
+— CarbonNext users are not synced. This RESOLVES the open identity-provider
+decision as "local registration", which requires: password hashing + reset
+flow, the login rate-limiting (built), session/token invalidation (partial).
+ALTERNATIVE to evaluate before building passwords: "Sign in with CarbonNext"
+(CarbonNext as OAuth provider) — users already exist there, one credential for
+both systems, less security surface here. The USER LIST stays in OneCapture
+either way; only the password check differs. OWNER TO DECIDE.
+
+## I-C. Posting identity + attribution
+All posts to CarbonNext authenticate as the company_dataentry SERVICE identity
+(matches the existing IR-6 client stub). Per record, forward BOTH:
+- `captured_by` (structured: the OneCapture user's email/ref) — filterable
+  provenance in CarbonNext;
+- `remarks` (human-readable: "captured by Aina via e-Claim, approved by Tan").
+The full maker/checker/releaser audit chain stays in OneCapture, reachable via
+carbon_ref. CarbonNext never needs OneCapture's user table.
+
+---
+
 # Appendix H — Site hierarchy, user profile, vehicle registry (owner, 2026-07-07)
 
 > Owner decisions following the UI-spec review. Three connected pieces that

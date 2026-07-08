@@ -96,6 +96,23 @@ replace "endpoint / payload" items with "target table(s) + column mapping".
           10/11 sold products, 14 franchises, 15 investments) are entered in
           CarbonNext directly — confirm OneCapture is out of scope for them.
 
+[ ] ACTIVATION / PROVISIONING (owner decision 2026-07-07):
+    OneCapture tenants are activated FROM CarbonNext (module enablement).
+    Please define with us:
+      [ ] The activation call CarbonNext makes to OneCapture: payload
+          (company id, name, registration no, currency, branch->site
+          hierarchy, contact email), auth (shared secret / signature), and
+          retry semantics (we make it idempotent on carbonnext_company_id).
+      [ ] Deactivation/suspension: the reverse call + expected behaviour.
+      [ ] Posting identity: confirmed as the single company_dataentry service
+          token; every record additionally carries `captured_by` (the
+          OneCapture user's email/ref) + a human-readable remark — confirm
+          you will store/display both.
+      [ ] LOGIN OPTION to evaluate: can CarbonNext act as the OAuth login
+          provider for OneCapture users ("Sign in with CarbonNext")? Users
+          are provisioned there first, so one credential could serve both
+          systems; otherwise OneCapture builds local password registration.
+
 [ ] PARTIAL DOCUMENTS (owner decision 2026-07-07 — confirm CarbonNext side):
     OneCapture forwards PER LINE, never per document: a bill mixing carbon
     and non-carbon lines posts only its carbon lines, so the amount received
