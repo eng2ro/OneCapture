@@ -476,20 +476,33 @@ def ingest_status(
     principal: Principal = Depends(deps.get_session_principal),
 ) -> dict:
     """JSON the progress page polls: state, read count, and where to go when done."""
-    return _job_status_dict(repos.session.get(IngestionJob, job_id))
+    return _job_status_dict(repos.session, repos.session.get(IngestionJob, job_id))
 
 
-def _job_status_dict(job: IngestionJob | None) -> dict:
+def _job_status_dict(session, job: IngestionJob | None) -> dict:
     if job is None:
         return {"state": "unknown"}
     redirect = None
     if job.status == "done":
         # A done job with no claim means every page was a vendor bill / DO that the
         # classifier diverted to the intake holding queue (C1) — send them there.
-        redirect = (
-            f"/claims/{job.claim_id}/review" if job.claim_id
-            else "/intake/holding?routed=1"
-        )
+        # A MIXED job (claim + diverted pages) carries ?diverted=N so the review
+        # page shows the same "N page(s) went to Vendor bills" banner as the sync
+        # path — without it the async split was silent.
+        if job.claim_id:
+            from sqlalchemy import func as _func, select as _select
+
+            from ..db.models import DocumentIntake as _DI
+
+            diverted = session.execute(
+                _select(_func.count()).select_from(_DI)
+                .where(_DI.ingestion_job_id == job.id)
+            ).scalar_one()
+            redirect = f"/claims/{job.claim_id}/review" + (
+                f"?diverted={diverted}" if diverted else ""
+            )
+        else:
+            redirect = "/intake/holding?routed=1"
     return {
         "state": job.status, "done": job.done_units, "total": job.total_units,
         "error": job.error, "redirect": redirect,
@@ -515,7 +528,7 @@ def ingest_events(
             for _ in range(600):
                 session.rollback()   # end any txn → next read is a fresh snapshot
                 set_tenant_context(session, principal.firm_id, principal.allowed_client_ids)
-                payload = _job_status_dict(session.get(IngestionJob, job_id))
+                payload = _job_status_dict(session, session.get(IngestionJob, job_id))
                 yield f"data: {_json.dumps(payload)}\n\n"
                 if payload.get("redirect") or payload["state"] in ("failed", "unknown"):
                     break

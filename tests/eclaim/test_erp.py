@@ -66,6 +66,35 @@ def test_csv_export_defuses_formula_injection(client, db_session):
     assert "-300.00" in csv_text and "'-300" not in csv_text
 
 
+def test_csv_export_defuses_every_text_column(client, db_session):
+    """F8 pin-widening: the escape must hold on EVERY free-text column — dropping
+    _csv_safe from any single one (e.g. doc_no) previously survived the suite."""
+    ids = db_session.info["principal"]
+    v = Vendor(firm_id=ids["firm"], client_id=ids["client"],
+               name="=v", erp_vendor_code="=E1")
+    db_session.add(v)
+    db_session.flush()
+    inv = ap.create_invoice(
+        db_session, firm_id=ids["firm"], client_id=ids["client"],
+        created_by_user_id=ids["user"], vendor_id=v.id, actor="t",
+        doc_no="=doc", payment_terms="=terms", currency="=MYR",
+        po_ref="=po", do_ref="=do", total_amount=Decimal("10"),
+        lines=[ap.LineInput(description="=desc", line_total=Decimal("10"),
+                            gl_code="=gl", tax_code="=tax", uom="=ea",
+                            department="=dept", project_code="=proj")],
+    )
+    csv_text = erp.export_ap_csv(db_session, [db_session.get(ApInvoice, inv.id)])
+    for cell in ("=v", "=E1", "=doc", "=terms", "=MYR", "=po", "=do",
+                 "=desc", "=gl", "=tax", "=ea", "=dept", "=proj"):
+        assert f"'{cell}" in csv_text, f"text column carrying {cell!r} is not defused"
+    # No bare formula-leading cell survives anywhere in the emitted CSV.
+    import csv as _csv
+    import io as _io
+    for row in _csv.reader(_io.StringIO(csv_text)):
+        for cell in row:
+            assert not cell.startswith("="), f"unescaped formula cell: {cell!r}"
+
+
 # --------------------------------------------------------------------------- #
 # mark_posted hardening
 # --------------------------------------------------------------------------- #

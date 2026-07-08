@@ -295,6 +295,13 @@ def test_mixed_async_upload_files_receipts_and_diverts_bills(
     assert len(lines) == 2                                # 2 receipts became claim lines
     assert len(_intakes_for(db_session, job_id)) == 2     # 2 bills diverted
 
+    # F2 residual: the async redirect must carry the diverted count so the review
+    # page shows the same "N page(s) went to Vendor bills" banner as the sync path.
+    from eclaim.web.routes import _job_status_dict
+
+    payload = _job_status_dict(db_session, job)
+    assert payload["redirect"] == f"/claims/{job.claim_id}/review?diverted=2"
+
 
 def test_intake_job_sha_unique_blocks_redivert_but_allows_inline(client, db_session):
     """The partial UNIQUE(ingestion_job_id, image_sha256) blocks a re-divert of the same
@@ -405,15 +412,27 @@ def test_inbox_shows_processing_banner(client, db_session):
 def test_job_status_dict_maps_states():
     from eclaim.web.routes import _job_status_dict
 
-    assert _job_status_dict(None) == {"state": "unknown"}
+    class _NoDiverted:
+        """Session stub: a done job with zero diverted intakes (count → 0)."""
+
+        def execute(self, *_a, **_k):
+            class _R:
+                @staticmethod
+                def scalar_one():
+                    return 0
+            return _R()
+
+    session = _NoDiverted()
+    assert _job_status_dict(session, None) == {"state": "unknown"}
 
     class J:
         pass
 
     j = J()
     j.status, j.done_units, j.total_units, j.error, j.claim_id = "running", 3, 10, None, None
-    d = _job_status_dict(j)
+    d = _job_status_dict(session, j)
     assert d["state"] == "running" and d["done"] == 3 and d["total"] == 10 and d["redirect"] is None
 
-    j.status, j.claim_id = "done", uuid.uuid4()
-    assert _job_status_dict(j)["redirect"] == f"/claims/{j.claim_id}/review"
+    j.status, j.claim_id, j.id = "done", uuid.uuid4(), uuid.uuid4()
+    # zero diverted pages → a clean redirect with no query noise
+    assert _job_status_dict(session, j)["redirect"] == f"/claims/{j.claim_id}/review"

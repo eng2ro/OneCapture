@@ -122,6 +122,60 @@ def test_release_hold_only_applies_to_held(client, db_session):
         ap.release_hold(db_session, invoice_id=inv.id, actor="x")
 
 
+def test_release_hold_returns_a_coded_invoice_to_coded(client, db_session):
+    """F6 branch pin (previously only held→captured was tested): an invoice coded
+    WHILE held returns to 'coded' on release, keeping its coder on record."""
+    ids = db_session.info["principal"]
+    coder = _principal(ids, _user(db_session, ids, "hbc@seed.test").id, email="hbc@seed.test")
+    ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    dup = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    assert dup.status == "held"
+    ap.code_line(db_session, line_id=ap.lines(db_session, dup.id)[0].id,
+                 coder=coder, actor="hbc", gl_code="6000")   # coding allowed while held
+    released = ap.release_hold(db_session, invoice_id=dup.id, actor="mgr")
+    assert released.status == "coded"
+    assert released.coded_by_user_id == coder.user_id
+
+
+def test_viewer_cannot_release_a_hold_via_the_web(client, db_session, fake_ocr, tmp_path):
+    """F6 authz pin: releasing a hold is a mutation — the viewer web gate must block
+    it (the service itself is route-guarded, so the route gate is the control)."""
+    from fastapi.testclient import TestClient
+
+    from eclaim.api import deps
+    from eclaim.api.app import create_app
+    from eclaim.auth.principal import Principal
+
+    ids = db_session.info["principal"]
+    ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    dup = ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
+    db_session.commit()
+
+    def _override_db():
+        try:
+            yield db_session
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            raise
+
+    def _viewer() -> Principal:
+        return Principal(
+            user_id=ids["user"], firm_id=ids["firm"], base_role="viewer",
+            allowed_client_ids=frozenset({ids["client"]}), email="viewer@seed.test",
+        )
+
+    app = create_app()
+    app.dependency_overrides[deps.get_db] = _override_db
+    app.dependency_overrides[deps.get_session_principal] = _viewer
+    app.dependency_overrides[deps.get_principal] = _viewer
+    with TestClient(app) as viewer_client:
+        r = viewer_client.post(f"/ap/{dup.id}/release-hold", follow_redirects=False)
+    assert r.status_code == 403
+    db_session.expire_all()
+    assert db_session.get(ApInvoice, dup.id).status == "held"
+
+
 def test_web_release_hold_action(client, db_session):
     ids = db_session.info["principal"]
     ap.create_from_intake(db_session, intake=_intake(db_session, ids), actor="t")
