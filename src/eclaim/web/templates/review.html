@@ -491,6 +491,15 @@
                   <div><label class="label-tiny">Doc date</label><input class="field" name="doc_date" value="{{ ln.doc_date or '' }}"></div>
                   <div><label class="label-tiny">Total</label><input class="field" name="total_amount" value="{{ ln.total_amount or '' }}"></div>
                 </div>
+                <div class="field-row" style="margin-top:8px;">
+                  <div><label class="label-tiny">Currency</label><input class="field" name="currency" value="{{ ln.currency or '' }}" placeholder="MYR" maxlength="3" style="text-transform:uppercase;"></div>
+                  <div><label class="label-tiny">Activity type (OCR)</label>
+                    <select class="field" name="expense_type" title="The raw activity class CarbonNext uses when the category is generic — check it matches the receipt (petrol vs diesel matters for the factor)">
+                      {% for et in ['fuel_diesel', 'fuel_petrol', 'electricity', 'natural_gas', 'air_travel', 'other'] %}<option value="{{ et }}" {{ 'selected' if ln.expense_type == et else '' }}>{{ et.replace('_', ' ') }}</option>{% endfor %}
+                      {% if ln.expense_type and ln.expense_type not in ['fuel_diesel', 'fuel_petrol', 'electricity', 'natural_gas', 'air_travel', 'other'] %}<option value="{{ ln.expense_type }}" selected>{{ ln.expense_type.replace('_', ' ') }}</option>{% endif %}
+                    </select>
+                  </div>
+                </div>
                 {% set vcat = cat_by_id.get(ln.category_id) %}
                 <div class="field-row" style="margin-top:8px;">
                   <div><label class="label-tiny">Quantity (activity)</label><input class="field" name="quantity" value="{{ ln.quantity or '' }}" placeholder="e.g. 34.146"></div>

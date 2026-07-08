@@ -197,6 +197,42 @@ def test_quantity_is_verifiable_and_the_correction_reaches_the_handoff(client, f
     assert handoff.unit == "L"
 
 
+def test_currency_and_expense_type_are_verifiable_and_forwarded(client, fake_ocr, db_session):
+    """F-E item 2: currency and expense_type are FORWARDED to CarbonNext but had no
+    verify-form inputs — a USD receipt misread as MYR, or petrol misread as diesel
+    (a different emission factor), flowed through invisibly. Both must be
+    correctable, and the correction must be what the handoff carries."""
+    import uuid as _uuid
+
+    from eclaim.db.models import CarbonHandoff, ClaimLine
+
+    fake_ocr.extraction = Extraction(
+        expense_type="fuel_diesel", quantity=Decimal("30"), unit="L",
+        total_amount=Decimal("120.00"), currency="MYR", vendor="Shell KLIA",
+    )
+    files = {"file": ("r.png", b"\x89PNG\r\n usd receipt", "image/png")}
+    cid = client.post("/api/claims/upload", files=files,
+                      data={"attested": "true"}).json()["id"]
+
+    page = client.get(f"/claims/{cid}/review")
+    assert 'name="currency"' in page.text
+    assert 'name="expense_type"' in page.text
+
+    client.post(f"/claims/{cid}/edit",
+                data={"line_id": "", "currency": "USD", "expense_type": "fuel_petrol"},
+                follow_redirects=False)
+    line = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == _uuid.UUID(cid))
+    ).scalars().one()
+    assert line.currency == "USD" and line.expense_type == "fuel_petrol"
+
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+    assert client.post(f"/api/claims/{cid}/release").status_code == 200
+    handoff = db_session.query(CarbonHandoff).filter_by(line_id=line.id).one()
+    assert handoff.currency == "USD"
+    assert handoff.expense_type == "fuel_petrol"
+
+
 def test_receipt_image_endpoint_downloads_with_filename(client, fake_ocr):
     """The download button must SAVE the receipt, not just open it — the endpoint
     sends Content-Disposition: attachment with a friendly filename."""
