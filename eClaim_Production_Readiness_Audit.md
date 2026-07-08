@@ -911,6 +911,14 @@ ERP-Sync-owned until AP can carry a gas type.
 
 # Appendix E — Unified approvals inbox + document-type switching (owner, 2026-07-07)
 
+> ✅ BUILT 2026-07-07 (all three parts): E1 /approvals inbox (two tabs, counts,
+> needs-a-check section, nav badge), E2 document-type pills + diverted banners,
+> E3 switching both directions (pre-approval only, audited both sides, same
+> image provenance, idempotent, SoD carryover). F-E items 6 (clear-to-NULL
+> edits) and 7 (category-missing release note) also closed the same day.
+> Suite: 542 green. OUR SIDE IS NOW FEATURE-COMPLETE pending CarbonNext
+> answers (sites API, activation contract, payload confirmation, login option).
+
 > **Owner decision:** approvers and submitters must SEE which bucket each
 > uploaded document landed in (e-Claim vs vendor bill) and be able to SWITCH a
 > misclassified one — with switching locked after approval.
