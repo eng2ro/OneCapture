@@ -91,6 +91,33 @@ def record_intake(
             ).order_by(DocumentIntake.created_at).limit(1)
         ).scalar_one_or_none()
         if existing is not None:
+            # A confident re-read upgrades a stale PENDING row: the user re-captured a
+            # bill the first pass couldn't classify — keep one row but carry the fresh
+            # verdict, so the queue and the caller's redirect agree on where it went.
+            upgraded = False
+            if (
+                existing.routed_to == routing.QUEUE_PENDING
+                and decision.queue != routing.QUEUE_PENDING
+            ):
+                existing.document_type = extraction.document_type
+                existing.type_confidence = extraction.type_confidence
+                existing.type_signals = list(extraction.type_signals or [])
+                existing.routed_to = decision.queue
+                existing.needs_manual = decision.needs_manual
+                existing.link_key = routing.link_key(extraction.vendor, extraction.po_ref)
+                _link_counterpart(session, existing)
+                upgraded = True
+            # The suppressed duplicate is never invisible: audit the attempt on the
+            # surviving row (who re-uploaded, and whether it upgraded the route).
+            _audit(
+                session, existing, "intake_duplicate_suppressed", actor,
+                {
+                    "source_name": provenance.name,
+                    "reclassified": upgraded,
+                    "routed_to": existing.routed_to,
+                },
+            )
+            session.flush()
             return existing, decision
 
     intake = DocumentIntake(

@@ -305,6 +305,47 @@ def test_reuploading_the_same_bill_does_not_duplicate_the_holding_row(client, db
     assert len(rows) == 1
 
 
+def test_suppressed_duplicate_capture_is_audited(client, db_session, fake_ocr):
+    """A suppressed re-upload must never be invisible: the surviving row's audit
+    chain records each suppressed attempt."""
+    fake_ocr.extraction = _bill()
+    _capture(client)
+    _capture(client)
+    intake = db_session.execute(select(DocumentIntake)).scalars().one()
+    chain = Repos.for_session(db_session).audit.chain("document_intake", intake.id)
+    assert sum(1 for e in chain if e.event_type == "intake_duplicate_suppressed") == 1
+
+
+def test_confident_recapture_upgrades_a_stale_pending_row(db_session):
+    """357d0f3 finding: the old dedup returned the STALE row — a re-capture of a
+    previously-unclassifiable bill (now confidently read, e.g. after the OCR cache
+    was swept or the threshold changed) was told it went to Vendor bills while the
+    row still sat in 'pending'. A confident re-read must upgrade the surviving row.
+    Service-level: the web path reuses cached OCR for identical bytes, so the fresh
+    verdict arrives here only in the cache-expired / re-photo case."""
+    ids = db_session.info["principal"]
+    prov = intake_service.Provenance(sha256="samesha", name="bill.png")
+
+    def _rec(conf):
+        return intake_service.record_intake(
+            db_session, firm_id=ids["firm"], client_id=ids["client"],
+            created_by_user_id=ids["user"],
+            extraction=_bill(type_confidence=Decimal(conf)),
+            provenance=prov, actor="t",
+        )
+
+    stale, _ = _rec("0.30")                       # below threshold → pending
+    assert stale.routed_to == "pending" and stale.needs_manual
+
+    row, decision = _rec("0.95")                  # confident re-read, same sha
+    assert row.id == stale.id                     # deduped to the surviving row
+    assert row.routed_to == "ap_holding" == decision.queue   # upgraded, not stale
+    assert row.type_confidence == Decimal("0.95") and not row.needs_manual
+    chain = Repos.for_session(db_session).audit.chain("document_intake", row.id)
+    dup = [e for e in chain if e.event_type == "intake_duplicate_suppressed"]
+    assert dup and dup[-1].detail["reclassified"] is True
+
+
 def test_holding_queue_excludes_eclaim_rows(db_session):
     """A record routed to e-Claim is never in the holding queue (it became a claim)."""
     ids = db_session.info["principal"]
