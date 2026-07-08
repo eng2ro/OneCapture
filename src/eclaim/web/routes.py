@@ -987,6 +987,22 @@ def ap_approve(
     )
 
 
+@router.post("/ap/{invoice_id}/unapprove")
+def ap_unapprove(
+    request: Request, invoice_id: uuid.UUID,
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Reopen an approved bill for amendment/switching — blocked once posted/paid."""
+    return _ap_action(
+        request, repos, principal, invoice_id,
+        lambda: ap_service.unapprove(
+            repos.session, invoice_id=invoice_id, editor=principal,
+            actor=_actor(principal),
+        ),
+    )
+
+
 @router.post("/ap/{invoice_id}/release-hold")
 def ap_release_hold(
     request: Request, invoice_id: uuid.UUID,

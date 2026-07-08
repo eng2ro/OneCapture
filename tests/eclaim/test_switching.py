@@ -301,6 +301,82 @@ def test_bring_back_lists_only_the_users_own_pages(client, fake_ocr, db_session)
     assert "Bring back into this claim" not in page.text
 
 
+def test_approved_invoice_reopens_then_switches(client, db_session):
+    """The 'already approved' answer, AP side: an approved bill cannot switch
+    directly (the lock), but UNAPPROVE reopens it to coded — clearing the
+    approval, audited — and then the switch works. Once posted/paid, reopening
+    is refused (corrections go through the ERP's credit-note process)."""
+    from sqlalchemy import select as _sel
+
+    from eclaim.db.models import Category
+
+    ids = db_session.info["principal"]
+    inv = _filed_invoice(db_session, ids, doc_no="INV-REOPEN")
+    coder = Principal(user_id=_mkuser(db_session, ids, "rc@seed.test").id,
+                      firm_id=ids["firm"], base_role="partner",
+                      allowed_client_ids=frozenset({ids["client"]}), email="rc@seed.test")
+    approver = Principal(user_id=_mkuser(db_session, ids, "ra@seed.test").id,
+                         firm_id=ids["firm"], base_role="partner",
+                         allowed_client_ids=frozenset({ids["client"]}), email="ra@seed.test")
+    cat = db_session.execute(
+        _sel(Category).where(Category.client_id == ids["client"]).limit(1)
+    ).scalars().one()
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id,
+                 coder=coder, actor="rc", category_id=cat.id)
+    ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="ra")
+    db_session.commit()
+
+    # Locked while approved…
+    assert client.post(f"/ap/{inv.id}/to-expense",
+                       follow_redirects=False).status_code == 409
+    # …reopen clears the approval (audited)…
+    r = client.post(f"/ap/{inv.id}/unapprove", follow_redirects=False)
+    assert r.status_code == 303
+    db_session.expire_all()
+    row = db_session.get(ApInvoice, inv.id)
+    assert row.status == "coded"
+    assert row.approved_by_user_id is None and row.approved_at is None
+    chain = Repos.for_session(db_session).audit.chain("ap_invoice", inv.id)
+    assert any(e.event_type == "ap_unapproved" for e in chain)
+    # …and now the switch works.
+    assert client.post(f"/ap/{inv.id}/to-expense",
+                       follow_redirects=False).status_code == 303
+
+
+def test_reopen_refused_once_paid(client, db_session):
+    ids = db_session.info["principal"]
+    inv = _filed_invoice(db_session, ids, doc_no="INV-PAIDLOCK")
+    coder = Principal(user_id=_mkuser(db_session, ids, "plc@seed.test").id,
+                      firm_id=ids["firm"], base_role="partner",
+                      allowed_client_ids=frozenset({ids["client"]}), email="plc@seed.test")
+    approver = Principal(user_id=_mkuser(db_session, ids, "pla@seed.test").id,
+                         firm_id=ids["firm"], base_role="partner",
+                         allowed_client_ids=frozenset({ids["client"]}), email="pla@seed.test")
+    from sqlalchemy import select as _sel
+
+    from eclaim.db.models import Category
+
+    cat = db_session.execute(
+        _sel(Category).where(Category.client_id == ids["client"]).limit(1)
+    ).scalars().one()
+    ap.code_line(db_session, line_id=ap.lines(db_session, inv.id)[0].id,
+                 coder=coder, actor="plc", category_id=cat.id)
+    ap.approve(db_session, invoice_id=inv.id, approver=approver, actor="pla")
+    ap.mark_paid(db_session, invoice_id=inv.id, actor="finance")
+    db_session.commit()
+
+    r = client.post(f"/ap/{inv.id}/unapprove", follow_redirects=False)
+    assert r.status_code == 409
+    assert db_session.get(ApInvoice, inv.id).status == "paid"
+
+
+def _mkuser(db_session, ids, email):
+    u = AppUser(firm_id=ids["firm"], email=email, display_name=email, base_role="partner")
+    db_session.add(u)
+    db_session.flush()
+    return u
+
+
 def test_switcher_cannot_approve_the_converted_claim(client, db_session):
     """SoD carryover: switching is a MAKER action — the converter is the claim's
     creator, so the approve gate blocks them."""

@@ -104,6 +104,15 @@
       </div>
       {% if invoice.status == 'approved' %}
       <p class="page-sub" style="margin-top:12px;">Approved — export from the <a href="/ap" style="color:var(--pine);">AP invoices</a> list to post it in the ERP.</p>
+      {% if can_act %}
+      <form method="post" action="/ap/{{ invoice.id }}/unapprove" style="margin-top:8px;"
+            onsubmit="return confirm('Reopen this approved bill? It returns to coded so it can be amended or switched — the approval is cleared (audited).');">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn" type="submit" title="Only until the bill is posted/paid — after that, corrections go through the ERP's credit-note process.">
+          <i class="ti ti-arrow-back"></i> Reopen (unapprove)
+        </button>
+      </form>
+      {% endif %}
       {% endif %}
       {% else %}
       <p class="page-sub">You don't have permission to act on this invoice.</p>

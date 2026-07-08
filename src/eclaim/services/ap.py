@@ -571,6 +571,33 @@ def mark_paid(
     return invoice
 
 
+def unapprove(
+    session: Session, *, invoice_id: uuid.UUID, editor: Principal, actor: str,
+) -> ApInvoice:
+    """Reopen an APPROVED invoice back to ``coded`` so it can be amended or
+    switched — mirrors e-Claim's unapprove, and only while the bill has not left
+    for another system: once posted to the ERP or paid, the data is integrated
+    downstream and corrections go through the ERP's credit-note process, never a
+    silent reopen here. Clears the approval (approver + timestamp) and is
+    audited; reopening is not a sign-off, so no SoD self-check applies."""
+    invoice = get_invoice(session, invoice_id)
+    _require_writer(editor, invoice)
+    if invoice.status != "approved":
+        raise IllegalApTransition(
+            f"cannot reopen an invoice in status {invoice.status!r}"
+            + (" — it is already integrated downstream (correct via the ERP)"
+               if invoice.status in ("posted", "paid") else "")
+        )
+    prior_approver = invoice.approved_by_user_id
+    invoice.status = "coded"
+    invoice.approved_by_user_id = None
+    invoice.approved_at = None
+    _audit(session, invoice, "ap_unapproved", actor,
+           {"prior_approver": str(prior_approver) if prior_approver else None})
+    session.flush()
+    return invoice
+
+
 def switch_to_expense(
     session: Session, *, invoice_id: uuid.UUID, editor: Principal, actor: str,
 ):
