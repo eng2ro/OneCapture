@@ -117,6 +117,7 @@
         <i class="ti ti-check"></i><span class="lab">Released</span>{% if nav_counts.get('released_all') %}<span class="oc-cnt">{{ nav_counts['released_all'] }}</span>{% endif %}</a>
 
       <div class="oc-nav-h">MANAGE</div>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/approvals' else '' }}" href="/approvals"><i class="ti ti-checks"></i><span class="lab">Approvals</span>{% if approvals_count %}<span class="oc-cnt">{{ approvals_count }}</span>{% endif %}</a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/payables' else '' }}" href="/payables"><i class="ti ti-wallet"></i><span class="lab">Payables</span></a>
       {% if is_firm_scoped %}
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/events' else '' }}" href="/admin/events"><i class="ti ti-map-pin"></i><span class="lab">Events &amp; budgets</span></a>

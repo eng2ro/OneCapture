@@ -103,6 +103,23 @@ def _nav_context(request: Request) -> dict:
         ctx["intake_holding_count"] = intake_service.holding_count(
             db, principal.allowed_client_ids
         )
+        # Approvals-inbox badge (Appendix E1): claims in review + AP bills awaiting
+        # approval — COUNTs only, same rule as above.
+        from sqlalchemy import func as _f, select as _sel
+
+        from ..db.models import ApInvoice as _Ap
+
+        ap_pending = 0
+        if principal.allowed_client_ids:
+            ap_pending = int(db.execute(
+                _sel(_f.count()).select_from(_Ap).where(
+                    _Ap.client_id.in_(principal.allowed_client_ids),
+                    _Ap.status.in_(("coded", "pending_approval")),
+                )
+            ).scalar_one())
+        ctx["approvals_count"] = (
+            counts.get("submitted", 0) + counts.get("in_review", 0) + ap_pending
+        )
     except Exception:  # nav chrome must never break a page render
         return ctx
     ctx["nav_total"] = sum(counts.values())   # total claims — sum BEFORE deriving group keys
@@ -907,6 +924,53 @@ def ap_reject(
 # --------------------------------------------------------------------------- #
 # Payables overview: reimburse-staff vs pay-vendors totals in one place.
 # --------------------------------------------------------------------------- #
+@router.get("/approvals", response_class=HTMLResponse)
+def approvals_inbox(
+    request: Request,
+    tab: str = "expenses",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+) -> HTMLResponse:
+    """The approver's front door (Appendix E1): ONE workspace, two tabs —
+    staff expenses awaiting review and vendor bills awaiting approval — plus the
+    classifier's 'needs a check' pages. Deep-linkable via ?tab=."""
+    ids = list(principal.allowed_client_ids)
+    claims = repos.claims.list_for_clients(ids, ("submitted", "in_review"))
+    invoices = [
+        inv for inv in ap_service.list_invoices(repos.session, ids)
+        if inv.status in ("coded", "pending_approval")
+    ]
+    vendors = _ap_vendors_for(repos.session, invoices)
+    pending_intakes = [
+        r for r in intake_service.holding_queue(repos.session, ids)
+        if r.routed_to == routing.QUEUE_PENDING
+    ]
+    return templates.TemplateResponse(
+        request,
+        "approvals.html",
+        {
+            "tab": ("vendor" if tab == "vendor" else "expenses"),
+            "claims": claims,
+            "invoices": invoices,
+            "vendors": vendors,
+            "pending_intakes": pending_intakes,
+        },
+    )
+
+
+def _ap_vendors_for(session, invoices):
+    from sqlalchemy import select as _select
+
+    from ..db.models import Vendor
+
+    vids = {inv.vendor_id for inv in invoices}
+    if not vids:
+        return {}
+    return {v.id: v for v in session.execute(
+        _select(Vendor).where(Vendor.id.in_(vids))
+    ).scalars()}
+
+
 @router.get("/payables", response_class=HTMLResponse)
 def payables_page(
     request: Request,

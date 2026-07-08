@@ -29,7 +29,10 @@
     <div class="card">
       <div class="card-header">
         <div class="card-title">{{ vendor.name if vendor else 'Vendor' }}</div>
-        {{ status_badge(invoice.status) }}
+        <div style="display:flex;gap:6px;align-items:center;">
+          <span class="badge neutral" style="font-size:9px;" title="Document type (Appendix E2): a bill finance pays — staff expenses live in e-Claim. Switchable until approval.">vendor bill</span>
+          {{ status_badge(invoice.status) }}
+        </div>
       </div>
       {% if invoice.status == 'held' and invoice.hold_reason %}
       <div class="hint-warn"><i class="ti ti-alert-triangle"></i> {{ invoice.hold_reason }}</div>

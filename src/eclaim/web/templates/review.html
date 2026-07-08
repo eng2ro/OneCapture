@@ -119,6 +119,7 @@
     <span class="doc-title">{{ claim.title or 'Expense claim' }}</span>
     <span class="doc-ref">{{ claim.claim_no or ('Claim #' ~ (claim.id | string | truncate(8, true, ''))) }}</span>
     <span class="badge neutral" style="font-size:9px;">{{ (claim.claim_type or 'general').replace('_', ' ') }}</span>
+    <span class="badge success" style="font-size:9px;" title="Document type (Appendix E2): a reimbursable staff expense — vendor bills live in AP invoices. Switchable per line until approval.">staff expense</span>
     <span class="badge {{ status_badge.get(claim.status,'info') }}">{{ claim.status.replace('_',' ') }}</span>
     {% if next_review_id %}
     <div style="margin-left:auto;display:flex;align-items:center;gap:10px;">

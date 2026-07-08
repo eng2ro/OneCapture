@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Approvals — OneCapture{% endblock %}
+{% block topbar_sub %}Approvals inbox{% endblock %}
+{% macro cstat(s) %}<span class="badge {{ {'in_review':'warning','submitted':'neutral'}.get(s, 'neutral') }}">{{ s.replace('_', ' ') }}</span>{% endmacro %}
+{% macro istat(s) %}<span class="badge {{ {'pending_approval':'warning','coded':'neutral'}.get(s, 'neutral') }}">{{ s.replace('_', ' ') }}</span>{% endmacro %}
+{% block content %}
+{% include "_editorial.html" %}
+<style>
+  .capx .tabs{display:flex;gap:4px;margin:18px 0 0;border-bottom:1px solid var(--rule)}
+  .capx .tab{appearance:none;background:none;border:none;font:inherit;cursor:pointer;padding:10px 16px;font-size:13px;font-weight:600;color:var(--graphite);border-bottom:2px solid transparent;margin-bottom:-1px;text-decoration:none;display:inline-block}
+  .capx .tab.active{color:var(--pine);border-bottom-color:var(--pine)}
+  .capx .tab .n{color:var(--faint);font-weight:500}
+  .capx .pane{display:none}
+  .capx .pane.active{display:block}
+  .capx .mono{font-family:var(--mono)}
+</style>
+<div class="capx">
+  <h1 class="page-title">Approvals</h1>
+  <p class="page-sub" style="max-width:760px;">Everything waiting for a decision, in one place — staff expenses on the left tab, vendor bills on the right. A document type can be switched until it is approved; after approval, corrections go through reject / reversal.</p>
+
+  <div class="tabs">
+    <a class="tab {{ 'active' if tab == 'expenses' else '' }}" href="/approvals?tab=expenses">Staff expenses <span class="n">({{ claims | length }})</span></a>
+    <a class="tab {{ 'active' if tab == 'vendor' else '' }}" href="/approvals?tab=vendor">Vendor bills <span class="n">({{ invoices | length + pending_intakes | length }})</span></a>
+  </div>
+
+  <div class="pane {{ 'active' if tab == 'expenses' else '' }}">
+    <div class="card" style="margin-top:14px;padding:0;overflow:hidden;">
+      {% if claims %}
+      <table class="data">
+        <thead><tr><th>Claim</th><th>Title</th><th style="text-align:right;">Claimed</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for c in claims %}
+          <tr>
+            <td class="mono" style="font-size:12px;">{{ c.claim_no or '—' }}</td>
+            <td>{{ c.title or c.claimant_ref or '—' }}</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums;">{% if c.total_claimed is not none %}RM {{ '%.2f' | format(c.total_claimed) }}{% else %}—{% endif %}</td>
+            <td>{{ cstat(c.status) }}</td>
+            <td style="text-align:right;"><a class="btn" href="/claims/{{ c.id }}/review" style="height:32px;font-size:12px;">Review</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div style="padding:44px;text-align:center;color:var(--graphite);">Nothing waiting — no staff expenses in review.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="pane {{ 'active' if tab == 'vendor' else '' }}">
+    <div class="card" style="margin-top:14px;padding:0;overflow:hidden;">
+      {% if invoices %}
+      <table class="data">
+        <thead><tr><th>Vendor</th><th>Doc no</th><th style="text-align:right;">Total</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for inv in invoices %}
+          <tr>
+            <td style="font-weight:600;">{{ vendors[inv.vendor_id].name if inv.vendor_id in vendors else '—' }}</td>
+            <td class="mono" style="font-size:12px;">{{ inv.doc_no or '—' }}</td>
+            <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ inv.currency }} {{ '%.2f' | format(inv.total_amount) if inv.total_amount is not none else '—' }}</td>
+            <td>{{ istat(inv.status) }}</td>
+            <td style="text-align:right;"><a class="btn" href="/ap/{{ inv.id }}" style="height:32px;font-size:12px;">Open</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div style="padding:44px;text-align:center;color:var(--graphite);">No vendor bills awaiting approval.</div>
+      {% endif %}
+    </div>
+
+    {% if pending_intakes %}
+    <div class="card" style="margin-top:14px;">
+      <div class="card-title" style="margin-bottom:8px;"><i class="ti ti-help-circle"></i> Needs a check — the classifier wasn't sure</div>
+      <p class="page-sub" style="margin-bottom:10px;">Decide whether each page is a staff expense or a vendor bill in the <a href="/intake/holding" style="color:var(--pine);">Vendor bills queue</a>.</p>
+      <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--ink-2);">
+        {% for r in pending_intakes %}
+        <li>{{ r.vendor or 'Unknown vendor' }} · {{ r.doc_no or 'no doc no' }}{% if r.total_amount is not none %} · {{ r.currency or '' }} {{ '%.2f' | format(r.total_amount) }}{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
