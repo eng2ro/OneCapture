@@ -76,6 +76,47 @@ def test_mileage_capture_records_the_vehicle(client, db_session, fake_ocr):
     assert line.mileage["vehicle_label"] == "WXY 5678"
 
 
+def test_review_modal_mileage_records_the_vehicle_too(client, db_session, fake_ocr,
+                                                      monkeypatch):
+    """Parity (owner report 2026-07-09): a mileage line added from the REVIEW
+    page's modal must carry the vehicle exactly like the capture page — its
+    type is the CarbonNext distance-based input."""
+    import uuid as _uuid
+
+    from eclaim.api import deps
+    from eclaim.maps import RouteResult
+
+    class _Fake:
+        def routes(self, origin, destination, waypoints=None):
+            return [RouteResult(distance_km=Decimal("12.000"), polyline="p",
+                                legs=[{"from": origin, "to": destination, "km": "12.000"}])]
+
+    monkeypatch.setattr(deps, "get_directions", lambda: _Fake())
+    ids = db_session.info["principal"]
+    v = _vehicle(db_session, ids, label="JHR 9", vtype="car_petrol")
+    db_session.commit()
+
+    files = {"file": ("r.png", b"\x89PNG veh-modal", "image/png")}
+    cid = client.post("/api/claims/upload", files=files).json()["id"]
+
+    r = client.post(f"/claims/{cid}/mileage", data={
+        "origin": "JB Sentral", "destination": "Southkey",
+        "trip_date": "2026-07-09", "vehicle_id": str(v.id), "attested": "yes",
+    }, follow_redirects=False)
+    assert r.status_code == 303, r.text
+
+    line = db_session.execute(
+        select(ClaimLine).where(ClaimLine.claim_id == _uuid.UUID(cid),
+                                ClaimLine.vehicle_id == v.id)
+    ).scalars().one()
+    assert line.mileage["vehicle_type"] == "car_petrol"
+    assert line.mileage["vehicle_label"] == "JHR 9"
+
+    # The review page offers the registry in the modal's picker.
+    page = client.get(f"/claims/{cid}/review").text
+    assert 'name="vehicle_id"' in page and "JHR 9" in page
+
+
 def test_mileage_without_vehicle_still_files(client, db_session):
     r = client.post("/capture/mileage", data={
         "origin": "KL Sentral", "destination": "Shah Alam",
@@ -144,6 +185,9 @@ def test_handoff_carries_cat6_travel_context(client, db_session):
     claim = db_session.get(Claim, _uuid.UUID(cid))
     claim.submitted_by_claimant_id = cm.id       # the traveler
     claim.purpose = "Client visit — Melaka"
+    # This test approves as the same user who keyed the trip; quick-mileage now
+    # records the maker (SoD pinned in test_mileage), so clear it for the setup.
+    claim.created_by_user_id = None
     db_session.commit()
 
     assert client.post(f"/api/claims/{cid}/approve").status_code == 200

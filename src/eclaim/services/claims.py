@@ -463,6 +463,11 @@ class ClaimService:
         route we keep it and flag the overage, so the approver sees they took a
         longer-than-necessary route (policy: pay chosen, flag if longer)."""
         km = route.distance_km
+        if km is None or km <= 0:
+            raise ClaimError(
+                "This trip computes to 0 km — From and To look like the same "
+                "place. Check both locations."
+            )
         amount = (km * rate).quantize(Decimal("0.01"))
         # Flag only a material overage vs the shortest route (ignore sub-100 m
         # rounding noise between a fresh recompute and the previewed alternative).
@@ -530,21 +535,35 @@ class ClaimService:
         actor: str,
         principal: "Principal | None" = None,
         shortest_km: Decimal | None = None,
+        vehicle=None,
+        attested: bool = False,
     ) -> ClaimLine:
         """Add a mileage line to an EXISTING editable claim (the review screen / a
         mixed receipts+mileage claim). Same editability rule as :meth:`edit`; the
-        addition is recorded in the audit chain."""
+        addition is recorded in the audit chain.
+
+        Mileage is out-of-pocket reimbursement, so — like every capture-side
+        path — the declaration is required BEFORE the line is saved, and the
+        claim's attestation is re-stamped to the adder: an addition must never
+        release under a declaration that predates it (Appendix A)."""
         claim = self.get(repos, claim_id)
         self._require_writer(claim, principal)
         if claim.status not in ("in_review", "submitted", "sent_back"):
             raise IllegalTransition(
                 f"cannot add a line to a claim in status {claim.status!r}"
             )
+        if not attested:
+            raise AttestationRequired(
+                "Mileage reimburses out-of-pocket spend — please confirm the "
+                "declaration to add this trip."
+            )
         line = self.add_mileage_line(
             repos=repos, claim=claim, origin=origin, destination=destination,
             waypoints=waypoints, route=route, date=date, rate=rate,
-            shortest_km=shortest_km,
+            shortest_km=shortest_km, vehicle=vehicle,
         )
+        claim.attested_by = actor
+        claim.attested_at = dt.datetime.now(dt.timezone.utc)
         record_event(
             repos.audit,
             firm_id=claim.firm_id,
@@ -554,7 +573,7 @@ class ClaimService:
             event_type="edited",
             actor=actor,
             detail={"added": "mileage_line", "line_id": str(line.id),
-                    "km": str(route.distance_km)},
+                    "km": str(route.distance_km), "attested": True},
         )
         return line
 

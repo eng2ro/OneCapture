@@ -718,15 +718,28 @@
           <input type="hidden" name="waypoints" id="am-waypoints" value="[]">
           <input type="hidden" name="route_index" id="am-route-index" value="0">
           <div class="field-row">
-            <div><label class="label-tiny">From</label><input class="field am-place" name="origin" id="am-from" autocomplete="off" placeholder="Start location"></div>
-            <div><label class="label-tiny">To</label><input class="field am-place" name="destination" id="am-to" autocomplete="off" placeholder="Destination"></div>
+            <div><label class="label-tiny">From</label><input class="field am-place" name="origin" id="am-from" autocomplete="off" placeholder="Start location" required></div>
+            <div><label class="label-tiny">To</label><input class="field am-place" name="destination" id="am-to" autocomplete="off" placeholder="Destination" required></div>
           </div>
           <div id="am-stops"></div>
           <div style="display:flex;gap:8px;align-items:flex-end;margin-top:8px;">
             <button type="button" class="btn" style="font-size:11px;" onclick="amAddStop()"><i class="ti ti-plus"></i> Add stop</button>
             <div><label class="label-tiny">Trip date</label><input class="field" type="date" name="trip_date" required style="padding:6px 8px;"></div>
-            <button class="btn btn-accent" type="submit" style="margin-left:auto;"><i class="ti ti-plus"></i> Add mileage line</button>
+            <div><label class="label-tiny">Vehicle</label>
+              <select class="field" name="vehicle_id" style="padding:6px 8px;" title="Which registered vehicle made this trip — its type is what CarbonNext computes emissions from. Any vehicle is selectable (e.g. claiming on someone's behalf).">
+                <option value="">— not specified —</option>
+                {% for v in vehicles %}<option value="{{ v.id }}">{{ v.label }} · {{ v.vehicle_type.replace('_', ' ') }}</option>{% endfor %}
+              </select>
+            </div>
+            <button class="btn btn-accent" type="submit" id="am-add" disabled style="margin-left:auto;"><i class="ti ti-plus"></i> Add mileage line</button>
           </div>
+          {# Same out-of-pocket declaration every capture path requires (Appendix A):
+             an added trip must never release under a stamp that predates it. #}
+          <label style="display:flex;gap:8px;align-items:flex-start;font-size:11px;color:var(--text-secondary);margin-top:10px;cursor:pointer;">
+            <input type="checkbox" name="attested" value="yes" required style="margin-top:2px;">
+            <span>I confirm this trip was out-of-pocket business travel and has not been
+              (and will not be) reimbursed elsewhere.</span>
+          </label>
           <div id="am-dist" style="font-size:12px;color:var(--text-secondary);margin-top:10px;">Enter From and To to preview the route.</div>
           <div id="am-alts" class="route-alts" hidden></div>
           <div id="am-map" style="width:100%;height:240px;border-radius:10px;border:1px solid var(--border);margin-top:8px;display:none;background:#eef1f4;"></div>
@@ -1016,6 +1029,12 @@ function showLine(lineId, lineNo, row) {
       routeEl.hidden = false;
       var html = '<i class="ti ti-map-2"></i> ' + stops +
         ' · <strong>' + mil.distance_km + ' km</strong> @ RM ' + mil.rate_per_km + '/km';
+      // The vehicle whose type CarbonNext computes emissions from — the approver
+      // should see it on the line they are approving.
+      if (mil.vehicle_label || mil.vehicle_type) {
+        html += ' · <i class="ti ti-car"></i> ' + (mil.vehicle_label || '') +
+          (mil.vehicle_type ? ' (' + String(mil.vehicle_type).replace(/_/g, ' ') + ')' : '');
+      }
       // Claimant picked a route longer than Google's recommended one — flag it so the
       // approver can scrutinise the detour before approving (we still pay the chosen).
       if (mil.over_shortest && mil.shortest_km) {
@@ -1047,7 +1066,10 @@ function showLine(lineId, lineNo, row) {
   var cap = document.getElementById("receipt-caption");
   if (cap) cap.textContent = lineNo + (row && row.dataset.vendor ? " · " + row.dataset.vendor : "");
   var dl = document.getElementById("receipt-dl");
-  if (dl) dl.href = "/claims/{{ claim.id }}/lines/" + lineId + "/image";
+  if (dl) {
+    // A mileage line has no receipt image — download the route map instead of a 404.
+    dl.href = "/claims/{{ claim.id }}/lines/" + lineId + (mil ? "/route.png" : "/image");
+  }
   document.querySelectorAll(".line-row").forEach(function (r) { r.classList.remove("active"); });
   if (row) row.classList.add("active");
   // Show this line's detail/edit panel, hide the others.
@@ -1210,11 +1232,18 @@ function amAddStop() {
 // Draw the add-mileage preview route on its own Maps JS map (same API as the
 // capture page / the verify viewer — not the static-image API).
 var _amMap = null, _amLine = null;
+var AM_RATE = parseFloat({{ mileage_rate | tojson }}) || 0;
 function amDrawRoute(polyline) {
   var el = document.getElementById("am-map");
   if (!el) return;
-  if (_amMapsBroken || !window.google || !window.google.maps || !polyline) {
-    el.style.display = "none";
+  if (!polyline) { el.style.display = "none"; return; }
+  if (_amMapsBroken || !window.google || !window.google.maps) {
+    // Maps JS unavailable (no browser key / auth failed): fall back to the
+    // server-proxied static map — same pattern as the line viewer.
+    el.style.display = "block";
+    el.innerHTML = '<img src="/mileage/route.png?polyline=' + encodeURIComponent(polyline) +
+      '" alt="route" style="width:100%;height:100%;object-fit:cover;border-radius:10px;">';
+    _amMap = null;   // the map div was repurposed; rebuild if Maps JS returns
     return;
   }
   try {
@@ -1257,9 +1286,13 @@ function amSelectRoute(i) {
   var dist = document.getElementById("am-dist");
   var km = parseFloat(r.distance_km), pct = amOverPct(km);
   var vias = (r.stops && r.stops > 2) ? r.stops - 2 : 0;
-  var txt = km.toFixed(1) + " km" + (vias ? " · " + vias + " stop" + (vias === 1 ? "" : "s") : "");
+  var txt = km.toFixed(1) + " km";
+  if (AM_RATE) txt += " · RM " + (km * AM_RATE).toFixed(2);
+  if (vias) txt += " · " + vias + " stop" + (vias === 1 ? "" : "s");
   if (pct) txt += " · ⚠ +" + pct.toFixed(0) + "% over shortest";
   if (dist) dist.textContent = txt;
+  var add = document.getElementById("am-add");
+  if (add) add.disabled = false;                  // a route is picked — submittable
   amDrawRoute(r.polyline);
   var wrap = document.getElementById("am-alts");
   if (wrap) wrap.querySelectorAll(".alt").forEach(function (el, idx) {
@@ -1289,7 +1322,8 @@ function amRenderAlts() {
       var label = o.r.description || ("Route " + (o.i + 1));
       var badge = extra <= 0.1
         ? '<span class="alt-best">shortest · cheapest</span>'
-        : '<span class="alt-flag">+' + (extra / minKm * 100).toFixed(0) + '%</span>';
+        : '<span class="alt-flag">+' + (extra / minKm * 100).toFixed(0) + '%' +
+          (AM_RATE ? ' · +RM ' + (extra * AM_RATE).toFixed(2) : '') + '</span>';
       return '<label class="alt' + (o.i === sel ? ' sel' : '') + '" data-i="' + o.i + '">' +
         '<input type="radio" name="am-alt"' + (o.i === sel ? ' checked' : '') + '>' +
         '<span class="alt-main">' + esc(label) + '</span>' +
@@ -1308,12 +1342,15 @@ function amShortestIndex() {
 
 // Live route preview in the add-mileage modal: compute the distance server-side
 // (Routes API) and draw the route with the Maps JavaScript API.
-var _amTimer = null;
+var _amTimer = null, _amReq = 0;
 function amPreview() {
   var from = (document.getElementById("am-from") || {}).value || "";
   var to = (document.getElementById("am-to") || {}).value || "";
   var dist = document.getElementById("am-dist");
   var map = document.getElementById("am-map");
+  var add = document.getElementById("am-add");
+  if (add) add.disabled = true;          // route changed — no stale pick submittable
+  _amRouteOpts = [];
   if (!from || !to) {
     if (dist) dist.textContent = "Enter From and To to preview the route.";
     if (map) map.style.display = "none";
@@ -1327,9 +1364,11 @@ function amPreview() {
     var body = new URLSearchParams();
     body.set("origin", from); body.set("destination", to);
     body.set("waypoints", JSON.stringify(stops));
+    var req = ++_amReq;                  // sequence the fetches: only the LATEST renders
     fetch("/capture/mileage/preview", { method: "POST", body: body })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        if (req !== _amReq) return;      // a newer query superseded this response
         _amRouteOpts = (d.ok && d.routes) || [];
         _amShortestKm = parseFloat(d.shortest_km);
         if (!_amRouteOpts.length) {
@@ -1340,14 +1379,14 @@ function amPreview() {
         amSelectRoute(amShortestIndex());   // default to the cheapest; user can switch
         amRenderAlts();
       })
-      .catch(function () { if (dist) dist.textContent = "Route lookup failed."; });
+      .catch(function () {
+        if (req !== _amReq) return;
+        if (dist) dist.textContent = "Route lookup failed.";
+      });
   }, 350);
 }
 (function () {
-  ["am-from", "am-to"].forEach(function (id) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener("input", amPreview);
-  });
+  amWireInputs();
   // Enter in a route field should recompute the preview, NOT submit the form —
   // submitting on Enter navigated away / closed the modal before a route was picked.
   var f = document.getElementById("add-mileage-form");
@@ -1363,7 +1402,23 @@ window.gm_authFailure = function () {
     inp.parentNode.replaceChild(inp.cloneNode(true), inp);
   });
   document.querySelectorAll(".pac-container").forEach(function (e) { e.remove(); });
+  // Clone-replace dropped the preview listeners — re-wire the fresh inputs, or
+  // typing a route would silently never recompute (audit finding 2026-07-09).
+  amWireInputs();
+  // If initReviewMaps already swapped the open mileage line's viewer to the (now
+  // dead) Maps JS canvas, redraw it — showLine falls back to the static route.png.
+  var row = _curLine && document.querySelector('.line-row[data-line="' + _curLine + '"]');
+  if (row && LINE_MILEAGE[_curLine]) showLine(_curLine, row.dataset.no, row);
 };
+function amWireInputs() {
+  ["am-from", "am-to"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("input", amPreview);
+  });
+  document.querySelectorAll(".am-stop").forEach(function (el) {
+    el.addEventListener("input", amPreview);
+  });
+}
 function amAttach(input) {
   // Progressive enhancement only — never block typing.
   if (_amMapsBroken || !input || !window.google || !google.maps.places ||

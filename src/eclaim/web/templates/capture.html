@@ -607,10 +607,19 @@ var _mapsBroken = false;   // set if Google Maps fails to authenticate
 // enabled / key restricted / billing off) — surface it instead of a blank map.
 window.gm_authFailure = function () {
   _mapsBroken = true;
+  // OVERLAY the notice — never wipe #m-map's innerHTML: it contains #m-map-img,
+  // the server-proxied static-map fallback that still works with the server key.
   var map = document.getElementById("m-map");
-  if (map) map.innerHTML = '<div style="padding:18px;font-size:12px;color:#b91c1c;">' +
-    'Google Maps couldn\'t authenticate. Enable <b>Maps JavaScript API</b> + <b>Places API</b> + ' +
-    '<b>Routes API</b> on this key (and enable billing), then reload.</div>';
+  if (map && !document.getElementById("m-map-authnote")) {
+    var ov = document.createElement("div");
+    ov.id = "m-map-authnote";
+    ov.style.cssText = "position:absolute;left:0;right:0;bottom:0;padding:8px 12px;" +
+      "font-size:11px;color:#b91c1c;background:rgba(255,255,255,.92);z-index:2;";
+    ov.innerHTML = 'Google Maps couldn\'t authenticate in the browser. Enable ' +
+      '<b>Maps JavaScript API</b> + <b>Places API</b> on this key (and billing), then ' +
+      'reload — the route preview below still comes from the server.';
+    map.appendChild(ov);
+  }
   var note = document.getElementById("m-summary");
   if (note) note.textContent = "Maps not authorised — type addresses manually; server still computes the route once the API is enabled.";
   // Strip Google's broken autocomplete UI off the route inputs (it half-attaches
@@ -836,9 +845,11 @@ function recompute() {
     var body = new URLSearchParams();
     body.set("origin", from); body.set("destination", to);
     body.set("waypoints", JSON.stringify(stops));
+    var req = ++_previewReq;              // only the LATEST query may render —
     fetch("/capture/mileage/preview", { method: "POST", body: body })
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        if (req !== _previewReq) return;  // an out-of-order slow response is stale
         if (!d.ok) {
           note.textContent = d.error || "No route found."; submit.disabled = true;
           _routeOpts = []; renderAlts(); return;
@@ -850,9 +861,13 @@ function recompute() {
         selectRoute(shortestIndex());
         renderAlts();
       })
-      .catch(function () { note.textContent = "Route lookup failed."; submit.disabled = true; });
+      .catch(function () {
+        if (req !== _previewReq) return;
+        note.textContent = "Route lookup failed."; submit.disabled = true;
+      });
   }, 350);
 }
+var _previewReq = 0;
 
 // Apply the chosen alternative: price it, flag a longer-than-recommended route,
 // draw it, and record the index the server will authoritatively reimburse on.

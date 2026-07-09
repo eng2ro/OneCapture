@@ -198,9 +198,10 @@ def test_add_mileage_line_to_existing_receipt_claim(client, db_session, monkeypa
                 follow_redirects=False)
     claim = db_session.execute(select(Claim)).scalars().one()
 
-    # 2) add a mileage line to it from the review screen
+    # 2) add a mileage line to it from the review screen (declaration required)
     r = client.post(f"/claims/{claim.id}/mileage",
-                    data={"origin": "A", "destination": "B", "trip_date": "2026-03-12"},
+                    data={"origin": "A", "destination": "B", "trip_date": "2026-03-12",
+                          "attested": "yes"},
                     follow_redirects=False)
     assert r.status_code == 303
     lines = db_session.execute(
@@ -221,6 +222,10 @@ def test_cannot_add_mileage_to_released_claim(client, db_session, monkeypatch):
                       "attested": "yes"},
                 follow_redirects=False)
     claim = db_session.execute(select(Claim)).scalars().one()
+    # This test approves as the SAME user who keyed the trip; quick-mileage now
+    # records the maker, so clear it here — the SoD bite is pinned separately.
+    claim.created_by_user_id = None
+    db_session.commit()
     assert client.post(f"/api/claims/{claim.id}/approve").status_code == 200
     assert client.post(f"/api/claims/{claim.id}/release").status_code == 200
     # released → adding a line is rejected (re-renders review with the error)

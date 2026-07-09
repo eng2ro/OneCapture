@@ -119,8 +119,15 @@ class GoogleDirectionsProvider:
     ) -> list[RouteResult]:
         """The recommended route plus alternatives, ``routes[0]`` first. Google only
         returns alternatives for a DIRECT trip — with intermediate waypoints this
-        yields the single computed route as a one-element list."""
+        yields the single computed route as a one-element list.
+
+        Empty answers are retried once on the plain tier before giving up: the
+        alternatives tier (TRAFFIC_AWARE_OPTIMAL) can transiently return no
+        routes for a pair the basic router handles, and one route beats a
+        dead-end 'no route found' in the capture/review forms."""
         data = self._call(origin, destination, waypoints, alternatives=not waypoints)
+        if not (data.get("routes") or []) and not waypoints:
+            data = self._call(origin, destination, waypoints, alternatives=False)
         return _parse_route_list(data, origin, destination, waypoints or [])
 
     def _call(
@@ -154,6 +161,22 @@ class GoogleDirectionsProvider:
             raise MapError(f"directions request failed: {msg}") from exc
         except Exception as exc:  # transport / parse
             raise MapError(f"directions request failed: {exc}") from exc
+
+
+class UnconfiguredDirectionsProvider:
+    """Stand-in when no Maps key is configured: constructing it is safe (so a
+    receipts-only capture never 500s just because directions exist in the
+    Providers bundle), and any actual ROUTE request raises the MapError the
+    per-trip error handling already turns into a friendly message."""
+
+    def route(self, origin, destination, waypoints=None):
+        raise MapError(
+            "Google Maps is not configured — the server cannot compute route "
+            "distances yet."
+        )
+
+    def routes(self, origin, destination, waypoints=None):
+        self.route(origin, destination, waypoints)
 
 
 def _build_body(
@@ -191,7 +214,11 @@ def _parse_route_list(
     first. Raises :class:`MapError` when no route was found."""
     routes = data.get("routes") or []
     if not routes:
-        raise MapError("no route found")
+        raise MapError(
+            "No drivable route found between these locations — pick each "
+            "location from the suggestion list (or add the city name), "
+            "then try again."
+        )
     return [_parse_one(r, origin, destination, waypoints) for r in routes]
 
 

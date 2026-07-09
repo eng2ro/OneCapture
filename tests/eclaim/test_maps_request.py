@@ -10,7 +10,9 @@ shape — if these tests fail, the picker WILL vanish for real trips again.
 
 from __future__ import annotations
 
-from eclaim.maps import _build_body
+import pytest
+
+from eclaim.maps import GoogleDirectionsProvider, MapError, _build_body
 
 
 def test_alternatives_request_uses_traffic_aware_optimal():
@@ -33,3 +35,40 @@ def test_single_route_call_stays_on_the_cheap_tier():
     body = _build_body("KL", "JB", None, alternatives=False)
     assert "computeAlternativeRoutes" not in body
     assert "routingPreference" not in body
+
+
+# --- empty-answer retry ladder (owner report 2026-07-09: the review modal
+# dead-ended on "no route found" for a plainly routable trip) -----------------
+class _ScriptedProvider(GoogleDirectionsProvider):
+    """Overrides the HTTP call; returns the scripted responses in order."""
+
+    def __init__(self, responses):
+        super().__init__("test-key")
+        self.responses, self.calls = list(responses), []
+
+    def _call(self, origin, destination, waypoints, *, alternatives):
+        self.calls.append(alternatives)
+        return self.responses.pop(0)
+
+
+def test_empty_alternatives_answer_retries_on_the_plain_tier():
+    one_route = {"routes": [{"distanceMeters": 66000, "legs": []}]}
+    p = _ScriptedProvider([{}, one_route])          # optimal empty → plain has it
+    routes = p.routes("KL", "Seremban")
+    assert len(routes) == 1
+    assert p.calls == [True, False]                 # retried without alternatives
+
+
+def test_route_still_missing_after_retry_gives_a_helpful_message():
+    p = _ScriptedProvider([{}, {}])
+    with pytest.raises(MapError, match="suggestion list"):
+        p.routes("nowhere", "nowhere else")
+    assert p.calls == [True, False]
+
+
+def test_waypoint_trip_does_not_retry():
+    # With intermediates there is no second tier to try — one call, clear error.
+    p = _ScriptedProvider([{}])
+    with pytest.raises(MapError, match="suggestion list"):
+        p.routes("KL", "JB", ["Melaka"])
+    assert p.calls == [False]

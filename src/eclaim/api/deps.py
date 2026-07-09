@@ -196,10 +196,15 @@ def get_segmenter() -> PageSegmenter:
 
 def get_directions():
     """Server-side Google Directions provider (authoritative mileage distance).
-    Raises MapError at call time if no key is configured; tests override this."""
-    from ..maps import GoogleDirectionsProvider
+    With no key configured this returns a stub whose ROUTE calls raise MapError —
+    constructing it never throws, so a receipts-only capture (which needs no
+    directions at all) doesn't 500 on an unconfigured box. Tests override this."""
+    from ..maps import GoogleDirectionsProvider, UnconfiguredDirectionsProvider
 
-    return GoogleDirectionsProvider(get_settings().google_maps_api_key)
+    key = get_settings().google_maps_api_key
+    if not key:
+        return UnconfiguredDirectionsProvider()
+    return GoogleDirectionsProvider(key)
 
 
 def get_mileage_rate() -> Decimal:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import urllib.parse
 import uuid
 import zipfile
 from datetime import date
@@ -496,10 +497,20 @@ async def web_capture(
         return RedirectResponse("/intake/holding?routed=1", status_code=303)
     if result.added == 0:
         msg = "Could not add any line. " + ingestion.summarize_errors(result.errors)
-        return _render_capture(request, _capture_categories(repos), _events_for(repos), msg)
+        return _render_capture(request, _capture_categories(repos), _events_for(repos), msg, form)
     dest = f"/claims/{result.claim_id}/review"
+    query = []
     if result.diverted:
-        dest += f"?diverted={result.diverted}"      # some pages went to the holding queue
+        query.append(f"diverted={result.diverted}")  # some pages went to the holding queue
+    if result.errors:
+        # A PARTIAL failure must be said out loud: a mileage trip whose route
+        # lookup failed used to vanish silently while the receipts filed fine.
+        query.append("err=" + urllib.parse.quote(
+            ("Some items could not be added: "
+             + ingestion.summarize_errors(result.errors))[:300]
+        ))
+    if query:
+        dest += "?" + "&".join(query)
     return RedirectResponse(dest, status_code=303)
 
 
@@ -1334,6 +1345,9 @@ def web_capture_mileage(
             title=title.strip() or f"Mileage — {origin.strip()} → {destination.strip()}",
             claim_type=("travel" if sd else "general"),
             start_date=sd, end_date=sd, event_id=ev_uuid,
+            # Record the maker so maker≠checker SoD bites here exactly like the
+            # main capture path (audit finding 2026-07-09).
+            created_by_user_id=principal.user_id,
         )
         _service.add_mileage_line(
             repos=repos, claim=claim, origin=origin.strip(), destination=destination.strip(),
@@ -1654,6 +1668,13 @@ def _render_review(
             "line_pages": line_pages,
             "allow_split": allow_split,
             "maps_key": maps_key,
+            # Registered vehicles for the add-mileage modal's picker — same
+            # registry the capture page offers (Appendix H-C).
+            "vehicles": vehicles_service.list_for_clients(
+                repos.session, [claim.client_id], active_only=True
+            ),
+            # Per-km rate so the modal prices the trip like the capture page.
+            "mileage_rate": get_settings().mileage_rate_per_km,
             "coding": coding,
             "requires_coding": requires_coding,
             "posting_ready": posting_ready,
@@ -1722,10 +1743,16 @@ def review_page(
     request: Request,
     claim_id: uuid.UUID,
     diverted: int = 0,
+    err: str = "",
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
-    return _render_review(request, repos, principal, claim_id, diverted=diverted)
+    # ``err``: capture's partial-failure note (e.g. a mileage trip whose route
+    # lookup failed while the receipts filed fine) — display-only, length-capped.
+    return _render_review(
+        request, repos, principal, claim_id, diverted=diverted,
+        error=err[:300] or None,
+    )
 
 
 def _receipt_download_name(line) -> str:
@@ -1997,6 +2024,8 @@ def web_add_mileage(
     waypoints: str = Form("[]"),
     route_index: str = Form("0"),
     trip_date: str = Form(""),
+    vehicle_id: str = Form(""),
+    attested: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ):
@@ -2029,6 +2058,12 @@ def web_add_mileage(
             destination=destination.strip(), waypoints=wps, route=route,
             date=trip_date or None, rate=deps.get_mileage_rate(), actor=_actor(principal),
             principal=principal, shortest_km=shortest_km,
+            attested=bool(attested.strip()),
+            # Same vehicle registry as the capture page — its type is what
+            # CarbonNext computes emissions from (Appendix H-C parity).
+            vehicle=vehicles_service.resolve(
+                repos.session, _service.get(repos, claim_id).client_id, vehicle_id
+            ),
         ),
     )
 
