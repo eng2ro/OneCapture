@@ -131,17 +131,7 @@ class GoogleDirectionsProvider:
         *,
         alternatives: bool,
     ) -> dict:
-        body: dict = {
-            "origin": {"address": origin},
-            "destination": {"address": destination},
-            "travelMode": "DRIVE",
-            "units": "METRIC",
-            "regionCode": "MY",
-        }
-        if waypoints:
-            body["intermediates"] = [{"address": w} for w in waypoints]
-        elif alternatives:
-            body["computeAlternativeRoutes"] = True  # only valid without intermediates
+        body = _build_body(origin, destination, waypoints, alternatives=alternatives)
         req = urllib.request.Request(
             self._URL,
             data=json.dumps(body).encode("utf-8"),
@@ -164,6 +154,34 @@ class GoogleDirectionsProvider:
             raise MapError(f"directions request failed: {msg}") from exc
         except Exception as exc:  # transport / parse
             raise MapError(f"directions request failed: {exc}") from exc
+
+
+def _build_body(
+    origin: str, destination: str, waypoints: list[str] | None, *, alternatives: bool
+) -> dict:
+    """The computeRoutes request body.
+
+    REGRESSION GUARD (owner report 2026-07-09, recurring): when alternatives are
+    wanted, ``routingPreference`` MUST be ``TRAFFIC_AWARE_OPTIMAL``. Under the
+    cheaper default (TRAFFIC_UNAWARE) Google silently returns ONE route for many
+    trips (verified live: KL→Johor Bahru gives 1 route unaware, 2 optimal), so
+    the capture page's route picker "disappears" even though the code is right.
+    Pinned by tests/eclaim/test_maps_request.py — do not remove the preference
+    to save cost; only the alternatives path (direct-trip preview/submit) pays
+    the higher SKU."""
+    body: dict = {
+        "origin": {"address": origin},
+        "destination": {"address": destination},
+        "travelMode": "DRIVE",
+        "units": "METRIC",
+        "regionCode": "MY",
+    }
+    if waypoints:
+        body["intermediates"] = [{"address": w} for w in waypoints]
+    elif alternatives:
+        body["computeAlternativeRoutes"] = True  # only valid without intermediates
+        body["routingPreference"] = "TRAFFIC_AWARE_OPTIMAL"
+    return body
 
 
 def _parse_route_list(
