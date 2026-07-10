@@ -19,7 +19,7 @@
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       {% if editing %}<input type="hidden" name="vehicle_id" value="{{ editing.id }}">{% endif %}
       <div class="field-row">
-        <div><label class="label-tiny">Client</label>
+        <div><label class="label-tiny">Company</label>
           <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}</select>
         </div>
         <div><label class="label-tiny">Plate / label</label><input class="field" name="label" value="{{ editing.label if editing else '' }}" placeholder="e.g. WXY 1234" required></div>
@@ -50,7 +50,7 @@
   <div class="card" style="padding:0;overflow:hidden;">
     {% if vehicles %}
     <table class="data">
-      <thead><tr><th>Client</th><th>Label</th><th>Type</th><th>Engine</th><th>Usual driver</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Company</th><th>Label</th><th>Type</th><th>Engine</th><th>Usual driver</th><th>Status</th><th></th></tr></thead>
       <tbody>
         {% for v in vehicles %}
         <tr>

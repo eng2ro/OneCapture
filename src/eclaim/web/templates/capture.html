@@ -45,7 +45,7 @@
 /* form fields (restyled) */
 .capx .field-row{display:grid;grid-template-columns:1fr 1fr;gap:15px 20px;margin-bottom:0}
 .capx .field-row+.field-row{margin-top:15px}
-.capx .label-tiny{display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;margin-bottom:6px}
+.capx .label-tiny{display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--graphite);text-transform:uppercase;margin-bottom:6px}
 .capx .field{width:100%;height:42px;border:1px solid var(--rule);border-radius:var(--r);background:var(--paper);padding:0 12px;font-size:13.5px;color:var(--ink)}
 .capx textarea.field,.capx .field[type=date]{height:42px}
 .capx .field::placeholder{color:var(--faint)}
@@ -189,8 +189,16 @@
       <section class="cap-block">
         <div class="cap-block-h"><span class="cap-ref">§ A</span><span class="cap-eyebrow">Claim details</span></div>
         <div class="field-row">
+          <div><label class="label-tiny">Employee (who is this claim for?)</label>
+            <select class="field" name="claimant_id" title="The employee this claim belongs to. Their details are forwarded to CarbonNext. Register employees under Manage → Employees.">
+              <option value="">— not specified —</option>
+              {% for cm in claimants %}<option value="{{ cm.id }}" {{ 'selected' if form.get('claimant_id') == cm.id | string else '' }}>{{ cm.name }}{% if cm.employee_ref %} · {{ cm.employee_ref }}{% endif %}</option>{% endfor %}
+            </select>
+          </div>
           <div><label class="label-tiny">Claim title (optional)</label>
             <input class="field" name="title" value="{{ form.get('title', '') }}" placeholder="e.g. KL client trip — Mar"></div>
+        </div>
+        <div class="field-row">
           <div><label class="label-tiny">Claim type</label>
             <select class="field" name="claim_type" id="f-claim-type" required>
               {% for ct in claim_types %}

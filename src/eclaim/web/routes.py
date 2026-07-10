@@ -54,7 +54,7 @@ from ..db.models import (
 )
 from ..ocr.base import Extraction, ExpenseType, OcrError, OcrProvider, Unit
 from ..ocr.segment import PageSegmenter
-from ..repositories import ClaimRepository, LedgerRepository
+from ..repositories import ClaimantRepository, ClaimRepository, LedgerRepository
 from ..services import ap as ap_service
 from ..services import coverage as coverage_service
 from ..services import erp as erp_service
@@ -268,6 +268,13 @@ def _render_capture(
                 request.state.db, list(request.state.principal.allowed_client_ids),
                 active_only=True,
             ) if hasattr(request.state, "principal") else [],
+            # The employee register — WHO the claim is for; binds the claimant so
+            # the CarbonNext hand-off carries employee ref/name/position.
+            "claimants": [
+                cm for cm in ClaimantRepository(request.state.db).list_for_clients(
+                    list(request.state.principal.allowed_client_ids)
+                ) if cm.status == "active"
+            ] if hasattr(request.state, "principal") else [],
             "error": error,
             # Echo the header fields back on a validation error so the user does
             # not have to re-pick the type/dates (the receipts are re-dropped).
@@ -394,6 +401,7 @@ async def web_capture(
     new_event_start: str = Form(""),
     new_event_end: str = Form(""),
     attested: str = Form(""),
+    claimant_id: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
     image_dir: Path = Depends(deps.get_image_dir),
@@ -430,13 +438,16 @@ async def web_capture(
         "new_event_title": new_event_title, "new_event_start": new_event_start,
         "new_event_end": new_event_end, "actor": _actor(principal),
         "attested": is_attested,
+        # WHO the claim is for (the employee register) — binds the claim to a
+        # claimant so the CarbonNext hand-off carries employee ref/name/position.
+        "claimant_id": claimant_id,
     }
     # Echoed back into the form if inline validation fails (receipts get re-dropped).
     form = {
         "title": title, "claim_type": claim_type, "purpose": purpose,
         "remarks": remarks, "posting_date": posting_date,
         "start_date": start_date, "end_date": end_date, "event_id": event_id,
-        "attested": is_attested,
+        "attested": is_attested, "claimant_id": claimant_id,
     }
 
     # Reject an unreasonable number of file parts up front (blocker B7) — the byte
@@ -1338,6 +1349,7 @@ def web_capture_mileage(
     event_id: str = Form(""),
     attested: str = Form(""),
     vehicle_id: str = Form(""),
+    claimant_id: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ):
@@ -1390,6 +1402,10 @@ def web_capture_mileage(
             # Record the maker so maker≠checker SoD bites here exactly like the
             # main capture path (audit finding 2026-07-09).
             created_by_user_id=principal.user_id,
+            # Bind the employee so the hand-off carries their ref/name/position.
+            submitted_by_claimant_id=ingestion._resolve_claimant_id(
+                repos, client_id, claimant_id
+            ),
         )
         _service.add_mileage_line(
             repos=repos, claim=claim, origin=origin.strip(), destination=destination.strip(),

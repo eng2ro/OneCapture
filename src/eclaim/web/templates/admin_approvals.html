@@ -11,7 +11,7 @@
     </div>
     {% if clients|length > 1 %}
     <form method="get" action="/admin/approvals">
-      <label class="label-tiny">Client</label>
+      <label class="label-tiny">Company</label>
       <select class="field" name="client_id" onchange="this.form.submit()">
         {% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if c.id == selected_client_id else '' }}>{{ c.name }}</option>{% endfor %}
       </select>

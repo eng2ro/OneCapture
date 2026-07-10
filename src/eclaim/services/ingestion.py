@@ -378,6 +378,23 @@ class IngestResult:
     diverted_ids: list[uuid.UUID] = field(default_factory=list)
 
 
+def _resolve_claimant_id(repos: Repos, client_id: uuid.UUID, raw) -> uuid.UUID | None:
+    """Resolve the capture form's employee/claimant selection to a claimant id
+    bound to this client (else None — the claim still files, the hand-off just
+    carries no employee identity). Client-scoped + tolerant of junk, mirroring the
+    vehicle resolver."""
+    if not raw:
+        return None
+    try:
+        cid = uuid.UUID(str(raw))
+    except (ValueError, TypeError):
+        return None
+    cm = repos.claimants.get_by_id(cid)
+    if cm is None or cm.client_id != client_id or cm.status != "active":
+        return None
+    return cm.id
+
+
 def _resolve_header(header: dict) -> dict:
     """Validate + normalise the claim header BEFORE the slow read phase, so an
     obvious mistake fails fast. Returns resolved fields; raises ClaimError on a bad
@@ -555,6 +572,9 @@ def build_claim(
                     posting_date=parse_date(header.get("posting_date") or ""),
                     claim_type=resolved["ctype"], start_date=start_date, end_date=end_date,
                     event_id=event_id, created_by_user_id=created_by_user_id,
+                    submitted_by_claimant_id=_resolve_claimant_id(
+                        repos, client_id, header.get("claimant_id")
+                    ),
                 )
 
                 for r, extraction, cat_uuid, pay in eclaim_receipts:

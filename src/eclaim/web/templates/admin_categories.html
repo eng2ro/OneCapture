@@ -27,7 +27,7 @@
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       {% if editing %}<input type="hidden" name="category_id" value="{{ editing.id }}">{% endif %}
       <div class="field-row">
-        <div><label class="label-tiny">Client</label>
+        <div><label class="label-tiny">Company</label>
           <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}</select>
         </div>
         <div><label class="label-tiny">Name</label><input class="field" name="name" value="{{ editing.name if editing else '' }}" required></div>

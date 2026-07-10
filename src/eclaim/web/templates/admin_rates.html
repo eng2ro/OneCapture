@@ -23,7 +23,7 @@
     <form method="post" action="/admin/rates">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div class="field-row">
-        <div><label class="label-tiny">Client</label>
+        <div><label class="label-tiny">Company</label>
           <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
         </div>
         <div><label class="label-tiny">Currency (ISO)</label><input class="field" name="currency" placeholder="USD" maxlength="3" required style="text-transform:uppercase;"></div>
@@ -40,7 +40,7 @@
   <div class="card" style="padding:0;overflow:hidden;">
     {% if rates %}
     <table class="data">
-      <thead><tr><th>Client</th><th>Month</th><th>Currency</th><th style="text-align:right;">Rate to MYR</th><th>Source</th><th>By</th><th></th></tr></thead>
+      <thead><tr><th>Company</th><th>Month</th><th>Currency</th><th style="text-align:right;">Rate to MYR</th><th>Source</th><th>By</th><th></th></tr></thead>
       <tbody>
         {% for r in rates %}
         <tr>

@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Claimants · OneCapture e-Claim{% endblock %}
-{% block topbar_sub %}Claimant master{% endblock %}
+{% block title %}Employees · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Employee register{% endblock %}
 {% block content %}
 {% include "_editorial.html" %}
 <div class="capx" id="screen-claimants">
   <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:14px;">
     <div>
-      <h1 class="page-title">Claimants</h1>
-      <p class="page-sub">Employees authorised to submit expense claims</p>
+      <h1 class="page-title">Employees</h1>
+      <p class="page-sub">People who submit expense claims — their details are forwarded to CarbonNext</p>
     </div>
     <div style="display:flex;gap:8px;">
       <a class="btn" href="/admin/categories"><i class="ti ti-list-check"></i>Categories</a>
@@ -16,18 +16,18 @@
 
   <div class="banner">
     <i class="ti ti-info-circle"></i>
-    <span><strong>{{ claimants | length }} claimants</strong> · a claimant is identified by a phone or email channel and is unique per client.</span>
+    <span><strong>{{ claimants | length }} employees</strong> · each is identified by a phone or email and belongs to one company. Pick one on the capture screen so the claim carries who it is for.</span>
   </div>
 
   {% if error %}<div class="error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
 
   <div class="card" style="margin-bottom:14px;">
-    <div class="card-title" style="margin-bottom:12px;">{{ 'Edit claimant' if editing else 'Add a claimant' }}</div>
+    <div class="card-title" style="margin-bottom:12px;">{{ 'Edit employee' if editing else 'Add an employee' }}</div>
     <form method="post" action="/admin/claimants">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       {% if editing %}<input type="hidden" name="claimant_id" value="{{ editing.id }}">{% endif %}
       <div class="field-row">
-        <div><label class="label-tiny">Client</label>
+        <div><label class="label-tiny">Company</label>
           <select class="field" name="client_id">{% for c in clients %}<option value="{{ c.id }}" {{ 'selected' if editing and editing.client_id == c.id else '' }}>{{ c.name }}</option>{% endfor %}</select>
         </div>
         <div><label class="label-tiny">Name</label><input class="field" name="name" value="{{ editing.name if editing else '' }}" required></div>
@@ -52,7 +52,7 @@
             <option value="inactive" {{ 'selected' if st == 'inactive' else '' }}>Inactive</option>
           </select></div>
         <div style="display:flex;align-items:flex-end;gap:8px;">
-          <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i>{{ 'Save' if editing else 'Add claimant' }}</button>
+          <button class="btn btn-accent" type="submit"><i class="ti ti-check"></i>{{ 'Save' if editing else 'Add employee' }}</button>
           {% if editing %}<a class="btn" href="/admin/claimants">Cancel</a>{% endif %}
         </div>
       </div>
@@ -79,7 +79,7 @@
           <td><a href="/admin/claimants?edit={{ cm.id }}" title="Edit"><i class="ti ti-edit" style="color:var(--text-tertiary);"></i></a></td>
         </tr>
         {% else %}
-        <tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-tertiary);">No claimants yet.</td></tr>
+        <tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-tertiary);">No employees yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

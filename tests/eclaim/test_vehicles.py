@@ -117,6 +117,44 @@ def test_review_modal_mileage_records_the_vehicle_too(client, db_session, fake_o
     assert 'name="vehicle_id"' in page and "JHR 9" in page
 
 
+def test_capture_binds_the_employee_so_the_handoff_carries_identity(client, db_session):
+    """Audit fix (2026-07-10): capture now binds the selected employee/claimant, so
+    the CarbonNext hand-off carries employee ref/name/position instead of NULL. The
+    employee is picked from the register on the capture form."""
+    import uuid as _uuid
+
+    from eclaim.db.models import CarbonHandoff, Claim
+
+    ids = db_session.info["principal"]
+    cm = Claimant(firm_id=ids["firm"], client_id=ids["client"], name="Bala",
+                  phone="+60177", employee_ref="E-77", position="Engineer",
+                  department="Ops")
+    db_session.add(cm)
+    db_session.commit()
+
+    r = client.post("/capture/mileage", data={
+        "origin": "KL", "destination": "Melaka", "trip_date": "2026-07-05",
+        "attested": "yes", "vehicle_id": "", "claimant_id": str(cm.id),
+        "purpose": "Site visit",
+    }, follow_redirects=False)
+    assert r.status_code == 303
+    cid = r.headers["location"].split("/claims/")[1].split("/")[0]
+
+    claim = db_session.get(Claim, _uuid.UUID(cid))
+    assert claim.submitted_by_claimant_id == cm.id       # bound automatically at capture
+    claim.created_by_user_id = None                      # approve as same user in test
+    db_session.commit()
+
+    assert client.post(f"/api/claims/{cid}/approve").status_code == 200
+    assert client.post(f"/api/claims/{cid}/release").status_code == 200
+    handoff = db_session.query(CarbonHandoff).filter_by(
+        claim_id=claim.id, direction="forward"
+    ).one()
+    assert handoff.employee_ref == "E-77"
+    assert handoff.employee_name == "Bala"
+    assert handoff.position == "Engineer"
+
+
 def test_mileage_without_vehicle_still_files(client, db_session):
     r = client.post("/capture/mileage", data={
         "origin": "KL Sentral", "destination": "Shah Alam",

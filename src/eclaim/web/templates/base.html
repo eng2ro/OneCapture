@@ -128,7 +128,7 @@
       <a class="oc-nav-i {{ 'active' if request.url.path == '/payables' else '' }}" href="/payables"><i class="ti ti-wallet"></i><span class="lab">Payables</span></a>
       {% if is_firm_scoped %}
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/events' else '' }}" href="/admin/events"><i class="ti ti-map-pin"></i><span class="lab">Events &amp; budgets</span></a>
-      <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/claimants' else '' }}" href="/admin/claimants"><i class="ti ti-users"></i><span class="lab">Claimants</span></a>
+      <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/claimants' else '' }}" href="/admin/claimants"><i class="ti ti-users"></i><span class="lab">Employees</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/users' else '' }}" href="/admin/users"><i class="ti ti-user-cog"></i><span class="lab">Users</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/categories' else '' }}" href="/admin/categories"><i class="ti ti-list-check"></i><span class="lab">Categories</span></a>
       <a class="oc-nav-i {{ 'active' if request.url.path == '/admin/approvals' else '' }}" href="/admin/approvals"><i class="ti ti-checkup-list"></i><span class="lab">Approval matrix</span></a>
@@ -168,14 +168,11 @@
         <input type="text" name="q" aria-label="Search claims" placeholder="Search claims by title, vendor or ref…" />
       </form>
       <div class="oc-bar-r">
-        <button class="oc-ibtn" type="button" aria-label="Help"><i class="ti ti-help"></i></button>
-        <button class="oc-ibtn" type="button" aria-label="Notifications"><i class="ti ti-bell"></i></button>
-        <div class="oc-vline"></div>
-        <button class="oc-usr" type="button">
+        {# Identity only — no dropdown implied. Sign out lives in the left rail. #}
+        <div class="oc-usr" style="cursor:default;" title="{{ principal.email if principal else '' }} · {{ principal.base_role | capitalize if principal else '' }} · Sign out is in the left menu">
           <div class="oc-usr-av">{{ (principal.email or 'U')[:2] | upper if principal else 'U' }}</div>
           <div><div class="oc-usr-n">{{ principal.email if principal else '—' }}</div><div class="oc-usr-r">{{ principal.base_role | capitalize if principal else '' }}</div></div>
-          <i class="ti ti-chevron-down" style="font-size:14px;color:#9a9d94;"></i>
-        </button>
+        </div>
       </div>
     </header>
 

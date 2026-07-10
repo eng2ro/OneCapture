@@ -1,55 +1,59 @@
 {% extends "base.html" %}
-{% block title %}Carbon coverage — OneCapture{% endblock %}
+{% block title %}Carbon coverage · OneCapture e-Claim{% endblock %}
+{% block topbar_sub %}Carbon coverage{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>Carbon coverage</h1>
-  <p class="muted">
-    What was <strong>captured</strong> (the full document spend) vs what was
-    <strong>forwarded</strong> to CarbonNext (its carbon-relevant lines only). The
-    carbon unit is the line, so a bill with non-carbon lines forwards less than its
-    total — that gap is shown here on purpose, reconcilable by document reference.
-  </p>
+{% include "_editorial.html" %}
+<div class="capx" id="screen-coverage">
+  <div style="margin-bottom:14px;">
+    <h1 class="page-title">Carbon coverage</h1>
+    <p class="page-sub">What was captured (the full document spend) vs what was forwarded to CarbonNext (its carbon-relevant lines only)</p>
+  </div>
+
+  <div class="hint-warn" style="margin-bottom:16px;">
+    <i class="ti ti-info-circle"></i>
+    <span><strong>Captured vs forwarded.</strong> The carbon unit is the line, so a bill with non-carbon lines forwards less than its total — that gap is shown here on purpose and is reconcilable by document reference.</span>
+  </div>
 
   {% if not periods %}
-  <p class="muted">Nothing forwarded yet — release a claim with carbon-relevant lines
-    to populate this view.</p>
+  <div class="card" style="padding:44px;text-align:center;color:var(--graphite);">
+    Nothing forwarded yet — release a claim with carbon-relevant lines to populate this view.
+  </div>
   {% endif %}
 
   {% for p in periods %}
-  <div class="client-group" style="margin-top:14px;">
-    <div class="client-head" style="align-items:baseline;">
-      <h2>{{ p.period }}</h2>
-      <span class="muted">
-        captured {{ '%.2f' | format(p.captured) }} ·
-        forwarded {{ '%.2f' | format(p.forwarded) }} ·
-        {{ p.coverage_pct }}% covered · {{ p.doc_count }} doc(s), {{ p.line_count }} line(s)
-      </span>
+  <div class="card" style="margin-bottom:16px;padding:0;overflow:hidden;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;padding:14px 18px;border-bottom:1px solid var(--rule);">
+      <div class="card-title">{{ p.period }}</div>
+      <div class="page-sub" style="margin:0;">
+        captured {{ '%.2f' | format(p.captured) }} · forwarded {{ '%.2f' | format(p.forwarded) }} ·
+        <strong>{{ p.coverage_pct }}% covered</strong> · {{ p.doc_count }} doc(s), {{ p.line_count }} line(s)
+      </div>
     </div>
-    <table class="ledger">
+    <table class="data">
       <thead>
-        <tr><th>Document</th><th>Captured</th><th>Forwarded</th><th>Uncovered</th>
-            <th>Coverage</th><th>Lines</th></tr>
+        <tr><th>Document</th><th style="text-align:right;">Captured</th><th style="text-align:right;">Forwarded</th>
+            <th style="text-align:right;">Uncovered</th><th style="text-align:right;">Coverage</th><th>Lines</th></tr>
       </thead>
       <tbody>
         {% for d in p.documents %}
         <tr>
-          <td class="mono">{{ d.doc_no or '(no doc no)' }}</td>
-          <td>{{ d.currency or '' }} {{ '%.2f' | format(d.captured) }}</td>
-          <td>{{ d.currency or '' }} {{ '%.2f' | format(d.forwarded) }}</td>
-          <td>{{ d.currency or '' }} {{ '%.2f' | format(d.uncovered) }}</td>
-          <td>{{ d.coverage_pct }}%</td>
+          <td class="mono" style="font-size:12px;">{{ d.doc_no or '(no doc no)' }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ d.currency or '' }} {{ '%.2f' | format(d.captured) }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ d.currency or '' }} {{ '%.2f' | format(d.forwarded) }}</td>
+          <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ d.currency or '' }} {{ '%.2f' | format(d.uncovered) }}</td>
+          <td style="text-align:right;"><span class="badge {{ 'success' if d.coverage_pct >= 100 else 'neutral' }}">{{ d.coverage_pct }}%</span></td>
           <td>
             <details>
-              <summary>{{ d.line_count }} line(s)</summary>
-              <table class="ledger" style="margin-top:6px;">
-                <thead><tr><th>Category</th><th>Type</th><th>Vendor</th><th>Amount</th></tr></thead>
+              <summary style="cursor:pointer;">{{ d.line_count }} line(s)</summary>
+              <table class="data" style="margin-top:8px;">
+                <thead><tr><th>Category</th><th>Type</th><th>Vendor</th><th style="text-align:right;">Amount</th></tr></thead>
                 <tbody>
                   {% for ln in d.lines %}
                   <tr>
                     <td>{{ ln.category_name or '—' }}</td>
                     <td>{{ ln.expense_type or '—' }}</td>
                     <td>{{ ln.vendor or '—' }}</td>
-                    <td>{{ '%.2f' | format(ln.amount) }}</td>
+                    <td style="text-align:right;font-variant-numeric:tabular-nums;">{{ '%.2f' | format(ln.amount) }}</td>
                   </tr>
                   {% endfor %}
                 </tbody>
@@ -62,5 +66,5 @@
     </table>
   </div>
   {% endfor %}
-</section>
+</div>
 {% endblock %}
