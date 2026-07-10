@@ -1294,6 +1294,7 @@ def web_capture_mileage(
     route_index: str = Form("0"),
     trip_date: str = Form(""),
     title: str = Form(""),
+    purpose: str = Form(""),
     event_id: str = Form(""),
     attested: str = Form(""),
     vehicle_id: str = Form(""),
@@ -1343,6 +1344,7 @@ def web_capture_mileage(
         claim = _service.start_claim(
             repos=repos, firm_id=principal.firm_id, client_id=client_id,
             title=title.strip() or f"Mileage — {origin.strip()} → {destination.strip()}",
+            purpose=purpose.strip() or None,   # → CarbonNext travel_purpose
             claim_type=("travel" if sd else "general"),
             start_date=sd, end_date=sd, event_id=ev_uuid,
             # Record the maker so maker≠checker SoD bites here exactly like the
@@ -1675,6 +1677,9 @@ def _render_review(
             ),
             # Per-km rate so the modal prices the trip like the capture page.
             "mileage_rate": get_settings().mileage_rate_per_km,
+            # The client's events for the header modal's attach-event dropdown
+            # ("events" is taken by the audit chain below).
+            "client_events": repos.events.list_for_clients([claim.client_id]),
             "coding": coding,
             "requires_coding": requires_coding,
             "posting_ready": posting_ready,
@@ -1994,17 +1999,21 @@ def web_edit_header(
     department: str = Form(""),
     project_code: str = Form(""),
     claim_currency: str = Form(""),
+    event_id: str = Form(""),
     repos: Repos = Depends(deps.get_web_repos),
     principal: Principal = Depends(deps.get_session_principal),
 ):
     """Edit the claim's document-header (grouping) fields from the review screen.
     Text fields are sent as-is (empty string clears them); ``posting_date`` is
-    parsed to a date. The service gates on claim status + tenant access."""
+    parsed to a date; ``event_id`` attaches/clears the claim's event (validated
+    against the claim's client in the service). The service gates on claim
+    status + tenant access."""
     fields: dict = {
         "title": title, "purpose": purpose, "remarks": remarks,
         "department": department, "project_code": project_code,
         "claim_currency": claim_currency,
         "posting_date": _parse_date(posting_date) if posting_date != "" else None,
+        "event_id": _opt_uuid(event_id),
     }
     return _action(
         request, repos, principal, claim_id,

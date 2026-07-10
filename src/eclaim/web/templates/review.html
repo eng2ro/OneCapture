@@ -770,7 +770,12 @@
           </div>
           <div class="field-row" style="margin-top:8px;">
             <div><label class="label-tiny">Currency</label><input class="field" name="claim_currency" value="{{ claim.claim_currency or '' }}" placeholder="MYR"></div>
-            <div></div>
+            <div><label class="label-tiny">Event / trip (budget &amp; cost-centre inheritance)</label>
+              <select class="field" name="event_id">
+                <option value="">— no event —</option>
+                {% for ev in client_events %}<option value="{{ ev.id }}" {{ 'selected' if claim.event_id == ev.id else '' }}>{{ ev.title }}{% if ev.start_date %} · {{ ev.start_date }}{% endif %}</option>{% endfor %}
+              </select>
+            </div>
           </div>
           <div style="margin-top:8px;"><label class="label-tiny">Purpose (business justification — posts to ERP)</label>
             <input class="field" name="purpose" value="{{ claim.purpose or '' }}" placeholder="Why this spend happened"></div>

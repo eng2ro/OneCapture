@@ -1007,9 +1007,12 @@ class ClaimService:
 
     # Document-header (grouping) fields a reviewer/claimant may edit while the
     # claim is still open. These describe the whole claim, not a single line.
+    # ``event_id`` (audit fix 2026-07-09) lets a claim captured without an event
+    # be attached to one afterwards — it drives budget rollup and the handoff's
+    # cost-centre inheritance, so forgetting it at capture must be recoverable.
     HEADER_FIELDS = frozenset({
         "title", "purpose", "remarks", "posting_date", "department", "project_code",
-        "claim_currency",
+        "claim_currency", "event_id",
     })
 
     def edit_header(
@@ -1038,6 +1041,12 @@ class ClaimService:
             old = getattr(claim, key, None)
             if isinstance(value, str):
                 value = value.strip() or None
+            if key == "event_id" and value is not None:
+                from ..db.models import Event
+
+                ev = repos.session.get(Event, value)
+                if ev is None or ev.client_id != claim.client_id:
+                    raise ClaimError("event not found for this client")
             setattr(claim, key, value)
             touched.append(key)
             if old != value:

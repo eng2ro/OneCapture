@@ -142,6 +142,70 @@ def test_unconfigured_provider_raises_maperror_only_on_use():
             assert "not configured" in str(exc)
 
 
+# --- event linkage is no longer capture-time only ----------------------------
+def _event(db_session, title="JB roadshow"):
+    from eclaim.db.models import Event
+
+    ids = db_session.info["principal"]
+    ev = Event(firm_id=ids["firm"], client_id=ids["client"], title=title)
+    db_session.add(ev)
+    db_session.flush()
+    return ev
+
+
+def test_event_can_be_attached_and_cleared_after_capture(client, db_session, fake_ocr):
+    ev = _event(db_session)
+    db_session.commit()
+    files = {"file": ("r.png", b"\x89PNG ev-1", "image/png")}
+    cid = client.post("/api/claims/upload", files=files,
+                      data={"attested": "true"}).json()["id"]
+
+    # The header modal offers the client's events…
+    page = client.get(f"/claims/{cid}/review").text
+    assert 'name="event_id"' in page and "JB roadshow" in page
+
+    # …attaching sets the claim's event (budget + cost-centre inheritance)…
+    base = {"title": "t", "purpose": "", "remarks": "", "posting_date": "",
+            "department": "", "project_code": "", "claim_currency": ""}
+    r = client.post(f"/claims/{cid}/header", data=base | {"event_id": str(ev.id)},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    db_session.expire_all()
+    assert db_session.get(Claim, uuid.UUID(cid)).event_id == ev.id
+
+    # …and posting an empty value detaches it again.
+    r = client.post(f"/claims/{cid}/header", data=base | {"event_id": ""},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    db_session.expire_all()
+    assert db_session.get(Claim, uuid.UUID(cid)).event_id is None
+
+
+def test_unknown_event_is_refused(client, db_session, fake_ocr):
+    files = {"file": ("r.png", b"\x89PNG ev-2", "image/png")}
+    cid = client.post("/api/claims/upload", files=files,
+                      data={"attested": "true"}).json()["id"]
+    r = client.post(f"/claims/{cid}/header", data={
+        "title": "t", "purpose": "", "remarks": "", "posting_date": "",
+        "department": "", "project_code": "", "claim_currency": "",
+        "event_id": str(uuid.uuid4()),
+    }, follow_redirects=False)
+    assert r.status_code == 200 and "event not found" in r.text
+    assert db_session.get(Claim, uuid.UUID(cid)).event_id is None
+
+
+# --- the quick mileage endpoint forwards a purpose (CarbonNext travel_purpose)
+def test_quick_mileage_purpose_lands_on_the_claim(client, db_session, monkeypatch):
+    from eclaim.api import deps
+    monkeypatch.setattr(deps, "get_directions", lambda: _FakeDirections())
+    r = client.post("/capture/mileage", data={
+        "origin": "KL", "destination": "Ipoh", "trip_date": "2026-07-09",
+        "attested": "yes", "vehicle_id": "", "purpose": "Site audit — Ipoh plant",
+    }, follow_redirects=False)
+    cid = r.headers["location"].split("/claims/")[1].split("/")[0]
+    assert db_session.get(Claim, uuid.UUID(cid)).purpose == "Site audit — Ipoh plant"
+
+
 # --- modal parity bits pinned in the rendered page ---------------------------
 def test_review_page_modal_has_declaration_rate_and_required_fields(client, fake_ocr):
     files = {"file": ("r.png", b"\x89PNG modal", "image/png")}
