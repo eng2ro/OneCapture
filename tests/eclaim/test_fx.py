@@ -141,18 +141,28 @@ def test_currency_correction_relooks_up_the_rate(client, fake_ocr, db_session):
 # --------------------------------------------------------------------------- #
 # Release notes unconverted foreign lines; the converted base reaches the handoff
 # --------------------------------------------------------------------------- #
-def test_release_notes_fx_missing_lines(client, fake_ocr, db_session):
+def test_unconverted_foreign_claim_cannot_be_approved_until_fx_set(client, fake_ocr, db_session):
+    """A foreign line with no exchange rate has no MYR value, so the RM total and
+    the authority/matrix gate would be incomplete. Approval is blocked until the
+    rate is set (previously it silently approved on a currency-blind total — the
+    fail-open the audit closed). Once the rate resolves, approve + release work and
+    the converted base reaches the handoff."""
     cid = _usd_claim(client, fake_ocr)                   # no rate → unconverted
+    r = client.post(f"/api/claims/{cid}/approve")
+    assert r.status_code == 400 and "exchange rate" in r.text.lower()
+
+    _seed_rate(db_session, ccy="USD", period=dt.date(2025, 9, 1), rate="4.70")
+    db_session.commit()
+    # Re-resolve FX on the line (currency edit re-runs the rate lookup).
+    client.post(f"/claims/{cid}/edit",
+                data={"line_id": "", "currency": "USD"}, follow_redirects=False)
+
     assert client.post(f"/api/claims/{cid}/approve").status_code == 200
     assert client.post(f"/api/claims/{cid}/release").status_code == 200
-    events = client.get(f"/api/audit/{cid}").json()
-    released = next(e for e in events if e["event_type"] == "released")
-    assert released["detail"]["fx_missing_lines"] == [1]
-
     handoff = db_session.query(CarbonHandoff).filter_by(
         claim_id=uuid.UUID(cid), direction="forward"
     ).one()
-    assert handoff.currency == "USD" and handoff.base_amount is None
+    assert handoff.currency == "USD" and handoff.base_amount == Decimal("470.00")
 
 
 def test_prefilled_fx_flows_to_the_handoff_base(client, fake_ocr, db_session):

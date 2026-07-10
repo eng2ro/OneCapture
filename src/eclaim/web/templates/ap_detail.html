@@ -98,7 +98,8 @@
         </form>
         {% endif %}
         {% if invoice.status not in ('posted', 'paid', 'rejected') %}
-        <form method="post" action="/ap/{{ invoice.id }}/reject"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <form method="post" action="/ap/{{ invoice.id }}/reject"
+              onsubmit="return confirm('Reject this invoice? This cannot be undone.');"><input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <button class="btn btn-danger" type="submit">Reject</button></form>
         {% endif %}
       </div>

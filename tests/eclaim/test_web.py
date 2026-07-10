@@ -206,9 +206,22 @@ def test_currency_and_expense_type_are_verifiable_and_forwarded(client, fake_ocr
 
     from eclaim.db.models import CarbonHandoff, ClaimLine
 
+    import datetime as _dt
+
+    from eclaim.services import fx as _fx
+
+    ids = db_session.info["principal"]
+    # A USD rate for the receipt month so the corrected foreign line converts (an
+    # unconverted foreign line is now blocked at approval — audit fix 2026-07-10).
+    _fx.upsert_rate(db_session, firm_id=ids["firm"], client_id=ids["client"],
+                    currency="USD", period=_dt.date(2025, 9, 1),
+                    rate_to_myr=Decimal("4.70"), actor="t")
+    db_session.commit()
+
     fake_ocr.extraction = Extraction(
         expense_type="fuel_diesel", quantity=Decimal("30"), unit="L",
         total_amount=Decimal("120.00"), currency="MYR", vendor="Shell KLIA",
+        date="26 SEP 2025",
     )
     files = {"file": ("r.png", b"\x89PNG\r\n usd receipt", "image/png")}
     cid = client.post("/api/claims/upload", files=files,
@@ -282,7 +295,7 @@ def test_inbox_search_and_export(client, fake_ocr):
 
     page = client.get("/claims?q=Shell")
     assert a in page.text and b not in page.text          # vendor search filters
-    assert 'href="/api/claims/export' in page.text         # working CSV export link
+    assert 'href="/claims/export.csv' in page.text         # cookie-authed CSV export link
 
 
 # 8 -------------------------------------------------------------------------

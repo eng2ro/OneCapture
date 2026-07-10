@@ -46,6 +46,31 @@ def _in_band(amount: Decimal, rule: ApprovalMatrixRule) -> bool:
     )
 
 
+# Sentinel: this client/module HAS an approval matrix, and the amount sits at or
+# above its lowest floor, yet NO band covers it — a genuine coverage gap (e.g. an
+# amount above a finite top band). It must fail CLOSED: previously such an amount
+# silently skipped the whole matrix and fell back to only the often-unset personal
+# authority_limit. An amount BELOW the lowest floor is a different case — small
+# claims are legitimately ungoverned (no special sign-off), so those stay legacy.
+MATRIX_NO_BAND = object()
+
+
+def _matrix_gap(rules, module: str, amount) -> bool:
+    """True when ``amount`` is at/above the module matrix's lowest floor but no band
+    covers it (an above-the-ceiling or between-bands gap → fail closed). False when
+    there is no matrix for the module, or the amount is below the lowest floor
+    (legitimately ungoverned)."""
+    bands = [
+        r for r in rules
+        if r.active and r.step_order == 1
+        and (r.scope_module is None or r.scope_module == module)
+    ]
+    if not bands:
+        return False
+    floor = min((r.min_amount if r.min_amount is not None else Decimal(0)) for r in bands)
+    return amount >= floor
+
+
 def select_matrix_rule(
     rules, *, amount, department, category_ids, module: str = "eclaim"
 ) -> ApprovalMatrixRule | None:
@@ -82,10 +107,13 @@ def matrix_rule_for(repos, claim: Claim) -> ApprovalMatrixRule | None:
         return None
     amount = claim.total_claimed if claim.total_claimed is not None else claim.total_amount
     cats = {ln.category_id for ln in repos.claims.lines(claim.id) if ln.category_id}
-    return select_matrix_rule(
-        rules, amount=amount if amount is not None else Decimal(0),
-        department=claim.department, category_ids=cats,
+    amt = amount if amount is not None else Decimal(0)
+    rule = select_matrix_rule(
+        rules, amount=amt, department=claim.department, category_ids=cats,
     )
+    if rule is None and _matrix_gap(rules, "eclaim", amt):
+        return MATRIX_NO_BAND     # a gap at/above the floor → deny (fail closed)
+    return rule
 
 
 def _describe_rule(rule: ApprovalMatrixRule) -> str:
@@ -137,6 +165,11 @@ def check_can_approve(
 
     # Appendix B: the configured approval matrix takes priority for who may sign off
     # this band. authority_limit above remains an optional extra personal cap.
+    if matrix_rule is MATRIX_NO_BAND:
+        raise SoDViolation(
+            f"no approval band is configured for {amount} under this client's "
+            "approval matrix — ask an admin to add a band covering this amount"
+        )
     if matrix_rule is not None and not _rule_satisfied(matrix_rule, approver):
         raise SoDViolation(
             f"approval of {amount} requires {_describe_rule(matrix_rule)} "

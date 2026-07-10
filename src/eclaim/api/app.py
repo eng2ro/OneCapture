@@ -136,6 +136,56 @@ def create_app() -> FastAPI:
             status_code=403,
         )
 
+    # A browser hitting a missing/mistyped record (404) or a malformed URL (422)
+    # gets a friendly in-shell page with a way back, not raw JSON. Bearer API
+    # paths (/api/*) and non-HTML clients keep the machine-readable JSON.
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    def _wants_html(request: Request) -> bool:
+        return (
+            not request.url.path.startswith("/api")
+            and "text/html" in request.headers.get("accept", "")
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exc(request: Request, exc: StarletteHTTPException) -> Response:
+        if exc.status_code == 404 and _wants_html(request):
+            from ..web.routes import templates
+
+            return templates.TemplateResponse(
+                request, "_notice.html",
+                {
+                    "topbar": "Not found", "icon": "ti-search-off",
+                    "heading": "We couldn't find that",
+                    "detail": "That page or record doesn't exist — it may have been "
+                    "removed, or the link is mistyped. Go back to All claims to continue.",
+                },
+                status_code=404,
+            )
+        return JSONResponse(
+            {"detail": exc.detail}, status_code=exc.status_code,
+            headers=getattr(exc, "headers", None),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_exc(request: Request, exc: RequestValidationError) -> Response:
+        if _wants_html(request):
+            from ..web.routes import templates
+
+            return templates.TemplateResponse(
+                request, "_notice.html",
+                {
+                    "topbar": "Invalid link", "icon": "ti-alert-triangle",
+                    "heading": "Something in that link looks wrong",
+                    "detail": "The address contains an invalid value. Go back to All "
+                    "claims and try again.",
+                },
+                status_code=422,
+            )
+        return JSONResponse({"detail": exc.errors()}, status_code=422)
+
     return app
 
 

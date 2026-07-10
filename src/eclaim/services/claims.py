@@ -228,11 +228,21 @@ class ClaimService:
 
     @staticmethod
     def _recompute_totals(claim: Claim, lines: list[ClaimLine]) -> None:
-        """Roll the line amounts up onto the header: claimed = all lines, approved =
-        approved lines, reimbursable = approved out-of-pocket lines (corporate-card
-        lines reconcile only, they are never paid back to the employee)."""
+        """Roll the line amounts up onto the header IN HOME CURRENCY (MYR):
+        claimed = all lines, approved = approved lines, reimbursable = approved
+        out-of-pocket lines (corporate-card lines reconcile only, they are never
+        paid back to the employee).
+
+        Each line's ``base_amount`` is its MYR value (== gross for a MYR line;
+        gross×FX for a converted foreign line). Summing ``base_amount`` — never the
+        raw ``total_amount``, which is each line's OWN currency — keeps the header
+        total, the authority gate and the matrix band all in one currency. A RM 50
+        + SGD 300 claim must never roll up to a meaningless "RM 350". A foreign line
+        whose FX is still unresolved has ``base_amount = None`` and so is excluded;
+        :meth:`_require_fx_resolved` blocks approval until it is set, so the gate
+        never runs on a partial number."""
         def _sum(ls) -> Decimal | None:
-            vals = [x.total_amount for x in ls if x.total_amount is not None]
+            vals = [x.base_amount for x in ls if x.base_amount is not None]
             return sum(vals, Decimal("0")) if vals else None
 
         approved = [x for x in lines if x.line_status == "approved"]
@@ -243,6 +253,19 @@ class ClaimService:
             if approved
             else None
         )
+
+    @staticmethod
+    def _require_fx_resolved(lines: list[ClaimLine]) -> None:
+        """Block a decision while any foreign line lacks its exchange rate: without
+        it the line has no MYR ``base_amount``, so the header total and the
+        authority/matrix gate that read it would be understated — a control that
+        fails OPEN. Force FX resolution before the amount gate ever runs."""
+        if any(ln.total_amount is not None and ln.base_amount is None for ln in lines):
+            raise ClaimError(
+                "This claim has a foreign-currency line with no exchange rate yet. "
+                "Set the rate (Admin → Exchange rates, or the line's FX field) so "
+                "the RM total is complete, then approve."
+            )
 
     @staticmethod
     def _payload(line: ClaimLine, category) -> dict:
@@ -973,8 +996,14 @@ class ClaimService:
             if category is None or category.client_id != line.client_id:
                 raise ClaimError("category not found for this client")
         elif "expense_type" in fields or "vendor" in fields:
-            category = repos.categories.match_by_merchant(
+            # Re-derive the category on a vendor/type edit ONLY when the merchant map
+            # actually hits — never let a miss (None) clobber a category a reviewer
+            # deliberately set. Fall back to the existing category otherwise.
+            match = repos.categories.match_by_merchant(
                 line.client_id, line.vendor, line.expense_type
+            )
+            category = match or (
+                repos.categories.get_by_id(line.category_id) if line.category_id else None
             )
         else:
             category = (
@@ -1258,12 +1287,15 @@ class ClaimService:
         claim = self._lock(repos, claim_id)
         if claim.status != "in_review":
             raise IllegalTransition(f"cannot approve a claim in status {claim.status!r}")
+        lines = repos.claims.lines(claim_id)
+        # FX must be resolved BEFORE the authority/matrix gate, so it reads a
+        # complete MYR total rather than a partial one that could fail open.
+        self._require_fx_resolved(lines)
         if approver is not None:
             from .sod import authorize_approval
 
             authorize_approval(repos, claim, approver, action="approve")
             claim.approved_by_user_id = approver.user_id
-        lines = repos.claims.lines(claim_id)
         for ln in lines:
             ln.line_status = "approved"
         self._recompute_totals(claim, lines)
@@ -1305,9 +1337,12 @@ class ClaimService:
             raise IllegalTransition(f"cannot decide a claim in status {claim.status!r}")
         from .sod import authorize_approval
 
+        lines = repos.claims.lines(claim_id)
+        # Resolve FX before the gate (same reason as approve): a foreign line with
+        # no rate leaves the MYR total — and the authority/matrix band — incomplete.
+        self._require_fx_resolved(lines)
         authorize_approval(repos, claim, reviewer, action="decide")
 
-        lines = repos.claims.lines(claim_id)
         by_id = {ln.id: ln for ln in lines}
         for line_id, (line_status, reason) in decisions.items():
             ln = by_id.get(line_id)
@@ -1501,12 +1536,17 @@ class ClaimService:
         self, *, repos: "Repos", claim_id: uuid.UUID, actor: str,
         principal: "Principal | None" = None,
     ) -> Claim:
-        """Re-enter a sent-back claim into the review queue
-        (submitted -> in_review), e.g. after its keyed fields were corrected.
-        Not a sign-off, so no SoD self-check — but a Viewer still may not do it."""
+        """Re-enter a returned claim into the review queue ( -> in_review), e.g.
+        after its queried/keyed fields were corrected. Accepts BOTH return-for-
+        rework statuses: 'submitted' (a whole-claim send_back, or a submitter-
+        verification park) and 'sent_back' (a per-line decide() that queried a
+        line). Both are "return the claim to the reviewer"; landing them in
+        different statuses previously stranded a queried claim, since the only
+        recovery button it showed (Resubmit) required 'submitted'. Not a sign-off,
+        so no SoD self-check — but a Viewer still may not do it."""
         claim = self.get(repos, claim_id)
         self._require_writer(claim, principal)
-        if claim.status != "submitted":
+        if claim.status not in ("submitted", "sent_back"):
             raise IllegalTransition(f"cannot resubmit a claim in status {claim.status!r}")
         claim.status = "in_review"
         record_event(

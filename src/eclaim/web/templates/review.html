@@ -429,9 +429,10 @@
   {# -- Whole-claim actions ------------------------------------------------- #}
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     {% if can_review %}
-      <form method="post" action="/claims/{{ claim.id }}/reject" style="flex:1;display:flex;gap:6px;">
+      <form method="post" action="/claims/{{ claim.id }}/reject" style="flex:1;display:flex;gap:6px;"
+            onsubmit="return confirm('Reject the WHOLE claim? This is final and cannot be undone. The claimant will see your reason.');">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <input class="field" name="reason" placeholder="Reason" style="flex:1;">
+        <input class="field" name="reason" placeholder="Reason (required)" required style="flex:1;">
         <button class="btn" type="submit"><i class="ti ti-x"></i>Reject all</button>
       </form>
       <form method="post" action="/claims/{{ claim.id }}/send-back" style="flex:1;display:flex;gap:6px;">
@@ -439,7 +440,8 @@
         <input class="field" name="reason" placeholder="Reason" style="flex:1;">
         <button class="btn" type="submit"><i class="ti ti-arrow-back-up"></i>Send back</button>
       </form>
-      <form method="post" action="/claims/{{ claim.id }}/approve" style="flex:1;">
+      <form method="post" action="/claims/{{ claim.id }}/approve" style="flex:1;"
+            onsubmit="return confirm('Approve the WHOLE claim? This ignores any per-line Query/Reject you set above — use “Decide claim” for per-line outcomes.');">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <button class="btn btn-accent" type="submit" style="width:100%;justify-content:center;padding:9px 14px;"><i class="ti ti-check"></i>Approve all</button>
       </form>

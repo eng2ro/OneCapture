@@ -63,8 +63,8 @@
         <label class="lx-fl">Work email</label>
         <input class="lx-inp" name="email" type="email" autocomplete="username" placeholder="you@firm.com.my" required />
 
-        <label class="lx-fl">Password</label>
-        <input class="lx-inp" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+        <label class="lx-fl">Password{% if passwordless %} <span style="font-weight:400;opacity:.7;">— not needed for this sign-in</span>{% endif %}</label>
+        <input class="lx-inp" name="password" type="password" autocomplete="current-password" placeholder="{{ '(not required)' if passwordless else '••••••••' }}"{% if not passwordless %} required{% endif %} />
 
         <button class="lx-btn" type="submit">Sign in</button>
       </form>

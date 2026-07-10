@@ -155,11 +155,12 @@ def test_claim_cannot_be_paid_before_release(client, db_session):
 
 
 def test_payables_page_gates_pay_button_on_release(client, db_session):
-    """An approved claim shows 'release first', not a pay button; a released one pays."""
+    """An approved claim shows 'Release to pay', not a pay button; a released one pays."""
     cid = _approved_out_of_pocket_claim(client)
     db_session.commit()
     page = client.get("/payables")
-    assert "release first" in page.text
+    assert "Release to pay" in page.text
+    assert "Mark this reimbursement paid" not in page.text
     assert client.post(f"/api/claims/{cid}/release").status_code == 200
     db_session.commit()
     page = client.get("/payables")

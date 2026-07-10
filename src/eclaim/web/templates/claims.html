@@ -56,7 +56,7 @@
       <h1 class="page-title">All claims</h1>
       <p class="page-sub">{{ claims | length }} claims{% if current_status %} · {{ label.get(current_status, current_status.replace('_',' ')) }}{% endif %}</p>
     </div>
-    <a class="btn" href="/api/claims/export?status={{ current_status or 'released' }}"
+    <a class="btn" href="/claims/export.csv?status={{ current_status or 'released' }}"
        title="Download a CSV for the accounting/ERP system"><i class="ti ti-download"></i>Export CSV</a>
   </div>
 

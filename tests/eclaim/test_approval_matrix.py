@@ -126,6 +126,23 @@ def test_amount_below_band_is_ungoverned(client, fake_ocr, db_session, tmp_path)
     check_can_approve(claim, _p(ids, "manager"))                         # legacy → ok
 
 
+def test_amount_above_a_finite_top_band_fails_closed(client, fake_ocr, db_session, tmp_path):
+    """Audit fix: an amount at/above the matrix floor but covered by no band (here,
+    above a finite top ceiling) must FAIL CLOSED — it previously skipped the matrix
+    entirely and fell back to only the (often unset) personal authority_limit."""
+    from eclaim.services.sod import MATRIX_NO_BAND
+
+    svc, repos = ClaimService(), Repos.for_session(db_session)
+    ids = db_session.info["principal"]
+    # Only band: 0–1,000 → manager. A 5,000 claim is above the ceiling → gap.
+    _rule(db_session, ids, min_amount=Decimal("0"), max_amount=Decimal("1000"),
+          approver_role="manager", scope_module="eclaim")
+    claim = _claim_of(svc, repos, fake_ocr, tmp_path, ids, "5000")
+    assert matrix_rule_for(repos, claim) is MATRIX_NO_BAND
+    with pytest.raises(SoDViolation, match="no approval band is configured"):
+        check_can_approve(claim, _p(ids, "partner"), matrix_rule=MATRIX_NO_BAND)
+
+
 def test_named_user_rule(client, fake_ocr, db_session, tmp_path):
     svc, repos = ClaimService(), Repos.for_session(db_session)
     ids = db_session.info["principal"]

@@ -182,6 +182,22 @@ def _actor(principal: Principal) -> str:
     return principal.email or str(principal.user_id)
 
 
+def _audit_matrix(repos, principal, client_id, event_type: str, detail: dict) -> None:
+    """Record an approval-matrix change on the client's tamper-evident audit chain.
+    The matrix is a core money control (who may sign off which band), so every
+    template/add/delete must leave a durable, hash-chained trail — mirroring
+    client-setting and user-role changes."""
+    from ..repositories import AuditRepository
+    from ..services.audit import record_event
+
+    record_event(
+        AuditRepository(repos.session), firm_id=principal.firm_id,
+        client_id=client_id, entity_type="approval_matrix", entity_id=client_id,
+        event_type=event_type, actor=_actor(principal), detail=detail,
+    )
+    repos.session.flush()
+
+
 def _opt_uuid(value: str | None) -> uuid.UUID | None:
     """Parse an optional id from a query string. A blank or malformed ``?edit=``
     means 'no record selected' (show the list) — never a 422. Typing the param as
@@ -744,6 +760,25 @@ def ap_list(
     )
 
 
+@router.get("/claims/export.csv")
+def web_claims_export_csv(
+    status: str = "released",
+    repos: Repos = Depends(deps.get_web_repos),
+    principal: Principal = Depends(deps.get_session_principal),
+):
+    """Cookie-authed CSV export for the All-claims page — the browser cannot send a
+    bearer token to the /api export, so that link 401'd. RLS scopes rows to the
+    caller's clients; same columns + formula-injection neutralising as the API."""
+    from ..api.routes import render_claims_csv
+    from fastapi.responses import Response as _Response
+
+    rows = repos.claims.export_rows(status=status or "released")
+    return _Response(
+        content=render_claims_csv(rows), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="claims_export.csv"'},
+    )
+
+
 @router.get("/ap/export.csv")
 def ap_export_csv(
     repos: Repos = Depends(deps.get_web_repos),
@@ -1136,7 +1171,12 @@ def payables_page(
     principal: Principal = Depends(deps.get_session_principal),
 ) -> HTMLResponse:
     p = payables_service.payables(repos.session, principal.allowed_client_ids)
-    return templates.TemplateResponse(request, "payables.html", {"p": p})
+    # Viewers are read-only: hide the "Mark paid" forms so they don't dead-end on a
+    # raw 403 (the POST is still viewer-gated server-side).
+    return templates.TemplateResponse(
+        request, "payables.html",
+        {"p": p, "can_act": principal.base_role != "viewer"},
+    )
 
 
 @router.post("/payables/pay")
@@ -1374,7 +1414,11 @@ def web_capture_mileage(
 # --------------------------------------------------------------------------- #
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "login.html", {})
+    # In a dev/UAT (passwordless) build the provider ignores the password, so don't
+    # force the field — a tester handed only an email can sign straight in.
+    return templates.TemplateResponse(
+        request, "login.html", {"passwordless": get_settings().dev_auth_allowed}
+    )
 
 
 @router.post("/login")
@@ -2982,6 +3026,8 @@ def admin_apply_template(
             scope_module="eclaim",
             approvals_required=PHASE1_APPROVALS_REQUIRED, active=True,
         ))
+    _audit_matrix(repos, principal, cid, "matrix_template_applied",
+                  {"template": template})
     return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
 
 
@@ -3025,6 +3071,10 @@ def admin_add_rule(
         step_order=1, approver_role=role, scope_module=module,
         approvals_required=PHASE1_APPROVALS_REQUIRED, active=True,
     ))
+    _audit_matrix(repos, principal, cid, "matrix_rule_added", {
+        "module": module, "min": str(mn) if mn is not None else None,
+        "max": str(mx) if mx is not None else None, "role": role,
+    })
     return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
 
 
@@ -3043,7 +3093,14 @@ def admin_delete_rule(
     rule = repos.approvals.get(rid)
     if rule is not None and _visible_client(repos, principal, rule.client_id):
         cid = rule.client_id
+        removed = {
+            "module": rule.scope_module,
+            "min": str(rule.min_amount) if rule.min_amount is not None else None,
+            "max": str(rule.max_amount) if rule.max_amount is not None else None,
+            "role": rule.approver_role,
+        }
         repos.session.delete(rule)
         repos.session.flush()
+        _audit_matrix(repos, principal, cid, "matrix_rule_deleted", removed)
         return RedirectResponse(f"/admin/approvals?client_id={cid}", status_code=303)
     return _render_approvals(request, repos, principal, error="Rule not found.")

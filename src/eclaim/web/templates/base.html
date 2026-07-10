@@ -142,7 +142,7 @@
       <a class="oc-nav-i {{ 'active' if request.url.path == '/coverage' else '' }}" href="/coverage"><i class="ti ti-chart-pie"></i><span class="lab">Carbon coverage</span></a>
 
       <div class="oc-nav-h">ACCOUNT</div>
-      <a class="oc-nav-i" href="/"><i class="ti ti-circles-relation"></i><span class="lab">Back to Hub</span></a>
+      <a class="oc-nav-i" href="/claims"><i class="ti ti-circles-relation"></i><span class="lab">Back to Hub</span></a>
       <form method="post" action="/logout" style="margin:0;">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <button class="oc-nav-i" type="submit"><i class="ti ti-logout"></i><span class="lab">Sign out</span></button>

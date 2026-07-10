@@ -71,12 +71,15 @@
             <td style="text-align:right;">
               <div style="display:inline-flex;gap:6px;justify-content:flex-end;align-items:center;">
                 {% if c.status in ('released', 'exported') %}
-                <form method="post" action="/payables/pay" onsubmit="return confirm('Mark this reimbursement paid?');">
-                  <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="kind" value="claim"><input type="hidden" name="id" value="{{ c.id }}">
-                  <button class="btn btn-accent" type="submit" style="height:32px;font-size:12px;"><i class="ti ti-check"></i> Mark paid</button>
-                </form>
+                  {% if can_act %}
+                  <form method="post" action="/payables/pay" onsubmit="return confirm('Mark this reimbursement paid?');">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="kind" value="claim"><input type="hidden" name="id" value="{{ c.id }}">
+                    <button class="btn btn-accent" type="submit" style="height:32px;font-size:12px;"><i class="ti ti-check"></i> Mark paid</button>
+                  </form>
+                  {% endif %}
                 {% else %}
-                <span class="page-sub" title="Release the claim first — the attestation gate and the CarbonNext handoff happen at release; paying earlier would strand them.">release first →</span>
+                <a class="btn" href="/claims/{{ c.id }}/review" style="height:32px;font-size:12px;"
+                   title="Release the claim first (the attestation check and CarbonNext hand-off happen at release), then you can mark it paid."><i class="ti ti-send"></i> Release to pay</a>
                 {% endif %}
                 <a class="btn" href="/claims/{{ c.id }}/review" style="height:32px;font-size:12px;">Open</a>
               </div>
@@ -106,10 +109,12 @@
             <td>{{ ap_status(inv.status) }}</td>
             <td style="text-align:right;">
               <div style="display:inline-flex;gap:6px;justify-content:flex-end;">
+                {% if can_act %}
                 <form method="post" action="/payables/pay" onsubmit="return confirm('Mark this vendor bill paid?');">
                   <input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="kind" value="ap"><input type="hidden" name="id" value="{{ inv.id }}">
                   <button class="btn btn-accent" type="submit" style="height:32px;font-size:12px;"><i class="ti ti-check"></i> Mark paid</button>
                 </form>
+                {% endif %}
                 <a class="btn" href="/ap/{{ inv.id }}" style="height:32px;font-size:12px;">Open</a>
               </div>
             </td>

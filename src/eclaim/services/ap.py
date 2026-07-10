@@ -31,7 +31,14 @@ from ..repositories import AuditRepository
 from ..tenancy import set_tenant_context
 from .audit import record_event
 from .claims import ClaimError
-from .sod import SoDViolation, _describe_rule, _rule_satisfied, select_matrix_rule
+from .sod import (
+    MATRIX_NO_BAND,
+    SoDViolation,
+    _describe_rule,
+    _matrix_gap,
+    _rule_satisfied,
+    select_matrix_rule,
+)
 
 ENTITY_TYPE = "ap_invoice"
 
@@ -190,6 +197,11 @@ def create_from_intake(
 
     Refuses a page the classifier read as not-payable (quotation / purchase_order /
     delivery_order): filing a quote as a payable invoice would be a real error."""
+    if intake.status != "open":
+        # Already filed (double click / retry / two reviewers) — a friendly refusal
+        # instead of the uncaught unique-constraint IntegrityError (idempotency key
+        # 'intake:{id}') that otherwise 500s.
+        raise ApError("this document has already been filed as an AP invoice")
     if intake.document_type in _NOT_PAYABLE:
         raise ApError(
             f"a {intake.document_type.replace('_', ' ')} is not a payable bill — "
@@ -470,6 +482,11 @@ def check_can_approve_invoice(
         raise SoDViolation(
             f"amount {amount} exceeds approver authority limit {approver.authority_limit}"
         )
+    if matrix_rule is MATRIX_NO_BAND:
+        raise SoDViolation(
+            f"no AP approval band is configured for {amount} under this client's "
+            "approval matrix — ask an admin to add a band covering this amount"
+        )
     if matrix_rule is not None and not _rule_satisfied(matrix_rule, approver):
         raise SoDViolation(
             f"approval of {amount} requires {_describe_rule(matrix_rule)} "
@@ -484,10 +501,13 @@ def matrix_rule_for_invoice(session: Session, invoice: ApInvoice) -> ApprovalMat
     if not rules:
         return None
     cats = {ln.category_id for ln in _lines(session, invoice.id) if ln.category_id}
-    return select_matrix_rule(
-        rules, amount=invoice.total_amount if invoice.total_amount is not None else Decimal(0),
-        department=None, category_ids=cats, module="ap",
+    amt = invoice.total_amount if invoice.total_amount is not None else Decimal(0)
+    rule = select_matrix_rule(
+        rules, amount=amt, department=None, category_ids=cats, module="ap",
     )
+    if rule is None and _matrix_gap(rules, "ap", amt):
+        return MATRIX_NO_BAND     # a gap at/above the floor → deny (fail closed)
+    return rule
 
 
 def approve(

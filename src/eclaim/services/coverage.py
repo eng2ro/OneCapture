@@ -103,25 +103,31 @@ def coverage_report(
         .order_by(CarbonHandoff.created_at, CarbonHandoff.id)
     ).scalars())
 
+    # Group by DOCUMENT identity only (claim, doc_no) — NOT by period — so a
+    # reversal made in a later month nets against its original forward instead of
+    # spawning a phantom "captured" document (full gross) plus a negative
+    # "forwarded" in its own period. The document belongs to its FORWARD (original
+    # release) period; rows are ordered by created_at so the forward is seen first.
     docs: dict[tuple, DocumentCoverage] = {}
     for r in rows:
-        p = _period_of(r)
-        if period is not None and p != period:
-            continue
-        key = (p, *_doc_key(r))
+        key = _doc_key(r)
         amount = r.amount if r.amount is not None else _ZERO
-        # captured = the document's gross; identical on every row of a document. Fall
-        # back to the (unsigned) forwarded amount for a pre-F-B row with no gross stored.
+        # captured = the document's gross; identical on every forward/reversal row of
+        # a document. Fall back to the (unsigned) forwarded amount for a pre-F-B row.
         captured = r.doc_gross_total if r.doc_gross_total is not None else abs(amount)
         doc = docs.get(key)
         if doc is None:
             doc = DocumentCoverage(
-                period=p, claim_id=r.claim_id, doc_no=r.doc_no, currency=r.currency,
-                captured=captured, forwarded=_ZERO, line_count=0,
+                period=_period_of(r), claim_id=r.claim_id, doc_no=r.doc_no,
+                currency=r.currency, captured=captured, forwarded=_ZERO, line_count=0,
             )
             docs[key] = doc
         doc.forwarded += amount
         if r.direction == "forward":
+            # The document's period + captured gross come from its forward release,
+            # never from a later reversal.
+            doc.period = _period_of(r)
+            doc.captured = captured
             doc.line_count += 1
             doc.lines.append(CoverageLine(
                 line_id=r.line_id, category_name=r.category_name,
@@ -131,6 +137,8 @@ def coverage_report(
 
     periods: dict[str, PeriodCoverage] = {}
     for doc in docs.values():
+        if period is not None and doc.period != period:
+            continue
         pc = periods.get(doc.period)
         if pc is None:
             pc = PeriodCoverage(doc.period, _ZERO, _ZERO, 0, 0)

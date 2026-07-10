@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, Upl
 
 from ..auth.principal import Principal, list_visible_clients
 from ..ocr.base import OcrError, OcrProvider
+from ..services import erp as erp_service
 from ..services import routing
 from ..services.documents import normalize_image
 from ..services.ingestion import _FormOcr
@@ -139,6 +140,14 @@ EXPORT_COLUMNS = [
     "supplier_tax_id", "carbon_relevant", "release_batch_id",
 ]
 
+# Numeric columns whose leading '-' is a real negative sign, never an injection —
+# excluded from the CSV formula-neutraliser applied to every free-text column.
+_EXPORT_NUMERIC_COLS = frozenset(
+    EXPORT_COLUMNS.index(c) for c in (
+        "total_amount", "tax_amount", "net_amount", "fx_rate", "base_amount",
+    )
+)
+
 
 def _parse_export_date(value: str | None, field: str) -> datetime | None:
     if value is None:
@@ -172,17 +181,29 @@ def export_claims(
         date_to=_parse_export_date(date_to, "date_to"),
         batch_id=batch_id,
     )
+    return Response(
+        content=render_claims_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="claims_export.csv"'},
+    )
+
+
+def render_claims_csv(rows) -> str:
+    """Build the claims CSV (shared by the bearer API export and the cookie-authed
+    web export). Free-text cells (vendor, doc_no, names, codes — OCR/attacker-
+    controlled) are neutralised against spreadsheet formula injection; numeric
+    columns are left as-is so a legitimate leading '-' negative is not mangled."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(EXPORT_COLUMNS)
     for row in rows:
-        # Select column order matches EXPORT_COLUMNS; None → blank cell.
-        writer.writerow(["" if v is None else str(v) for v in row])
-    return Response(
-        content=buf.getvalue(),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="claims_export.csv"'},
-    )
+        writer.writerow([
+            "" if v is None
+            else str(v) if i in _EXPORT_NUMERIC_COLS
+            else erp_service._csv_safe(str(v))
+            for i, v in enumerate(row)
+        ])
+    return buf.getvalue()
 
 
 @router.get("/claims/{claim_id}", response_model=ClaimOut)
@@ -293,6 +314,7 @@ def resubmit_claim(
                 repos=repos,
                 claim_id=claim_id,
                 actor=principal.email or str(principal.user_id),
+                principal=principal,   # else the viewer/writer gate is skipped
             ),
         )
     except ClaimError as exc:
