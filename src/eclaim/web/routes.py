@@ -327,15 +327,36 @@ async def capture_extract(
     friendly reason so the page falls back to manual entry instead of breaking."""
     _require_capture_writer(principal)
     media_type = file.content_type or "application/octet-stream"
-    if media_type not in SUPPORTED_MEDIA:
+    name = file.filename or ""
+    raw = await file.read()
+    # A PDF is a supported receipt too (the page advertises it and /capture renders
+    # it) — pre-read its FIRST page so a single-page PDF receipt gets the same on-
+    # screen preview + verification as an image. Multi-page PDFs still expand on
+    # submit; the preview reflects page 1.
+    from ..services import documents
+
+    if documents.is_pdf(name, media_type):
+        try:
+            pages = documents.render_pdf_pages(raw, max_pages=1)
+        except ValueError as exc:
+            return JSONResponse({
+                "ok": False,
+                "reason": "Couldn't read this PDF automatically — please enter the details.",
+                "detail": str(exc),
+            })
+        if not pages:
+            return JSONResponse({"ok": False, "reason": "This PDF has no readable page."})
+        image_bytes, media_type = pages[0], "image/png"
+    elif media_type in SUPPORTED_MEDIA:
+        image_bytes = raw
+    else:
         return JSONResponse(
             {"ok": False, "reason": f"Unsupported file type ({media_type})."},
             status_code=415,
         )
-    image_bytes = await file.read()
     try:
         # iPhone HEIC → JPEG before OCR (the vision API doesn't read HEIC).
-        image_bytes, media_type = normalize_image(image_bytes, media_type, name=file.filename or "")
+        image_bytes, media_type = normalize_image(image_bytes, media_type, name=name)
         extraction = ocr.extract(image_bytes, media_type)
     except (OcrError, ValueError) as exc:
         configured = bool(get_settings().anthropic_api_key)

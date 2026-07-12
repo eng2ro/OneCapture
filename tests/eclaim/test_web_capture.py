@@ -134,9 +134,19 @@ def test_capture_extract_returns_fields_and_suggested_category(client, fake_ocr,
 
 
 def test_capture_extract_unsupported_media_is_rejected(client):
-    files = {"file": ("r.pdf", b"%PDF-1.4", "application/pdf")}
+    # A genuinely unsupported type (not image/PDF/HEIC) is still refused.
+    files = {"file": ("notes.txt", b"just text", "text/plain")}
     resp = client.post("/capture/extract", files=files)
     assert resp.status_code == 415
+    assert resp.json()["ok"] is False
+
+
+def test_capture_extract_bad_pdf_degrades_gracefully(client):
+    # PDF is a supported receipt type now; an unreadable one degrades to manual
+    # entry (ok:false, 200) instead of a hard 415.
+    files = {"file": ("r.pdf", b"%PDF-1.4 not really a pdf", "application/pdf")}
+    resp = client.post("/capture/extract", files=files)
+    assert resp.status_code == 200
     assert resp.json()["ok"] is False
 
 

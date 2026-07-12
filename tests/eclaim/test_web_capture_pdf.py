@@ -54,6 +54,26 @@ def _enable_split(db_session):
     db_session.flush()
 
 
+def test_capture_extract_pre_reads_a_pdf_first_page(client, fake_ocr):
+    """A PDF is a supported receipt: the pre-read endpoint renders its first page
+    and OCRs it, so a PDF receipt gets the same on-screen preview as an image
+    (previously it hard-rejected PDFs with a 415)."""
+    from decimal import Decimal
+
+    from eclaim.ocr.base import Extraction
+
+    fake_ocr.extraction = Extraction(vendor="Kedai PDF", total_amount=Decimal("45.00"),
+                                     expense_type="other")
+    resp = client.post(
+        "/capture/extract",
+        files={"file": ("receipt.pdf", _pdf_bytes(["Kedai PDF  RM 45.00"]), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["extraction"]["vendor"] == "Kedai PDF"
+
+
 def test_pdf_kept_whole_as_one_line_by_default(client, fake_ocr, db_session):
     resp = _post_pdf(client, ["Invoice A", "Invoice B", "Invoice C"])
     assert resp.status_code == 303

@@ -434,7 +434,7 @@
     entries.forEach(function (e) {
       var row = document.createElement("div");
       row.className = "receipt-card";
-      var thumb = (e.archive || e.heic)
+      var thumb = (e.archive || e.heic || e.kind === "pdf")
         ? '<div class="rc-thumb" style="display:flex;align-items:center;justify-content:center;"><i class="ti ' +
           (e.kind === "pdf" ? "ti-file-text" : e.kind === "zip" ? "ti-file-zip" : "ti-photo") + '" style="font-size:18px;color:var(--graphite);"></i></div>'
         : '<img class="rc-thumb" src="' + e.url + '" alt="">';
@@ -526,14 +526,17 @@
       // into one line per image, and renders a PDF (one line per page, or the whole
       // document as one line, per the client's policy). Show it as a document card and
       // send it with a null item so the server reads it.
+      // A PDF's first page is OCR-read on the capture page like an image (the
+      // server pre-reads page 1); a ZIP stays an opaque archive expanded on upload.
+      var readable = isImg || isPdf;
       var e = {
         id: ++seq, file: f, url: (isImg && !isHeic) ? URL.createObjectURL(f) : null,
-        status: isImg ? "reading" : "archive", ext: null, catId: null,
-        archive: (isZip || isPdf), heic: isHeic,
+        status: readable ? "reading" : "archive", ext: null, catId: null,
+        archive: isZip, heic: isHeic,
         kind: isZip ? "zip" : (isPdf ? "pdf" : (isHeic ? "heic" : "img")),
       };
       entries.push(e);
-      if (isImg) extract(e);
+      if (readable) extract(e);
     });
     render();
   }

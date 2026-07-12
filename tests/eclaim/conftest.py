@@ -244,6 +244,29 @@ class FakeOcr:
         return self.extraction
 
 
+@pytest.fixture(autouse=True)
+def _stub_directions(monkeypatch):
+    """Never call the real Google Directions API from the test suite — default
+    every mileage route lookup to a deterministic stub, so a live-key outage
+    (e.g. a 403 from a lapsed billing account) can't break the build. Tests that
+    need specific routes (alternatives, over-recommended) override
+    ``deps.get_directions`` themselves; run after this, their setattr wins."""
+    from decimal import Decimal
+
+    from eclaim.api import deps
+    from eclaim.maps import RouteResult
+
+    class _StubDirections:
+        def route(self, origin, destination, waypoints=None):
+            return RouteResult(distance_km=Decimal("42.000"), polyline="stub",
+                               legs=[{"from": origin, "to": destination, "km": "42.000"}])
+
+        def routes(self, origin, destination, waypoints=None):
+            return [self.route(origin, destination, waypoints)]
+
+    monkeypatch.setattr(deps, "get_directions", lambda: _StubDirections())
+
+
 @pytest.fixture
 def fake_ocr() -> FakeOcr:
     return FakeOcr()
