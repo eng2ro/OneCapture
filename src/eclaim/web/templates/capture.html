@@ -544,14 +544,20 @@
   function extract(e) {
     var fd = new FormData();
     fd.append("file", e.file);
-    fetch("/capture/extract", { method: "POST", body: fd })
+    // A slow or hung OCR read must NEVER pin the receipt on "reading" (which keeps
+    // the Submit button disabled) — abort after 30s and fall back to manual entry.
+    // Nothing is lost: the server re-reads every receipt on submit anyway.
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 30000);
+    fetch("/capture/extract", { method: "POST", body: fd, signal: ctrl && ctrl.signal })
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        clearTimeout(timer);
         if (data.ok) { e.ext = data.extraction; e.catId = data.suggested_category_id; e.status = "read"; }
         else { e.status = "manual"; }
         render();
       })
-      .catch(function () { e.status = "manual"; render(); });
+      .catch(function () { clearTimeout(timer); e.status = "manual"; render(); });
   }
 
   fileInput.addEventListener("change", function () {
@@ -663,8 +669,14 @@ window.updateSubmitBar = function () {
   if (meta) meta.innerHTML = rs.reading ? "Reading receipts…"
     : (n > 0 ? "<b>RM " + total.toFixed(2) + "</b> · you'll verify next"
              : "Add a receipt or a mileage trip to begin · you'll verify next");
-  if (submit) submit.disabled = n === 0 || rs.reading;
-  if (label) label.textContent = n > 0 ? "Submit claim (" + n + ")" : "Submit claim";
+  if (submit) {
+    submit.disabled = n === 0 || rs.reading;
+    // Make the disabled state self-explanatory so a click during OCR isn't a
+    // mystery no-op — the button itself says it's still reading.
+    submit.title = rs.reading ? "Please wait — still reading the receipt…" : "";
+  }
+  if (label) label.textContent = rs.reading ? "Reading receipt…"
+    : (n > 0 ? "Submit claim (" + n + ")" : "Submit claim");
   // Show/require the out-of-pocket declaration ONLY when there's genuine out-of-pocket
   // expense: a mileage trip, or a page classified as an expense receipt (or unread/
   // manual — the server treats those as potential expense). Every OTHER classified
