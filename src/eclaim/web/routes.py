@@ -243,6 +243,15 @@ def _events_for(repos: Repos) -> list:
     return repos.events.list_for_clients([deps.default_client_id(repos.session)])
 
 
+def _capture_force_eclaim(request: Request) -> bool:
+    """Whether the capture form keeps every receipt as a claim line (default) vs
+    lets the classifier divert vendor bills — the per-company setting."""
+    from ..services import settings as _settings
+
+    db = request.state.db
+    return _settings.get(db, deps.default_client_id(db), "capture.vendor_bill_routing") == "keep"
+
+
 def _render_capture(
     request: Request,
     categories: list[Category],
@@ -276,6 +285,12 @@ def _render_capture(
                 ) if cm.status == "active"
             ] if hasattr(request.state, "principal") else [],
             "error": error,
+            # "keep" mode (default): every receipt is a claim line, so the client
+            # requires the out-of-pocket declaration for any capture. "divert" mode
+            # exempts detected non-expense documents. Mirrors the server gate.
+            "force_eclaim": (
+                _capture_force_eclaim(request) if hasattr(request.state, "principal") else True
+            ),
             # Echo the header fields back on a validation error so the user does
             # not have to re-pick the type/dates (the receipts are re-dropped).
             "form": form or {},
@@ -378,7 +393,9 @@ async def capture_extract(
     )
 
 
-def _submission_needs_attestation(item_list, mileage_specs, file_count: int) -> bool:
+def _submission_needs_attestation(
+    item_list, mileage_specs, file_count: int, *, force_eclaim: bool = False
+) -> bool:
     """Does this capture contain out-of-pocket EXPENSE that requires the declaration?
 
     True when there's a mileage trip, an uploaded file with no classifying item
@@ -394,6 +411,10 @@ def _submission_needs_attestation(item_list, mileage_specs, file_count: int) -> 
     ):
         return True
     data_items = [i for i in item_list if ingestion.item_has_data(i)]
+    # The web capture form forces every receipt onto the claim (force_eclaim), so any
+    # file or data item is an out-of-pocket claim line and needs the declaration.
+    if force_eclaim and (file_count > 0 or data_items):
+        return True
     # A file with no data-bearing item is an unread/server-OCR page of unknown type.
     if file_count > len(data_items):
         return True
@@ -450,6 +471,11 @@ async def web_capture(
     _require_capture_writer(principal, client_id)
     _client = repos.session.get(Client, client_id)
     split_docs = bool(_client and (_client.modules or {}).get("allow_document_split"))
+    # Per-company policy: "keep" (default) = every receipt on this deliberate
+    # expense-claim form becomes a claim line (never silently diverted to Vendor
+    # Bills); "divert" = auto-route detected vendor bills to the holding queue.
+    from ..services import settings as _settings
+    force_eclaim = _settings.get(repos.session, client_id, "capture.vendor_bill_routing") == "keep"
 
     is_attested = attested.strip().lower() in ("1", "true", "yes", "on")
     header = {
@@ -462,6 +488,10 @@ async def web_capture(
         # WHO the claim is for (the employee register) — binds the claim to a
         # claimant so the CarbonNext hand-off carries employee ref/name/position.
         "claimant_id": claimant_id,
+        # Per the vendor-bill-routing policy above: in "keep" mode every receipt
+        # becomes an e-Claim line (never silently diverted); "divert" mode restores
+        # the classifier's auto-routing to Vendor Bills.
+        "force_eclaim": force_eclaim,
     }
     # Echoed back into the form if inline validation fails (receipts get re-dropped).
     form = {
@@ -491,7 +521,9 @@ async def web_capture(
     # payload's classification BEFORE the read phase, so a missing tick still costs no
     # OCR; the release-time gate remains the real control for anything that slips
     # through. The stamp itself is recorded in ClaimService.submit.
-    if _submission_needs_attestation(item_list, mileage_specs, len(named_files)) and not is_attested:
+    if _submission_needs_attestation(
+        item_list, mileage_specs, len(named_files), force_eclaim=force_eclaim
+    ) and not is_attested:
         return _render_capture(
             request, _capture_categories(repos), _events_for(repos),
             "Please confirm the out-of-pocket declaration before submitting your claim.",

@@ -16,10 +16,29 @@ from decimal import Decimal
 from fpdf import FPDF
 from sqlalchemy import select, text
 
+import pytest
+
 from eclaim.db.models import Claim, ClaimLine, Client, DocumentIntake, IngestionJob
 from eclaim.ingest import worker
 from eclaim.ocr.base import Extraction
 from eclaim.services import ingestion
+from eclaim.services import settings as settings_service
+
+
+@pytest.fixture(autouse=True)
+def _divert_mode(request):
+    """Vendor-bill auto-divert is now the opt-in 'divert' mode (default 'keep' keeps
+    every receipt as a claim). The async divert tests need it on; receipt-only tests
+    are unaffected (a receipt becomes a claim in either mode)."""
+    if "db_session" not in request.fixturenames:
+        return
+    db = request.getfixturevalue("db_session")
+    ids = db.info["principal"]
+    settings_service.set_setting(
+        db, firm_id=ids["firm"], client_id=ids["client"],
+        key="capture.vendor_bill_routing", value="divert", actor="t",
+    )
+    db.commit()
 
 
 def _pdf(pages: list[str]) -> bytes:

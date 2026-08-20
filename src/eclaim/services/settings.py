@@ -73,6 +73,19 @@ REGISTRY: tuple[Setting, ...] = (
             "off: every FX rate is keyed by a human."
         ),
     ),
+    Setting(
+        key="capture.vendor_bill_routing",
+        label="Capture: vendor-bill routing",
+        choices=("keep", "divert"),
+        default="keep",
+        description=(
+            "keep (default): every receipt dropped on the 'Submit an expense "
+            "claim' form becomes an expense-claim line — the reviewer switches a "
+            "line to a vendor bill if it really is one. Nothing is silently "
+            "moved. divert: the classifier auto-routes a detected vendor bill / "
+            "quotation / PO to the Vendor Bills queue at capture time."
+        ),
+    ),
 )
 
 _BY_KEY = {s.key: s for s in REGISTRY}

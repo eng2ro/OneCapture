@@ -133,3 +133,29 @@ def test_claims_csv_export_neutralises_formula_injection():
     body = csv_text.splitlines()[1]
     assert "'=cmd" in body                        # free-text defused
     assert "-50.00" in body and "'-50.00" not in body   # numeric left intact
+
+
+# --- Capture form default: a receipt stays a claim, never silently diverted ----
+def test_claim_form_keeps_a_vendor_bill_receipt_as_a_claim_line(client, fake_ocr, db_session):
+    """Owner report 2026-07: on the deliberate 'Submit an expense claim' form (default
+    'keep' routing), a receipt the OCR misreads as a vendor invoice must still become a
+    claim line — never silently diverted to Vendor Bills (which looked like a failed
+    submit). The reviewer switches a line to a vendor bill on review if it really is one.
+    """
+    import json
+
+    from eclaim.db.models import DocumentIntake
+
+    # A pre-read item carrying the vendor-invoice verdict (as /capture/extract would).
+    items = [{
+        "vendor": "PETRONAS EMSI", "total_amount": "60",
+        "document_type": "vendor_invoice", "type_confidence": "0.95",
+    }]
+    files = [("files", ("fuel.png", b"\x89PNG fuel-keep", "image/png"))]
+    r = client.post("/capture", files=files,
+                    data={"items": json.dumps(items), "attested": "yes"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert "/claims/" in r.headers["location"]              # a CLAIM, not /intake/holding
+    assert db_session.execute(select(Claim)).scalars().first() is not None
+    assert db_session.execute(select(DocumentIntake)).scalars().first() is None  # not diverted

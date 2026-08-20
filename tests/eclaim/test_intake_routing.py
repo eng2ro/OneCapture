@@ -20,7 +20,25 @@ from eclaim.ocr.anthropic_provider import _coerce_classification
 from eclaim.ocr.base import Extraction
 from eclaim.services import intake as intake_service
 from eclaim.services import routing
+from eclaim.services import settings as settings_service
 from eclaim.services.claims import Repos
+
+
+@pytest.fixture(autouse=True)
+def _divert_mode(request):
+    """The capture form now defaults to 'keep' (every receipt becomes a claim line);
+    the classifier's auto-divert to Vendor Bills is the opt-in 'divert' mode. These
+    end-to-end tests exercise the divert path, so enable it. Pure-router tests that
+    take no db_session are untouched."""
+    if "db_session" not in request.fixturenames:
+        return
+    db = request.getfixturevalue("db_session")
+    ids = db.info["principal"]
+    settings_service.set_setting(
+        db, firm_id=ids["firm"], client_id=ids["client"],
+        key="capture.vendor_bill_routing", value="divert", actor="t",
+    )
+    db.commit()
 
 
 # --------------------------------------------------------------------------- #

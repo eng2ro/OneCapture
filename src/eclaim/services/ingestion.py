@@ -483,21 +483,25 @@ def build_claim(
     added = 0
     diverted: list[uuid.UUID] = []
     actor = _capture_actor(created_by_user_id, header)
+    # When the user is deliberately submitting an expense claim (the "Submit an
+    # expense claim" form sets this), EVERY dropped receipt becomes an e-Claim line —
+    # the classifier's guess is kept as a suggestion but never silently diverts the
+    # receipt to Vendor Bills. A misrouted expense receipt "disappearing" to the AP
+    # queue is the single most confusing capture bug (owner report 2026-07). If a
+    # line really is a vendor bill, the reviewer switches it on the review screen.
+    force_eclaim = bool(header.get("force_eclaim"))
     try:
         # 3a. Classify every receipt first (pure — no DB writes). The router (C1) sends
         #     an ``expense_receipt`` onto the claim and diverts anything else (vendor
-        #     bill / delivery order / low-confidence) to the intake holding queue. A
-        #     manually-keyed item is always an e-Claim line — the user entered it as an
-        #     expense they are claiming, so it is never re-routed.
+        #     bill / delivery order / low-confidence) to the intake holding queue —
+        #     UNLESS ``force_eclaim`` is set, in which case everything stays on the claim.
+        #     A manually-keyed item is always an e-Claim line either way.
         classified: list[tuple] = []   # (r, extraction, cat_uuid, pay, decision)
         for i, r in enumerate(receipts):
             item = r["item"]
             try:
                 if item_has_data(item):
-                    # Pre-read by /capture/extract: carries the classifier verdict, so it
-                    # is routed on document_type just like the server-OCR path — a vendor
-                    # bill dropped through the normal UI diverts, not silently forced into
-                    # e-Claim (F2). A purely-manual entry defaults to expense_receipt.
+                    # Pre-read by /capture/extract: carries the classifier verdict.
                     extraction = extraction_from_item(item)
                     cat_uuid = uuid.UUID(item["category_id"]) if item.get("category_id") else None
                     pay = item.get("payment_method") or "out_of_pocket"
@@ -506,7 +510,11 @@ def build_claim(
                     if isinstance(pre, Exception):
                         raise pre if isinstance(pre, OcrError) else OcrError(str(pre))
                     extraction, cat_uuid, pay = pre, None, "out_of_pocket"
-                decision = routing.route(extraction.document_type, extraction.type_confidence)
+                decision = (
+                    routing.Route(routing.QUEUE_ECLAIM, needs_manual=False)
+                    if force_eclaim
+                    else routing.route(extraction.document_type, extraction.type_confidence)
+                )
             except (OcrError, ClaimError, ValueError) as exc:
                 errors.append(f"{r['name']}: {exc}")
                 continue

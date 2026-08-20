@@ -389,6 +389,9 @@
 </div>
 
 <script>
+// Vendor-bill routing policy for this company: keep (default) = every receipt is
+// a claim line; divert = the classifier may route vendor bills to Vendor Bills.
+window.FORCE_ECLAIM = {{ 'true' if force_eclaim else 'false' }};
 (function () {
   var CATEGORIES = {{ categories_json | tojson }};
   var CAT_BY_ID = {}; CATEGORIES.forEach(function (c) { CAT_BY_ID[c.id] = c; });
@@ -677,14 +680,15 @@ window.updateSubmitBar = function () {
   }
   if (label) label.textContent = rs.reading ? "Reading receipt…"
     : (n > 0 ? "Submit claim (" + n + ")" : "Submit claim");
-  // Show/require the out-of-pocket declaration ONLY when there's genuine out-of-pocket
-  // expense: a mileage trip, or a page classified as an expense receipt (or unread/
-  // manual — the server treats those as potential expense). Every OTHER classified
-  // type (vendor_invoice, delivery_order, quotation, purchase_order, unknown) diverts
-  // to the holding queues and creates no reimbursement — forcing the "paid with my own
-  // money" tick for a quotation would compel a false declaration. Mirrors the
-  // server-side _submission_needs_attestation, which makes the final call.
+  // Out-of-pocket declaration. In "keep" mode (default) every receipt becomes an
+  // expense-claim line, so any capture needs the tick; a line that is really a
+  // vendor bill is switched on the review screen. In "divert" mode the classifier
+  // routes vendor bills / quotations / POs to Vendor Bills, so only an
+  // expense_receipt (or an unread page) needs the tick — forcing it for a
+  // quotation would compel a false declaration. Mirrors the server-side
+  // _submission_needs_attestation, which makes the final call.
   var needsAttest = mileageLines.length > 0 || entries.some(function (e) {
+    if (window.FORCE_ECLAIM) return true;   // keep mode: every captured line is a claim
     if (e.status !== "read" || !e.ext) return true;
     var dt = e.ext.document_type;
     return !dt || dt === "expense_receipt";
