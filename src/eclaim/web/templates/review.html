@@ -1444,7 +1444,10 @@ function amAttach(input) {
       !google.maps.places.Autocomplete) return;
   try {
     new google.maps.places.Autocomplete(input, { fields: ["formatted_address", "name"] })
-      .addListener("place_changed", function () { /* value fills natively */ });
+      // Picking a suggestion sets the value PROGRAMMATICALLY — no 'input' event
+      // fires — so recompute the route here, else the button stays disabled after
+      // the user selects both addresses from the dropdown.
+      .addListener("place_changed", function () { amPreview(); });
   } catch (e) { /* leave the plain input */ }
 }
 function initReviewMaps() {
