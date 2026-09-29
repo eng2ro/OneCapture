@@ -1,20 +1,19 @@
 -- SAP B1: Category ID and Name Mapping Audit (Before & After)
--- Purpose: Check category IDs registered in ORSC (Resource Subclass) and validate against OITM (Items)
--- Shows category assignments and any mismatches
+-- Purpose: Check category assignments in subclass and their usage in items
 
 -- ============================================================================
--- PART 1: CATEGORY DATA IN SUBCLASS TABLE - CURRENT STATE
+-- PART 1: CATEGORIES IN SUBCLASS TABLE - CURRENT STATE
 -- ============================================================================
+PRINT '=== BEFORE: Categories in ORSC (Subclass Table) ==='
 SELECT
-    '[BEFORE - Categories in ORSC]' as CheckPoint,
+    'BEFORE' as Status,
     [Code] as SubclassCode,
     [Name] as SubclassName,
     [Category] as CategoryIDInORSC,
     [Class] as ResourceClass,
-    [SubClassCode] as SubClassCode,
-    [CreateDate] as CreatedDate,
-    [UpdateDate] as UpdatedDate,
-    (SELECT COUNT(*) FROM [dbo].[OITM] WHERE [AssetClass] = [dbo].[ORSC].[Code]) as CountItemsUsingThisSubclass
+    [SubClassCode],
+    [CreateDate],
+    [UpdateDate]
 FROM
     [dbo].[ORSC]
 WHERE
@@ -23,21 +22,22 @@ ORDER BY
     [Category], [Code];
 
 -- ============================================================================
--- PART 2: CATEGORY MAPPING IN OITM - TRACE FROM ITEM TO SUBCLASS TO CATEGORY
+-- PART 2: CATEGORY MAPPING IN OITM - TRACE FROM ITEM TO CATEGORY
 -- ============================================================================
+PRINT '=== CATEGORY TRACE IN OITM ==='
 SELECT
-    '[CATEGORY TRACE IN OITM]' as CheckPoint,
-    i.[ItemCode] as ItemCode,
-    i.[ItemName] as ItemName,
+    'TRACE' as Status,
+    i.[ItemCode],
+    i.[ItemName],
     i.[AssetClass] as ItemSubclassCode,
     rs.[Name] as SubclassName,
     rs.[Category] as CategoryFromSubclass,
     i.[CreateDate] as ItemCreatedDate,
     i.[UpdateDate] as ItemUpdatedDate,
     CASE
-        WHEN i.[AssetClass] IS NULL THEN 'NO SUBCLASS ASSIGNED'
-        WHEN rs.[Category] IS NULL THEN 'SUBCLASS HAS NO CATEGORY'
-        ELSE 'HAS CATEGORY'
+        WHEN i.[AssetClass] IS NULL THEN 'NO_SUBCLASS'
+        WHEN rs.[Category] IS NULL THEN 'NO_CATEGORY'
+        ELSE 'HAS_CATEGORY'
     END as CategoryStatus
 FROM
     [dbo].[OITM] i
@@ -46,24 +46,24 @@ LEFT JOIN
 WHERE
     i.[AssetClass] IS NOT NULL
 ORDER BY
-    rs.[Category], i.[ItemCode];
+    ISNULL(rs.[Category], 'ZZZZZ'), i.[ItemCode];
 
 -- ============================================================================
--- PART 3: ITEMS MISSING CATEGORY ASSIGNMENT (CORRECTION NEEDED)
+-- PART 3: ITEMS MISSING CATEGORY ASSIGNMENT
 -- ============================================================================
+PRINT '=== CORRECTION NEEDED: Items Missing Categories ==='
 SELECT
-    '[CORRECTION NEEDED]' as CheckPoint,
-    i.[ItemCode] as ItemCode,
-    i.[ItemName] as ItemName,
+    'CORRECTION_NEEDED' as Status,
+    i.[ItemCode],
+    i.[ItemName],
     ISNULL(i.[AssetClass], 'NULL') as CurrentSubclass,
     ISNULL(rs.[Category], 'MISSING') as CategoryStatus,
+    ISNULL(rs.[Name], 'INVALID') as SubclassName,
     CASE
         WHEN i.[AssetClass] IS NULL THEN 'ACTION: Assign Subclass first'
-        WHEN rs.[Category] IS NULL THEN 'ACTION: Subclass needs category assignment in ORSC'
+        WHEN rs.[Category] IS NULL THEN 'ACTION: Add category to subclass in ORSC'
         ELSE 'OK'
     END as RequiredAction,
-    rs.[Code] as SubclassCode,
-    rs.[Name] as SubclassName,
     i.[UpdateDate] as LastItemUpdate
 FROM
     [dbo].[OITM] i
@@ -76,16 +76,16 @@ ORDER BY
     RequiredAction, i.[ItemCode];
 
 -- ============================================================================
--- PART 4: CATEGORY DISTRIBUTION - ITEMS BY CATEGORY
+-- PART 4: CATEGORY DISTRIBUTION
 -- ============================================================================
+PRINT '=== CATEGORY DISTRIBUTION ==='
 SELECT
-    '[CATEGORY DISTRIBUTION]' as CheckPoint,
+    'DISTRIBUTION' as Status,
     ISNULL(rs.[Category], 'UNCATEGORIZED') as Category,
     COUNT(DISTINCT i.[ItemCode]) as ItemCount,
     COUNT(DISTINCT i.[AssetClass]) as SubclassVariety,
     MIN(i.[CreateDate]) as EarliestItemDate,
-    MAX(i.[UpdateDate]) as LatestItemUpdate,
-    COUNT(DISTINCT CASE WHEN rs.[Category] IS NULL THEN 1 END) as ItemsWithoutCategory
+    MAX(i.[UpdateDate]) as LatestItemUpdate
 FROM
     [dbo].[OITM] i
 LEFT JOIN
@@ -98,13 +98,14 @@ ORDER BY
     Category;
 
 -- ============================================================================
--- PART 5: CATEGORY MASTER LIST - ALL CATEGORIES DEFINED IN ORSC
+-- PART 5: CATEGORY MASTER LIST - REFERENCE
 -- ============================================================================
-SELECT
-    '[REFERENCE - Category Master]' as CheckPoint,
-    DISTINCT [Category] as CategoryID,
+PRINT '=== REFERENCE: Category Master List ==='
+SELECT DISTINCT
+    'REFERENCE' as Status,
+    [Category] as CategoryID,
     [Class] as ResourceClass,
-    COUNT(*) OVER (PARTITION BY [Category]) as SubclassesInCategory
+    COUNT(*) OVER (PARTITION BY [Category]) as SubclassCount
 FROM
     [dbo].[ORSC]
 WHERE
@@ -113,18 +114,18 @@ ORDER BY
     [Category];
 
 -- ============================================================================
--- PART 6: SUBCLASS TO CATEGORY MAPPING TABLE (FOR CORRECTION REFERENCE)
+-- PART 6: SUBCLASS TO CATEGORY MAPPING TABLE
 -- ============================================================================
+PRINT '=== MAPPING REFERENCE TABLE ==='
 SELECT
-    '[MAPPING REFERENCE TABLE]' as CheckPoint,
+    'MAPPING_TABLE' as Status,
     [Code] as SubclassCode,
     [Name] as SubclassName,
     [Class] as ResourceClass,
     [Category] as AssignedCategory,
-    [SubClassCode] as SubClassDetail,
-    [CreateDate] as DateCreated,
-    [UpdateDate] as DateModified,
-    [Canceled] as IsActive
+    [SubClassCode],
+    [CreateDate],
+    [UpdateDate]
 FROM
     [dbo].[ORSC]
 ORDER BY
@@ -133,11 +134,11 @@ ORDER BY
 -- ============================================================================
 -- PART 7: SUMMARY STATISTICS
 -- ============================================================================
+PRINT '=== SUMMARY STATISTICS ==='
 SELECT
-    '[SUMMARY STATS]' as CheckPoint,
+    'SUMMARY' as Status,
     (SELECT COUNT(DISTINCT [Category]) FROM [dbo].[ORSC] WHERE [Category] IS NOT NULL) as DistinctCategoriesInORSC,
     (SELECT COUNT(*) FROM [dbo].[ORSC] WHERE [Category] IS NULL) as SubclassesWithoutCategory,
     (SELECT COUNT(DISTINCT rs.[Category]) FROM [dbo].[OITM] i JOIN [dbo].[ORSC] rs ON i.[AssetClass] = rs.[Code] WHERE rs.[Category] IS NOT NULL) as CategoriesRepresentedInOITM,
     (SELECT COUNT(*) FROM [dbo].[OITM] WHERE [AssetClass] IS NULL) as ItemsWithoutSubclass,
-    (SELECT COUNT(*) FROM [dbo].[OITM] WHERE [AssetClass] IN (SELECT [Code] FROM [dbo].[ORSC] WHERE [Category] IS NULL)) as ItemsInUncategorizedSubclass,
     (SELECT COUNT(*) FROM [dbo].[OITM]) as TotalItemsInOITM;

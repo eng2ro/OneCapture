@@ -1,93 +1,88 @@
 -- SAP B1: Subclass ID and Name Mapping Audit (Before & After)
 -- Purpose: Check and compare subclass mappings between ORSC (Resource Subclass) and OITM (Items)
--- Shows before (current OITM) and after (corrected) mapping information
 
 -- ============================================================================
 -- PART 1: IDENTIFY MISSING OR MISMATCHED SUBCLASS MAPPINGS IN OITM
 -- ============================================================================
+PRINT '=== BEFORE: Current State of Subclass Assignments ==='
 SELECT
-    '[BEFORE - Current State]' as CheckPoint,
-    i.[ItemCode] as ItemCode,
-    i.[ItemName] as ItemName,
+    'BEFORE - Current State' as Status,
+    i.[ItemCode],
+    i.[ItemName],
     ISNULL(i.[AssetClass], 'NULL') as CurrentSubclassInOITM,
-    rs.[Code] as SubclassCodeInORSC,
-    rs.[Name] as SubclassNameInORSC,
-    rs.[Class] as ResourceClass,
+    ISNULL(rs.[Code], 'INVALID') as SubclassCodeInORSC,
+    ISNULL(rs.[Name], 'INVALID') as SubclassNameInORSC,
+    ISNULL(rs.[Class], 'INVALID') as ResourceClass,
     CASE
-        WHEN i.[AssetClass] IS NULL THEN 'MISSING - No subclass assigned'
-        WHEN i.[AssetClass] <> rs.[Code] THEN 'MISMATCH - Different subclass code'
-        ELSE 'MATCH'
+        WHEN i.[AssetClass] IS NULL THEN 'MISSING'
+        WHEN rs.[Code] IS NULL THEN 'INVALID_CODE'
+        ELSE 'VALID'
     END as IssueType,
-    i.[UpdateDate] as LastOITMUpdate,
-    rs.[CreateDate] as SubclassCreateDate,
-    rs.[UpdateDate] as SubclassUpdateDate
+    i.[UpdateDate] as LastOITMUpdate
 FROM
     [dbo].[OITM] i
 LEFT JOIN
     [dbo].[ORSC] rs ON i.[AssetClass] = rs.[Code]
 WHERE
-    -- Look for items with missing or mismatched subclass
     i.[AssetClass] IS NULL
-    OR i.[AssetClass] NOT IN (SELECT [Code] FROM [dbo].[ORSC])
-    OR (i.[AssetClass] <> '' AND i.[AssetClass] IS NOT NULL
-        AND ISNULL(rs.[Name], '') = '')
+    OR rs.[Code] IS NULL
 ORDER BY
     i.[ItemCode];
 
 -- ============================================================================
 -- PART 2: MAPPING CORRECTION PROPOSAL - BEFORE & AFTER
 -- ============================================================================
+PRINT '=== CORRECTION MAPPING: Before and After ==='
 SELECT
-    '[CORRECTION MAPPING]' as CheckPoint,
-    i.[ItemCode] as ItemCode,
-    i.[ItemName] as ItemName,
+    'BEFORE-AFTER' as Status,
+    i.[ItemCode],
+    i.[ItemName],
     ISNULL(i.[AssetClass], 'UNASSIGNED') as BeforeSubclassCode,
-    rs.[Code] as AfterSubclassCode,
-    rs.[Name] as SubclassName,
-    rs.[Class] as ResourceClass,
-    rs.[Category] as SubclassCategory,
-    rs.[ReceiptTolerance] as TolerancePercent,
+    ISNULL(rs.[Code], 'NEEDS_ASSIGNMENT') as AfterSubclassCode,
+    ISNULL(rs.[Name], 'N/A') as SubclassName,
+    ISNULL(rs.[Class], 'N/A') as ResourceClass,
+    ISNULL(rs.[Category], 'N/A') as Category,
     CASE
-        WHEN i.[AssetClass] IS NULL THEN 'ASSIGN: First time mapping'
-        WHEN i.[AssetClass] <> rs.[Code] THEN CONCAT('CORRECT: ', i.[AssetClass], ' → ', rs.[Code])
-        ELSE 'NO CHANGE'
-    END as MappingAction,
-    i.[CreateDate] as ItemCreatedDate,
-    i.[UpdateDate] as ItemLastUpdated
+        WHEN i.[AssetClass] IS NULL THEN 'ACTION: Assign Subclass'
+        WHEN rs.[Code] IS NULL THEN 'ACTION: Invalid subclass - needs correction'
+        ELSE 'OK'
+    END as MappingAction
 FROM
     [dbo].[OITM] i
 LEFT JOIN
     [dbo].[ORSC] rs ON i.[AssetClass] = rs.[Code]
 WHERE
-    i.[AssetClass] IS NULL OR i.[AssetClass] NOT IN (SELECT [Code] FROM [dbo].[ORSC])
+    i.[AssetClass] IS NULL
+    OR rs.[Code] IS NULL
 ORDER BY
     i.[ItemCode];
 
 -- ============================================================================
 -- PART 3: SUMMARY STATISTICS
 -- ============================================================================
+PRINT '=== SUMMARY STATISTICS ==='
 SELECT
-    '[SUMMARY]' as CheckPoint,
+    'SUMMARY' as Status,
     (SELECT COUNT(*) FROM [dbo].[OITM] WHERE [AssetClass] IS NULL) as ItemsWithoutSubclass,
-    (SELECT COUNT(*) FROM [dbo].[OITM] WHERE [AssetClass] NOT IN (SELECT [Code] FROM [dbo].[ORSC])) as ItemsWithInvalidSubclass,
-    (SELECT COUNT(*) FROM [dbo].[OITM]) as TotalItems,
+    (SELECT COUNT(*) FROM [dbo].[OITM] WHERE [AssetClass] IS NOT NULL) as ItemsWithSubclass,
+    (SELECT COUNT(DISTINCT [AssetClass]) FROM [dbo].[OITM] WHERE [AssetClass] IS NOT NULL) as UniqueSubclassesUsed,
     (SELECT COUNT(DISTINCT [Code]) FROM [dbo].[ORSC]) as TotalAvailableSubclasses,
-    (SELECT COUNT(DISTINCT [AssetClass]) FROM [dbo].[OITM] WHERE [AssetClass] IS NOT NULL) as UniqueSubclassesUsedInOITM;
+    (SELECT COUNT(*) FROM [dbo].[OITM]) as TotalItems;
 
 -- ============================================================================
--- PART 4: SUBCLASS INVENTORY - ALL AVAILABLE SUBCLASSES FOR REFERENCE
+-- PART 4: SUBCLASS INVENTORY - REFERENCE
 -- ============================================================================
+PRINT '=== SUBCLASS INVENTORY REFERENCE ==='
 SELECT
-    '[REFERENCE - All Available Subclasses]' as CheckPoint,
+    'REFERENCE' as Status,
     [Code] as SubclassCode,
     [Name] as SubclassName,
     [Class] as ResourceClass,
-    [SubClassCode] as SubClassCode,
-    [Category] as Category,
-    [ReceiptTolerance] as Tolerance,
-    [CreateDate] as CreatedDate,
-    [UpdateDate] as UpdatedDate,
-    [Canceled] as IsCanceled
+    [SubClassCode],
+    [Category],
+    [ReceiptTolerance],
+    [CreateDate],
+    [UpdateDate]
 FROM
     [dbo].[ORSC]
 ORDER BY
